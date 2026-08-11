@@ -1,0 +1,340 @@
+"""SQLite session store: runs, append-only event journal, checkpoints,
+digest-bound approvals, execution journal, and content-addressed artifacts.
+
+Schema migrations fail closed: an unknown schema version aborts instead of
+guessing.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
+
+import aiosqlite
+
+from haven.contracts.checkpoint import CheckpointV1
+from haven.contracts.events import (
+    EVENT_ADAPTER,
+    SCHEMA_VERSION,
+    ApplicationEvent,
+    EventEnvelope,
+)
+from haven.domain.digest import sha256_bytes, sha256_text
+from haven.domain.enums import ApprovalDecision, EffectState, RunStatus
+from haven.ports.session import ExecutionRecord, RunRecord
+
+DB_SCHEMA_VERSION = 1
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_meta (
+    version INTEGER NOT NULL,
+    migrated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS runs (
+    id TEXT PRIMARY KEY,
+    workspace TEXT NOT NULL,
+    workspace_digest TEXT NOT NULL,
+    goal TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    stop_reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS events (
+    run_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    schema_version INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,
+    payload_digest TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (run_id, seq)
+);
+CREATE TABLE IF NOT EXISTS checkpoints (
+    run_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    state_json TEXT NOT NULL,
+    checksum TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (run_id, seq)
+);
+CREATE TABLE IF NOT EXISTS approvals (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    decision TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    decided_at TEXT,
+    consumed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS executions (
+    call_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    ticket_digest TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    effect_state TEXT NOT NULL,
+    preimage_digest TEXT NOT NULL DEFAULT '',
+    postimage_digest TEXT NOT NULL DEFAULT '',
+    path TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
+
+class StoreError(Exception):
+    pass
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+class SqliteSessionStore:
+    """Implements SessionStorePort on aiosqlite."""
+
+    def __init__(self, db: aiosqlite.Connection, artifacts_dir: Path) -> None:
+        self._db = db
+        self._artifacts_dir = artifacts_dir
+        self._next_seq: dict[str, int] = {}
+
+    @classmethod
+    async def open(cls, db_path: Path, artifacts_dir: Path) -> SqliteSessionStore:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        db = await aiosqlite.connect(db_path)
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA foreign_keys=ON")
+        await db.executescript(_SCHEMA)
+
+        cursor = await db.execute("SELECT version FROM schema_meta")
+        row = await cursor.fetchone()
+        if row is None:
+            await db.execute(
+                "INSERT INTO schema_meta (version, migrated_at) VALUES (?, ?)",
+                (DB_SCHEMA_VERSION, _now()),
+            )
+        elif int(row["version"]) != DB_SCHEMA_VERSION:
+            await db.close()
+            raise StoreError(
+                f"database schema version {row['version']} != expected "
+                f"{DB_SCHEMA_VERSION}; migrate or back up explicitly"
+            )
+        await db.commit()
+        return cls(db, artifacts_dir)
+
+    async def close(self) -> None:
+        await self._db.close()
+
+    # -- runs ----------------------------------------------------------------
+
+    async def create_run(
+        self, run_id: str, workspace: str, workspace_digest: str, goal: str, mode: str
+    ) -> None:
+        now = _now()
+        await self._db.execute(
+            "INSERT INTO runs (id, workspace, workspace_digest, goal, mode, status, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (run_id, workspace, workspace_digest, goal, mode, RunStatus.CREATED.value, now, now),
+        )
+        await self._db.commit()
+
+    async def update_run_status(self, run_id: str, status: RunStatus, stop_reason: str) -> None:
+        await self._db.execute(
+            "UPDATE runs SET status = ?, stop_reason = ?, updated_at = ? WHERE id = ?",
+            (status.value, stop_reason, _now(), run_id),
+        )
+        await self._db.commit()
+
+    async def get_run(self, run_id: str) -> RunRecord | None:
+        cursor = await self._db.execute("SELECT * FROM runs WHERE id = ?", (run_id,))
+        row = await cursor.fetchone()
+        return _row_to_run(row) if row else None
+
+    async def list_runs(self, limit: int) -> list[RunRecord]:
+        cursor = await self._db.execute(
+            "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)
+        )
+        rows = await cursor.fetchall()
+        return [_row_to_run(row) for row in rows]
+
+    # -- events ----------------------------------------------------------------
+
+    async def append_event(self, run_id: str, event: ApplicationEvent) -> EventEnvelope:
+        seq = await self._allocate_seq(run_id)
+        payload = event.model_dump_json()
+        at = _now()
+        await self._db.execute(
+            "INSERT INTO events (run_id, seq, kind, schema_version, payload_json, "
+            "payload_digest, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (run_id, seq, event.kind, SCHEMA_VERSION, payload, sha256_text(payload), at),
+        )
+        await self._db.commit()
+        return EventEnvelope(seq=seq, at=at, event=event)
+
+    async def _allocate_seq(self, run_id: str) -> int:
+        if run_id not in self._next_seq:
+            cursor = await self._db.execute(
+                "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM events WHERE run_id = ?",
+                (run_id,),
+            )
+            row = await cursor.fetchone()
+            self._next_seq[run_id] = (int(row["max_seq"]) if row else 0) + 1
+        seq = self._next_seq[run_id]
+        self._next_seq[run_id] = seq + 1
+        return seq
+
+    async def load_events(self, run_id: str) -> list[EventEnvelope]:
+        cursor = await self._db.execute(
+            "SELECT seq, payload_json, payload_digest, created_at FROM events "
+            "WHERE run_id = ? ORDER BY seq",
+            (run_id,),
+        )
+        rows = await cursor.fetchall()
+        envelopes: list[EventEnvelope] = []
+        for row in rows:
+            payload = str(row["payload_json"])
+            if sha256_text(payload) != str(row["payload_digest"]):
+                raise StoreError(f"event {run_id}/{row['seq']} failed digest verification")
+            event = EVENT_ADAPTER.validate_json(payload)
+            envelopes.append(
+                EventEnvelope(seq=int(row["seq"]), at=str(row["created_at"]), event=event)
+            )
+        return envelopes
+
+    # -- checkpoints -------------------------------------------------------------
+
+    async def save_checkpoint(self, checkpoint: CheckpointV1) -> None:
+        state_json = checkpoint.model_dump_json()
+        await self._db.execute(
+            "INSERT OR REPLACE INTO checkpoints (run_id, seq, state_json, checksum, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (checkpoint.run_id, checkpoint.last_seq, state_json, checkpoint.checksum(), _now()),
+        )
+        await self._db.commit()
+
+    async def load_checkpoint(self, run_id: str) -> CheckpointV1 | None:
+        cursor = await self._db.execute(
+            "SELECT state_json, checksum FROM checkpoints WHERE run_id = ? "
+            "ORDER BY seq DESC LIMIT 1",
+            (run_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        checkpoint = CheckpointV1.model_validate_json(str(row["state_json"]))
+        if checkpoint.checksum() != str(row["checksum"]):
+            raise StoreError(f"checkpoint for {run_id} failed checksum verification")
+        if checkpoint.schema_version != 1:
+            raise StoreError(f"checkpoint schema {checkpoint.schema_version} is not supported")
+        return checkpoint
+
+    # -- approvals ---------------------------------------------------------------
+
+    async def record_approval(self, approval_id: str, run_id: str, request_digest: str) -> None:
+        await self._db.execute(
+            "INSERT INTO approvals (id, run_id, request_digest, created_at) VALUES (?, ?, ?, ?)",
+            (approval_id, run_id, request_digest, _now()),
+        )
+        await self._db.commit()
+
+    async def decide_approval(self, approval_id: str, decision: ApprovalDecision) -> None:
+        await self._db.execute(
+            "UPDATE approvals SET decision = ?, decided_at = ? WHERE id = ?",
+            (decision.value, _now(), approval_id),
+        )
+        await self._db.commit()
+
+    async def consume_approval(self, approval_id: str, request_digest: str) -> bool:
+        """Single-use consumption via conditional update: succeeds at most once
+        and only for the exact digest that was approved."""
+        cursor = await self._db.execute(
+            "UPDATE approvals SET consumed_at = ? WHERE id = ? AND request_digest = ? "
+            "AND decision = ? AND consumed_at IS NULL",
+            (_now(), approval_id, request_digest, ApprovalDecision.APPROVED.value),
+        )
+        await self._db.commit()
+        return cursor.rowcount == 1
+
+    # -- executions ----------------------------------------------------------------
+
+    async def record_execution(self, record: ExecutionRecord) -> None:
+        now = _now()
+        await self._db.execute(
+            "INSERT INTO executions (call_id, run_id, ticket_digest, tool_name, effect_state, "
+            "preimage_digest, postimage_digest, path, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                record.call_id,
+                record.run_id,
+                record.ticket_digest,
+                record.tool_name,
+                record.effect_state.value,
+                record.preimage_digest,
+                record.postimage_digest,
+                record.path,
+                now,
+                now,
+            ),
+        )
+        await self._db.commit()
+
+    async def update_execution_state(
+        self, call_id: str, effect_state: EffectState, postimage_digest: str = ""
+    ) -> None:
+        await self._db.execute(
+            "UPDATE executions SET effect_state = ?, postimage_digest = ?, updated_at = ? "
+            "WHERE call_id = ?",
+            (effect_state.value, postimage_digest, _now(), call_id),
+        )
+        await self._db.commit()
+
+    async def load_executions(self, run_id: str) -> list[ExecutionRecord]:
+        cursor = await self._db.execute(
+            "SELECT * FROM executions WHERE run_id = ? ORDER BY created_at", (run_id,)
+        )
+        rows = await cursor.fetchall()
+        return [
+            ExecutionRecord(
+                call_id=str(row["call_id"]),
+                run_id=str(row["run_id"]),
+                ticket_digest=str(row["ticket_digest"]),
+                tool_name=str(row["tool_name"]),
+                effect_state=EffectState(str(row["effect_state"])),
+                preimage_digest=str(row["preimage_digest"]),
+                postimage_digest=str(row["postimage_digest"]),
+                path=str(row["path"]),
+            )
+            for row in rows
+        ]
+
+    # -- artifacts -------------------------------------------------------------------
+
+    async def put_artifact(self, content: bytes) -> str:
+        digest = sha256_bytes(content)
+        target = self._artifacts_dir / digest
+        if not target.exists():
+            target.write_bytes(content)
+        return digest
+
+    async def get_artifact(self, digest: str) -> bytes | None:
+        if not digest or "/" in digest or "." in digest:
+            return None
+        target = self._artifacts_dir / digest
+        return target.read_bytes() if target.exists() else None
+
+
+def _row_to_run(row: aiosqlite.Row) -> RunRecord:
+    return RunRecord(
+        run_id=str(row["id"]),
+        workspace=str(row["workspace"]),
+        workspace_digest=str(row["workspace_digest"]),
+        goal=str(row["goal"]),
+        mode=str(row["mode"]),
+        status=RunStatus(str(row["status"])),
+        stop_reason=str(row["stop_reason"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+    )
