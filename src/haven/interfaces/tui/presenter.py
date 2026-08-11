@@ -26,6 +26,7 @@ from haven.contracts.events import (
     RunCreated,
     RunFinished,
     StepStarted,
+    StreamRestarted,
     ToolCompleted,
     ToolProposed,
 )
@@ -133,6 +134,9 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
 
     if isinstance(event, AssistantDelta):
         return replace(state, streaming_text=state.streaming_text + sanitize(event.text, 10000))
+
+    if isinstance(event, StreamRestarted):
+        return replace(state, streaming_text="", reasoning_text="")
 
     if isinstance(event, AssistantReasoning):
         # Kept in a separate buffer so thinking is visibly distinct from the

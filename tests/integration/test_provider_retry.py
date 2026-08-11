@@ -84,8 +84,12 @@ class TestNonRetryableFailures:
         assert outcome.status is RunStatus.FAILED
         assert model.attempts == 1
 
-    async def test_failure_after_partial_output_is_not_retried(self, tmp_path: Path) -> None:
-        """Retrying here would duplicate what the user already saw."""
+
+class TestMidStreamRecovery:
+    """A partially streamed turn is safe to retry: the assembled text and tool
+    calls are local to the attempt and never reached the transcript."""
+
+    async def test_mid_stream_drop_is_retried(self, tmp_path: Path) -> None:
         model = FlakyModel(
             [ProviderError("network", "mid-stream drop", retryable=True)],
             fail_after_first_event=True,
@@ -94,5 +98,37 @@ class TestNonRetryableFailures:
         install(h, model)
 
         outcome = await h.service.run("Do a thing")
-        assert outcome.status is RunStatus.FAILED
-        assert model.attempts == 1
+        assert outcome.status is RunStatus.SUCCEEDED
+        assert model.attempts == 2
+        # the discarded partial text must not survive into the answer
+        assert "partial answer" not in outcome.final_text
+        assert "recovered answer" in outcome.final_text
+
+    async def test_ui_is_told_to_discard_the_partial_output(self, tmp_path: Path) -> None:
+        model = FlakyModel(
+            [ProviderError("network", "mid-stream drop", retryable=True)],
+            fail_after_first_event=True,
+        )
+        h = Harness(make_repo(tmp_path), [])
+        install(h, model)
+
+        await h.service.run("Do a thing")
+        assert h.sink.events_of("stream.restarted")
+
+    async def test_restart_event_clears_the_streaming_buffer(self) -> None:
+        from haven.contracts.events import (
+            AssistantDelta,
+            EventEnvelope,
+            StreamRestarted,
+        )
+        from haven.interfaces.tui.presenter import PresenterState, reduce
+
+        def wrap(event: object) -> EventEnvelope:
+            return EventEnvelope(seq=0, at="2026-01-01T00:00:00+00:00", event=event)  # type: ignore[arg-type]
+
+        state = reduce(
+            PresenterState(run_id="r"), wrap(AssistantDelta(run_id="r", step=1, text="partial"))
+        )
+        assert state.streaming_text == "partial"
+        state = reduce(state, wrap(StreamRestarted(run_id="r", step=1)))
+        assert state.streaming_text == ""

@@ -57,6 +57,14 @@ class AssistantReasoning(StrictModel):
     text: str
 
 
+class StreamRestarted(StrictModel):
+    """The turn is being retried; discard anything already shown for this step."""
+
+    kind: Literal["stream.restarted"] = "stream.restarted"
+    run_id: str
+    step: int
+
+
 class ModelCompleted(StrictModel):
     kind: Literal["model.completed"] = "model.completed"
     run_id: str
@@ -206,6 +214,7 @@ ApplicationEvent = Annotated[
     | StepStarted
     | AssistantDelta
     | AssistantReasoning
+    | StreamRestarted
     | ModelCompleted
     | ToolProposed
     | PolicyDecided
@@ -226,7 +235,7 @@ ApplicationEvent = Annotated[
 EVENT_ADAPTER: TypeAdapter[ApplicationEvent] = TypeAdapter(ApplicationEvent)
 
 #: Kinds that stream to the UI but are never persisted.
-TRANSIENT_KINDS = frozenset({"assistant.delta", "assistant.reasoning"})
+TRANSIENT_KINDS = frozenset({"assistant.delta", "assistant.reasoning", "stream.restarted"})
 
 
 class EventEnvelope(StrictModel):
