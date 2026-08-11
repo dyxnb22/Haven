@@ -36,3 +36,6 @@ jobs:
 
       - name: Import linter
         run: uv run lint-imports
+
+      - name: Offline eval (security gate)
+        run: uv run haven eval --offline

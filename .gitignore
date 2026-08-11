@@ -50,6 +50,10 @@ Thumbs.db
 *.db-shm
 *.db-wal
 
+# Eval output (regenerate with `haven eval --offline`)
+eval_report/
+haven-run-*.md
+
 # Environment
 .env
 .env.*

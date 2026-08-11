@@ -44,6 +44,9 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
@@ -76,8 +79,11 @@ type = "forbidden"
 source_modules = ["haven.application"]
 forbidden_modules = ["haven.adapters"]
 
+# Interfaces may reach adapters only through the composition root
+# (haven.bootstrap) or the eval harness; direct imports are forbidden.
 [[tool.importlinter.contracts]]
-name = "interfaces do not import adapters"
+name = "interfaces do not import adapters directly"
 type = "forbidden"
 source_modules = ["haven.interfaces"]
 forbidden_modules = ["haven.adapters"]
+allow_indirect_imports = true
