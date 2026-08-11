@@ -23,11 +23,17 @@
       {
         "source": "user_goal",
         "trust": "trusted",
-        "size_bytes": 71,
+        "size_bytes": 26,
         "reason": "the task being solved"
+      },
+      {
+        "source": "run_status",
+        "trust": "trusted",
+        "size_bytes": 40,
+        "reason": "live budget counters, kept last so the prefix stays cacheable"
       }
     ],
-    "total_bytes": 1510
+    "total_bytes": 1505
   },
   {
     "kind": "model.completed",
@@ -38,7 +44,8 @@
     "output_tokens": 0,
     "usage_estimated": false,
     "finish_reason": "tool_calls",
-    "reasoning_tokens": 0
+    "reasoning_tokens": 0,
+    "cached_input_tokens": 0
   },
   {
     "kind": "tool.proposed",
@@ -85,7 +92,7 @@
       {
         "source": "user_goal",
         "trust": "trusted",
-        "size_bytes": 71,
+        "size_bytes": 26,
         "reason": "the task being solved"
       },
       {
@@ -99,9 +106,15 @@
         "trust": "untrusted",
         "size_bytes": 189,
         "reason": "observation for the model"
+      },
+      {
+        "source": "run_status",
+        "trust": "trusted",
+        "size_bytes": 40,
+        "reason": "live budget counters, kept last so the prefix stays cacheable"
       }
     ],
-    "total_bytes": 1716
+    "total_bytes": 1711
   },
   {
     "kind": "model.completed",
@@ -112,7 +125,8 @@
     "output_tokens": 0,
     "usage_estimated": false,
     "finish_reason": "tool_calls",
-    "reasoning_tokens": 0
+    "reasoning_tokens": 0,
+    "cached_input_tokens": 0
   },
   {
     "kind": "tool.proposed",
@@ -159,7 +173,7 @@
       {
         "source": "user_goal",
         "trust": "trusted",
-        "size_bytes": 71,
+        "size_bytes": 26,
         "reason": "the task being solved"
       },
       {
@@ -185,9 +199,15 @@
         "trust": "untrusted",
         "size_bytes": 254,
         "reason": "observation for the model"
+      },
+      {
+        "source": "run_status",
+        "trust": "trusted",
+        "size_bytes": 40,
+        "reason": "live budget counters, kept last so the prefix stays cacheable"
       }
     ],
-    "total_bytes": 1970
+    "total_bytes": 1965
   },
   {
     "kind": "model.completed",
@@ -198,7 +218,8 @@
     "output_tokens": 0,
     "usage_estimated": false,
     "finish_reason": "tool_calls",
-    "reasoning_tokens": 0
+    "reasoning_tokens": 0,
+    "cached_input_tokens": 0
   },
   {
     "kind": "tool.proposed",
@@ -262,7 +283,7 @@
       {
         "source": "user_goal",
         "trust": "trusted",
-        "size_bytes": 71,
+        "size_bytes": 26,
         "reason": "the task being solved"
       },
       {
@@ -300,9 +321,15 @@
         "trust": "untrusted",
         "size_bytes": 367,
         "reason": "observation for the model"
+      },
+      {
+        "source": "run_status",
+        "trust": "trusted",
+        "size_bytes": 40,
+        "reason": "live budget counters, kept last so the prefix stays cacheable"
       }
     ],
-    "total_bytes": 2337
+    "total_bytes": 2332
   },
   {
     "kind": "model.completed",
@@ -313,7 +340,8 @@
     "output_tokens": 0,
     "usage_estimated": false,
     "finish_reason": "tool_calls",
-    "reasoning_tokens": 0
+    "reasoning_tokens": 0,
+    "cached_input_tokens": 0
   },
   {
     "kind": "tool.proposed",
@@ -372,7 +400,7 @@
       {
         "source": "user_goal",
         "trust": "trusted",
-        "size_bytes": 71,
+        "size_bytes": 26,
         "reason": "the task being solved"
       },
       {
@@ -422,9 +450,15 @@
         "trust": "untrusted",
         "size_bytes": 298,
         "reason": "observation for the model"
+      },
+      {
+        "source": "run_status",
+        "trust": "trusted",
+        "size_bytes": 40,
+        "reason": "live budget counters, kept last so the prefix stays cacheable"
       }
     ],
-    "total_bytes": 2635
+    "total_bytes": 2630
   },
   {
     "kind": "model.completed",
@@ -435,7 +469,8 @@
     "output_tokens": 0,
     "usage_estimated": false,
     "finish_reason": "tool_calls",
-    "reasoning_tokens": 0
+    "reasoning_tokens": 0,
+    "cached_input_tokens": 0
   },
   {
     "kind": "tool.proposed",
@@ -499,7 +534,7 @@
       {
         "source": "user_goal",
         "trust": "trusted",
-        "size_bytes": 71,
+        "size_bytes": 26,
         "reason": "the task being solved"
       },
       {
@@ -561,9 +596,15 @@
         "trust": "untrusted",
         "size_bytes": 176,
         "reason": "observation for the model"
+      },
+      {
+        "source": "run_status",
+        "trust": "trusted",
+        "size_bytes": 40,
+        "reason": "live budget counters, kept last so the prefix stays cacheable"
       }
     ],
-    "total_bytes": 2811
+    "total_bytes": 2806
   },
   {
     "kind": "model.completed",
@@ -574,7 +615,8 @@
     "output_tokens": 0,
     "usage_estimated": false,
     "finish_reason": "stop",
-    "reasoning_tokens": 0
+    "reasoning_tokens": 0,
+    "cached_input_tokens": 0
   },
   {
     "kind": "run.finished",
@@ -583,8 +625,9 @@
     "gate_reason": "evidence_satisfied",
     "steps": 6,
     "tool_calls": 5,
-    "input_tokens": 3242,
+    "input_tokens": 3235,
     "output_tokens": 20,
+    "cached_input_tokens": 0,
     "usage_estimated": true
   }
 ]

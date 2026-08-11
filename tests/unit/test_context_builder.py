@@ -28,17 +28,26 @@ def tool_message(content: str, call_id: str = "c1") -> ModelMessage:
 class TestProvenance:
     def test_first_turn_has_system_and_goal(self) -> None:
         request, segments = builder().build([], BudgetUsage())
-        assert [s.source for s in segments] == ["system_rules", "user_goal"]
-        assert all(s.trust == "trusted" for s in segments)
+        # Stable head, then the volatile run-status tail (ADR 0008).
+        assert [s.source for s in segments] == ["system_rules", "user_goal", "run_status"]
         assert request.messages[0].role == "system"
 
-    def test_goal_and_budget_are_visible_to_the_model(self) -> None:
+    def test_goal_is_stable_and_carries_no_counter(self) -> None:
+        """The goal must not embed the per-turn counter, or it breaks the cache."""
+        request, segments = builder().build([], BudgetUsage(steps=3, tool_calls=7))
+        goal = next(
+            m for m, s in zip(request.messages, segments, strict=True) if s.source == "user_goal"
+        )
+        assert goal.content == "Task: fix the bug"
+        assert "step" not in goal.content
+
+    def test_budget_is_visible_in_the_trailing_status_message(self) -> None:
         budget = Budget()
-        request, _ = builder().build([], BudgetUsage(steps=3, tool_calls=7))
-        goal_text = request.messages[-1].content
-        assert "fix the bug" in goal_text
-        assert f"step 3/{budget.max_steps}" in goal_text
-        assert f"tool calls 7/{budget.max_tool_calls}" in goal_text
+        request, segments = builder().build([], BudgetUsage(steps=3, tool_calls=7))
+        assert segments[-1].source == "run_status"
+        status = request.messages[-1].content
+        assert f"step 3/{budget.max_steps}" in status
+        assert f"tool calls 7/{budget.max_tool_calls}" in status
 
     def test_registered_recipes_are_named_in_the_rules(self) -> None:
         request, _ = builder(recipe_ids=("pytest", "lint")).build([], BudgetUsage())
@@ -46,15 +55,21 @@ class TestProvenance:
 
     def test_tool_output_is_untrusted(self) -> None:
         _, segments = builder().build([tool_message("file contents")], BudgetUsage())
-        assert segments[-1].source == "tool_output"
-        assert segments[-1].trust == "untrusted"
+        tool_segments = [s for s in segments if s.source == "tool_output"]
+        assert len(tool_segments) == 1
+        assert tool_segments[0].trust == "untrusted"
 
     def test_assistant_turn_is_untrusted(self) -> None:
         _, segments = builder().build(
             [ModelMessage(role="assistant", content="my plan")], BudgetUsage()
         )
-        assert segments[-1].source == "assistant"
-        assert segments[-1].trust == "untrusted"
+        assistant = [s for s in segments if s.source == "assistant"]
+        assert assistant and assistant[0].trust == "untrusted"
+
+    def test_run_status_is_last_and_trusted(self) -> None:
+        _, segments = builder().build([tool_message("x")], BudgetUsage())
+        assert segments[-1].source == "run_status"
+        assert segments[-1].trust == "trusted"
 
 
 class TestUntrustedProjectGuidance:
@@ -87,12 +102,19 @@ class TestPlanReinjection:
     def test_plan_appears_as_its_own_segment(self) -> None:
         plan = (PlanStep(title="read the parser", status="done"),)
         _, segments = builder().build([], BudgetUsage(), plan)
-        assert [s.source for s in segments] == ["system_rules", "user_goal", "task_plan"]
+        # Plan sits in the volatile tail, before the run-status counter.
+        assert [s.source for s in segments] == [
+            "system_rules",
+            "user_goal",
+            "task_plan",
+            "run_status",
+        ]
 
     def test_plan_is_untrusted_because_the_model_wrote_it(self) -> None:
         plan = (PlanStep(title="do a thing"),)
         _, segments = builder().build([], BudgetUsage(), plan)
-        assert segments[-1].trust == "untrusted"
+        plan_segments = [s for s in segments if s.source == "task_plan"]
+        assert plan_segments and plan_segments[0].trust == "untrusted"
 
     def test_plan_renders_status_marks(self) -> None:
         plan = (
@@ -101,7 +123,7 @@ class TestPlanReinjection:
             PlanStep(title="verify", status="pending"),
         )
         request, _ = builder().build([], BudgetUsage(), plan)
-        rendered = request.messages[-1].content
+        rendered = next(m.content for m in request.messages if "locate the bug" in m.content)
         assert "[x] 1. locate the bug" in rendered
         assert "[~] 2. fix it" in rendered
         assert "[ ] 3. verify" in rendered
@@ -126,7 +148,7 @@ class TestDeterministicTruncation:
     def test_small_context_is_untouched(self) -> None:
         transcript = [tool_message("small output")]
         request, _ = builder().build(transcript, BudgetUsage())
-        assert TRUNCATED_STUB not in request.messages[-1].content
+        assert all(TRUNCATED_STUB not in m.content for m in request.messages)
 
     def test_oldest_tool_outputs_are_dropped_first(self) -> None:
         big = "x" * 40_000
@@ -141,7 +163,9 @@ class TestDeterministicTruncation:
 
         contents = [m.content for m in request.messages]
         assert contents[2] == TRUNCATED_STUB  # oldest tool output dropped
-        assert "recent and important" in contents[-1]  # newest kept
+        # the newest tool output is kept whole even though it is no longer the
+        # last message (run status now trails it)
+        assert any("recent and important" in c for c in contents)
         assert sum(len(c) for c in contents) <= MAX_CONTEXT_CHARS
 
     def test_dropped_segments_explain_themselves(self) -> None:
@@ -164,3 +188,41 @@ class TestDeterministicTruncation:
         first, _ = builder().build(transcript, BudgetUsage())
         second, _ = builder().build(transcript, BudgetUsage())
         assert [m.content for m in first.messages] == [m.content for m in second.messages]
+
+
+class TestPrefixStability:
+    """ADR 0008: the leading bytes must stay identical across turns so a
+    provider's automatic prompt cache can reuse them."""
+
+    def test_prefix_is_identical_across_consecutive_turns(self) -> None:
+        b = builder(project_guidance="prefer tabs")
+        plan = (PlanStep(title="fix it", status="in_progress"),)
+
+        # Turn N: some history, budget at 3/7.
+        turn_n = [tool_message("read output", "c1"), ModelMessage(role="assistant", content="ok")]
+        req_n, _ = b.build(turn_n, BudgetUsage(steps=3, tool_calls=7), plan)
+
+        # Turn N+1: two more transcript entries appended, budget advanced.
+        turn_n1 = [
+            *turn_n,
+            tool_message("more output", "c2"),
+            ModelMessage(role="assistant", content="next"),
+        ]
+        req_n1, _ = b.build(turn_n1, BudgetUsage(steps=4, tool_calls=9), plan)
+
+        # The concatenated prefix up to the end of turn N's transcript must be a
+        # byte-for-byte prefix of turn N+1 — nothing before the new transcript moved.
+        prefix_n = "\u0000".join(m.content for m in req_n.messages[:-2])  # drop plan + status tail
+        prefix_n1 = "\u0000".join(m.content for m in req_n1.messages)
+        assert prefix_n1.startswith(prefix_n)
+
+    def test_only_the_tail_changes_when_the_counter_advances(self) -> None:
+        b = builder()
+        transcript = [tool_message("x", "c1")]
+        req_a, _ = b.build(transcript, BudgetUsage(steps=1, tool_calls=1))
+        req_b, _ = b.build(transcript, BudgetUsage(steps=2, tool_calls=5))
+
+        head_a = [m.content for m in req_a.messages[:-1]]
+        head_b = [m.content for m in req_b.messages[:-1]]
+        assert head_a == head_b  # everything but the trailing run-status is identical
+        assert req_a.messages[-1].content != req_b.messages[-1].content

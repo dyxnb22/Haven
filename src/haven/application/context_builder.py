@@ -1,9 +1,14 @@
 """Context builder: decides exactly what the model sees each turn.
 
-Context is selected, not accumulated: system rules, the goal, the running
-transcript, and a budget summary. Oversized transcripts are truncated
-deterministically (oldest tool outputs first) — no model-generated summaries,
-so no way for summarization to invent permission facts.
+Context is selected, not accumulated. It is laid out as a stable head (system
+rules, AGENTS.md guidance, the goal), the append-only transcript, and a volatile
+tail (the plan and live budget counters). Keeping everything that changes turn
+to turn in the tail means the leading bytes stay identical across turns, which
+is what lets a provider's automatic prompt cache reuse them (ADR 0008).
+
+Oversized transcripts are truncated deterministically (oldest tool outputs
+first) — never by asking the model to summarize, so summarization can never
+invent permission facts.
 """
 
 from __future__ import annotations
@@ -159,19 +164,20 @@ class ContextBuilder:
             )
         selected.append(
             _Selected(
-                message=ModelMessage(
-                    role="user",
-                    content=(
-                        f"Task: {self._goal}\n\n"
-                        f"(budget so far: step {usage.steps}/{self._budget.max_steps}, "
-                        f"tool calls {usage.tool_calls}/{self._budget.max_tool_calls})"
-                    ),
-                ),
+                # The goal carries no volatile counter, so system rules +
+                # guidance + goal + transcript form a byte-stable prefix that a
+                # provider's automatic prompt cache can reuse across turns.
+                message=ModelMessage(role="user", content=f"Task: {self._goal}"),
                 source="user_goal",
                 trust="trusted",
                 reason="the task being solved",
             )
         )
+        # --- stable prefix ends; append-only transcript continues it ---
+        selected.extend(_classify(message) for message in transcript)
+
+        # --- volatile tail: everything that changes turn to turn goes last, so
+        # it never shifts the cacheable prefix (ADR 0008) ---
         if plan:
             # Rendered fresh from State every turn rather than left in the
             # transcript, so budget truncation can never drop the agent's plan.
@@ -181,10 +187,24 @@ class ContextBuilder:
                     source="task_plan",
                     # Model-authored text: untrusted, like any other model output.
                     trust="untrusted",
-                    reason="the agent's own plan, restated from run state",
+                    reason="the agent's own plan, restated from run state (kept near the tail)",
                 )
             )
-        selected.extend(_classify(message) for message in transcript)
+        selected.append(
+            _Selected(
+                message=ModelMessage(
+                    role="user",
+                    content=(
+                        f"(run status: step {usage.steps}/{self._budget.max_steps}, "
+                        f"tool calls {usage.tool_calls}/{self._budget.max_tool_calls})"
+                    ),
+                ),
+                source="run_status",
+                # Program-generated fact, not model output.
+                trust="trusted",
+                reason="live budget counters, kept last so the prefix stays cacheable",
+            )
+        )
 
         fitted = self._fit_to_budget(selected)
         request = ModelRequest(
@@ -208,18 +228,29 @@ class ContextBuilder:
     def _fit_to_budget(selected: list[_Selected]) -> list[_Selected]:
         """Deterministic truncation: drop the oldest tool outputs first.
 
-        Never touches the system rules, the goal, or the two most recent
-        messages, and never asks the model to summarize — a model-written
-        summary could invent facts that later reads would treat as established.
+        Only tool outputs are ever truncated, and the two most recent ones are
+        always kept whole (the model usually needs its latest observations).
+        The model is never asked to summarize — a model-written summary could
+        invent facts that later reads would treat as established.
+
+        Protecting tool outputs by role, rather than protecting the last two
+        messages positionally, matters now that the volatile tail (plan, run
+        status) sits after the transcript: the newest tool output is no longer
+        in the final two slots.
         """
         total = sum(len(item.message.content) for item in selected)
         if total <= MAX_CONTEXT_CHARS:
             return selected
         fitted = list(selected)
-        for index, item in enumerate(fitted[:-2]):
+        tool_indices = [i for i, item in enumerate(fitted) if item.message.role == "tool"]
+        protected = set(tool_indices[-2:])
+        for index in tool_indices:
             if total <= MAX_CONTEXT_CHARS:
                 break
-            if item.message.role == "tool" and len(item.message.content) > len(TRUNCATED_STUB):
+            if index in protected:
+                continue
+            item = fitted[index]
+            if len(item.message.content) > len(TRUNCATED_STUB):
                 total -= len(item.message.content) - len(TRUNCATED_STUB)
                 fitted[index] = _Selected(
                     message=ModelMessage(

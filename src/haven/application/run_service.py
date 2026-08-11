@@ -96,6 +96,7 @@ class RunOutcome:
     tool_calls: int
     input_tokens: int
     output_tokens: int
+    cached_input_tokens: int
     cost_usd: float
     usage_estimated: bool
     final_text: str
@@ -254,6 +255,7 @@ class RunService:
                         duration_ms=result.duration_ms,
                         finish_reason=result.finish_reason,
                         reasoning_tokens=result.usage.reasoning_tokens,
+                        cached_input_tokens=result.usage.cached_input_tokens,
                     ),
                 )
                 ctx.transcript.append(
@@ -487,7 +489,13 @@ class RunService:
             input_tokens = sum(len(m.content) for m in request.messages) // 4
             output_tokens = max(1, len(result.text) // 4)
         cost = self._pricing.cost(input_tokens, output_tokens)
-        ctx.usage = ctx.usage.charge_tokens(input_tokens, output_tokens, cost, estimated=estimated)
+        ctx.usage = ctx.usage.charge_tokens(
+            input_tokens,
+            output_tokens,
+            cost,
+            estimated=estimated,
+            cached_input_tokens=usage.cached_input_tokens,
+        )
 
     # -- persistence -------------------------------------------------------------
 
@@ -536,6 +544,7 @@ class RunService:
                 tool_calls=ctx.usage.tool_calls,
                 input_tokens=ctx.usage.input_tokens,
                 output_tokens=ctx.usage.output_tokens,
+                cached_input_tokens=ctx.usage.cached_input_tokens,
                 cost_usd=round(ctx.usage.cost_usd, 6),
                 usage_estimated=ctx.usage.usage_estimated,
                 duration_ms=int(ctx.usage.wall_time_seconds * 1000),
@@ -550,6 +559,7 @@ class RunService:
             tool_calls=ctx.usage.tool_calls,
             input_tokens=ctx.usage.input_tokens,
             output_tokens=ctx.usage.output_tokens,
+            cached_input_tokens=ctx.usage.cached_input_tokens,
             cost_usd=round(ctx.usage.cost_usd, 6),
             usage_estimated=ctx.usage.usage_estimated,
             final_text=final_text,
