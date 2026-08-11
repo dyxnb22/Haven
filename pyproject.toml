@@ -1,0 +1,83 @@
+[project]
+name = "haven"
+version = "0.1.0"
+description = "Evidence-driven, replayable local TUI Coding Agent"
+readme = "README.md"
+authors = [
+    { name = "diaoyuxuan", email = "714833073@qq.com" },
+]
+requires-python = ">=3.12"
+dependencies = [
+    "aiosqlite",
+    "httpx",
+    "platformdirs",
+    "pydantic>=2",
+    "pydantic-settings",
+    "textual",
+    "typer",
+]
+
+[project.scripts]
+haven = "haven.interfaces.cli:app"
+
+[dependency-groups]
+dev = [
+    "coverage",
+    "hypothesis",
+    "import-linter",
+    "mypy",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-timeout",
+    "respx",
+    "ruff",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["haven"]
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.importlinter]
+root_package = "haven"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "domain is isolated"
+type = "forbidden"
+source_modules = ["haven.domain"]
+forbidden_modules = [
+    "haven.adapters",
+    "haven.interfaces",
+    "textual",
+    "httpx",
+    "aiosqlite",
+]
+
+[[tool.importlinter.contracts]]
+name = "application does not import adapters"
+type = "forbidden"
+source_modules = ["haven.application"]
+forbidden_modules = ["haven.adapters"]
+
+[[tool.importlinter.contracts]]
+name = "interfaces do not import adapters"
+type = "forbidden"
+source_modules = ["haven.interfaces"]
+forbidden_modules = ["haven.adapters"]
