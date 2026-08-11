@@ -181,7 +181,7 @@ All reproducible from a clean checkout with no API key:
 | Automated tests | **335** passing, **88%** line coverage on `src/` |
 | Offline eval | **27/27 cases**, **0 security violations**, ~1 s |
 | Eval categories | task 8 · security 7 · robustness 5 · injection 3 · budget 2 · recovery 2 |
-| Live eval (DeepSeek `deepseek-v4-flash`) | **6/8 task cases**, **0 security violations**, 211k in / 16k out tokens ([report](docs/EVAL_LIVE.md)) |
+| Live eval (DeepSeek `deepseek-v4-flash`) | **7/8 task cases**, **0 security violations**, **89% prompt-cache hit** ([report](docs/EVAL_LIVE.md)) |
 | Static gates | `ruff`, `mypy --strict` (54 modules), `import-linter` (3 layering contracts) |
 | Determinism | golden trace stable across runs; TUI and headless emit identical traces |
 
@@ -200,7 +200,7 @@ including one where the security gate itself was wrong.
 | `docs/DEMO.md` | 2–3 minute walkthrough script |
 | `docs/PROJECT_CARD.md` | one-page summary, measured results, trade-offs |
 | `docs/POSTMORTEM.md` | real failures, root causes, regression guards |
-| `docs/adr/` | 7 ADRs: scope, tool boundary, evidence gate, durability, eval, planning/budgets, and what was *not* built |
+| `docs/adr/` | 8 ADRs: scope, tool boundary, evidence gate, durability, eval, planning/budgets, what was *not* built, and prompt-cache ordering |
 
 ## Design references
 

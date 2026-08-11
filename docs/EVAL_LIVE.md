@@ -48,7 +48,9 @@ They are reported as an existence proof and a cost figure, not as a benchmark.
 
 Six real defects, all invisible to the mocked contract tests. Four in the
 provider path (below), plus the unwinnable Evidence Gate and the scope-creep
-misconfiguration described further down.
+misconfiguration described further down. The live run also exposed a **cost**
+problem — a cache-defeating context layout — measured and fixed under
+"Prompt-cache prefix stability" at the end of this document.
 
 **1. Reasoning content was silently dropped.** `deepseek-v4-flash` streams
 `reasoning_content` before any `content`. The adapter only read `content`, so the
@@ -135,6 +137,41 @@ only reports money it can compute from configured rates rather than guessing.
 Token counts above are exact — DeepSeek returns usage, including
 `reasoning_tokens` (14–18 per short turn), which Haven now records separately so
 a cost report can explain where output tokens went.
+
+## Prompt-cache prefix stability (ADR 0008)
+
+The first live run spent ~26k input tokens per short task, which prompted a look
+at prompt caching. The root cause was in Haven's own code, not the provider: the
+live budget counter (`step 3/24, tool calls 7/48`) was embedded in the *second*
+message, and prefix caching matches from the front, so everything after message
+two — the plan and the whole growing transcript — was re-billed every turn.
+
+The fix moves all volatile content (plan, budget counters) to the tail, leaving
+system rules + tools + goal + transcript as a byte-stable prefix. Measured on the
+same 8-task suite against `deepseek-v4-flash`, with cache-hit accounting added to
+`Usage`:
+
+| | before (counter in msg 2) | after (volatile tail) |
+|---|---:|---:|
+| input tokens (8 tasks) | 127,326 | 113,914 |
+| cache-hit input tokens | 90,240 | 101,760 |
+| **cache hit rate** | **70.9%** | **89.3%** |
+
+Two honest caveats:
+
+- The "before" rate is already 71%, not near-zero, because the largest fixed
+  block — the system prompt and tool schemas — sits *before* the volatile
+  counter and caches either way. The reordering rescues the transcript, which is
+  small early and dominates late, so **the saving grows with run length**; on
+  these short 5–7 step tasks it is a ~10% input-token reduction, and it would be
+  larger on long runs.
+- The before/after pass counts (8/8 vs 7/8) differ only by model
+  non-determinism — the context *content* is identical, only its order changed.
+  Across six live runs of this suite the pass count ranged 5–8; that spread is
+  the model, not the reordering.
+
+The "before" number was produced by a temporary, since-removed ordering shim, on
+the same suite and model, so the comparison is apples-to-apples.
 
 ## Honest limits
 

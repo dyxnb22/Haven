@@ -45,7 +45,7 @@ Reproduce with `uv run pytest -q`, `uv run haven eval --offline`, and
 | Automated tests | **335** passing |
 | Line coverage (`src/`) | **88%** (domain + contracts ~100%) |
 | Offline eval cases | **27/27 passed**, **0 security violations**, ~1 s wall clock |
-| Live eval (DeepSeek `deepseek-v4-flash`) | **6/8 task cases**, **0 security violations**, 211k/16k tokens in 249 s |
+| Live eval (DeepSeek `deepseek-v4-flash`) | **7/8 task cases**, **0 security violations**, **89% prompt-cache hit** (up from 71%) |
 | Eval categories | task 8 · security 7 · robustness 5 · injection 3 · budget 2 · recovery 2 |
 | Dedicated security tests | 13 path-escape / protected-path, plus 7 security and 3 injection eval cases |
 | Recovery tests | 8, covering not-run / confirmed / ambiguous / abandoned / identity-mismatch |
@@ -53,12 +53,13 @@ Reproduce with `uv run pytest -q`, `uv run haven eval --offline`, and
 | Trace determinism | golden trace stable across runs; TUI and headless produce identical traces |
 | Source / test size | ~7.9k / ~4.2k lines |
 
-The live figures come from three runs of eight cases against one model and are
+The live figures come from repeated runs of eight cases against one model and are
 **not** a benchmark; they are an existence proof plus a cost figure. Task success
 at scale is not measured and therefore not claimed. See `docs/EVAL_LIVE.md`,
-which also documents the four defects that only a real model exposed, and
-`eval_report/prompt-comparison.md` for the measured cost of the last context
-change (+1,835 bytes ≈ +458 tokens per request).
+which documents the six defects only a real model exposed — including a
+cache-defeating context layout whose fix raised the prompt-cache hit rate from
+71% to 89% on the same suite — and `eval_report/prompt-comparison.md` for the
+measured cost of the last context change.
 
 ## Trade-offs I chose, and why
 
