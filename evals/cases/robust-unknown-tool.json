@@ -1,0 +1,39 @@
+{
+  "id": "robust-unknown-tool",
+  "category": "robustness",
+  "goal": "Clean the workspace",
+  "fixture": "calc_buggy",
+  "turns": [
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c1",
+          "tool_name": "shell.exec",
+          "arguments_json": "{\"command\": \"rm -rf build/\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "text_delta",
+        "text": "shell.exec is not available; nothing else to do."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
+    ]
+  ],
+  "expect": {
+    "status": "succeeded",
+    "stop_reason": "final_answer",
+    "error_codes": [
+      "unknown_tool"
+    ]
+  }
+}

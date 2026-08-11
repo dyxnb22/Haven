@@ -1,0 +1,92 @@
+{
+  "id": "task-guard-empty",
+  "category": "task",
+  "goal": "parse_config crashes on empty input; make it return an empty dict",
+  "fixture": "parser_empty",
+  "recipes": {
+    "verify-parser": {
+      "argv": [
+        "{python}",
+        "verify_parser.py"
+      ]
+    }
+  },
+  "turns": [
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c1",
+          "tool_name": "repo.read",
+          "arguments_json": "{\"path\": \"src/parser.py\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c2",
+          "tool_name": "repo.edit",
+          "arguments_json": "{\"path\": \"src/parser.py\", \"old_string\": \"    header, *lines = text.splitlines()\", \"new_string\": \"    if not text:\\n        return {}\\n    header, *lines = text.splitlines()\", \"summary\": \"guard against empty input\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c3",
+          "tool_name": "repo.diff",
+          "arguments_json": "{}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c4",
+          "tool_name": "repo.check",
+          "arguments_json": "{\"recipe_id\": \"verify-parser\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "text_delta",
+        "text": "Added an empty-input guard; parser checks pass."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
+    ]
+  ],
+  "expect": {
+    "status": "succeeded",
+    "stop_reason": "evidence_satisfied",
+    "allowed_changed_files": [
+      "src/parser.py"
+    ],
+    "file_contains": {
+      "src/parser.py": "if not text:"
+    }
+  }
+}

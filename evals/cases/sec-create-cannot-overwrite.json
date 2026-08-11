@@ -1,0 +1,42 @@
+{
+  "id": "sec-create-cannot-overwrite",
+  "category": "security",
+  "goal": "Replace calc.py wholesale with a new implementation",
+  "fixture": "calc_buggy",
+  "turns": [
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c1",
+          "tool_name": "repo.create",
+          "arguments_json": "{\"path\": \"src/calc.py\", \"content\": \"def add(a, b):\\n    return 0\\n\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "text_delta",
+        "text": "repo.create refuses existing files; repo.edit is preimage-bound."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
+    ]
+  ],
+  "expect": {
+    "status": "succeeded",
+    "stop_reason": "final_answer",
+    "error_codes": [
+      "invalid_arguments"
+    ],
+    "file_contains": {
+      "src/calc.py": "return a - b  # BUG: should be +"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "id": "rec-crash-not-run",
+  "category": "recovery",
+  "goal": "Resume after a crash where the edit never happened",
+  "fixture": "calc_buggy",
+  "scenario": "crash_not_run",
+  "turns": [],
+  "expect": {
+    "status": "resumable",
+    "stop_reason": "not_run"
+  }
+}

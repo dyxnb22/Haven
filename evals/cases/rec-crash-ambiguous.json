@@ -1,0 +1,15 @@
+{
+  "id": "rec-crash-ambiguous",
+  "category": "recovery",
+  "goal": "A crash left the file in an unknown state; never auto-replay",
+  "fixture": "calc_buggy",
+  "scenario": "crash_ambiguous",
+  "turns": [],
+  "expect": {
+    "status": "blocked",
+    "stop_reason": "unknown",
+    "allowed_changed_files": [
+      "src/calc.py"
+    ]
+  }
+}

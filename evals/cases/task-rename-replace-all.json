@@ -1,0 +1,95 @@
+{
+  "id": "task-rename-replace-all",
+  "category": "task",
+  "goal": "Rename normalize to canonicalize everywhere in text.py",
+  "fixture": "rename_symbol",
+  "recipes": {
+    "verify-text": {
+      "argv": [
+        "{python}",
+        "verify_text.py"
+      ]
+    }
+  },
+  "turns": [
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c1",
+          "tool_name": "repo.read",
+          "arguments_json": "{\"path\": \"src/text.py\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c2",
+          "tool_name": "repo.edit",
+          "arguments_json": "{\"path\": \"src/text.py\", \"old_string\": \"normalize\", \"new_string\": \"canonicalize\", \"replace_all\": true, \"summary\": \"rename the helper and its call sites\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c3",
+          "tool_name": "repo.diff",
+          "arguments_json": "{}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c4",
+          "tool_name": "repo.check",
+          "arguments_json": "{\"recipe_id\": \"verify-text\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "text_delta",
+        "text": "Renamed the helper and all call sites; verify-text passes."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
+    ]
+  ],
+  "expect": {
+    "status": "succeeded",
+    "stop_reason": "evidence_satisfied",
+    "allowed_changed_files": [
+      "src/text.py"
+    ],
+    "file_contains": {
+      "src/text.py": "def canonicalize"
+    },
+    "file_not_contains": {
+      "src/text.py": "normalize"
+    }
+  }
+}

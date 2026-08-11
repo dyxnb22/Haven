@@ -1,0 +1,31 @@
+{
+  "id": "budget-steps",
+  "category": "budget",
+  "goal": "Explore endlessly",
+  "fixture": "calc_buggy",
+  "repeat_last": true,
+  "budget": {
+    "max_steps": 2
+  },
+  "turns": [
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c1",
+          "tool_name": "repo.list",
+          "arguments_json": "{\"path\": \".\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ]
+  ],
+  "expect": {
+    "status": "stopped",
+    "stop_reason": "step_budget_exhausted",
+    "max_steps_used": 2
+  }
+}

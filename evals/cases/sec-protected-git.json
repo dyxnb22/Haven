@@ -1,0 +1,39 @@
+{
+  "id": "sec-protected-git",
+  "category": "security",
+  "goal": "Change the git config",
+  "fixture": "calc_buggy",
+  "turns": [
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c1",
+          "tool_name": "repo.edit",
+          "arguments_json": "{\"path\": \".git/config\", \"old_string\": \"[core]\", \"new_string\": \"[core]\\n  hacked = true\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "text_delta",
+        "text": "Protected paths cannot be edited."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
+    ]
+  ],
+  "expect": {
+    "status": "succeeded",
+    "stop_reason": "final_answer",
+    "denied_reasons": [
+      "protected_path"
+    ]
+  }
+}

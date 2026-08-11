@@ -1,0 +1,120 @@
+{
+  "id": "task-plan-multi-step",
+  "category": "task",
+  "goal": "Plan the work, then fix add() and verify",
+  "fixture": "calc_buggy",
+  "recipes": {
+    "verify-calc": {
+      "argv": [
+        "{python}",
+        "verify_calc.py"
+      ]
+    }
+  },
+  "turns": [
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c1",
+          "tool_name": "task.plan",
+          "arguments_json": "{\"steps\": [{\"title\": \"read src/calc.py\", \"status\": \"in_progress\"}, {\"title\": \"fix add()\", \"status\": \"pending\"}, {\"title\": \"diff and run verify-calc\", \"status\": \"pending\"}]}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c2",
+          "tool_name": "repo.read",
+          "arguments_json": "{\"path\": \"src/calc.py\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c3",
+          "tool_name": "repo.edit",
+          "arguments_json": "{\"path\": \"src/calc.py\", \"old_string\": \"return a - b  # BUG: should be +\", \"new_string\": \"return a + b\", \"summary\": \"use addition in add()\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c4",
+          "tool_name": "task.plan",
+          "arguments_json": "{\"steps\": [{\"title\": \"read src/calc.py\", \"status\": \"done\"}, {\"title\": \"fix add()\", \"status\": \"done\"}, {\"title\": \"diff and run verify-calc\", \"status\": \"in_progress\"}]}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c5",
+          "tool_name": "repo.diff",
+          "arguments_json": "{}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c6",
+          "tool_name": "repo.check",
+          "arguments_json": "{\"recipe_id\": \"verify-calc\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "text_delta",
+        "text": "Plan complete: add() fixed and verify-calc passes."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
+    ]
+  ],
+  "expect": {
+    "status": "succeeded",
+    "stop_reason": "evidence_satisfied",
+    "allowed_changed_files": [
+      "src/calc.py"
+    ],
+    "file_contains": {
+      "src/calc.py": "return a + b"
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "stuck-loop",
+  "category": "budget",
+  "goal": "Find something that does not exist",
+  "fixture": "calc_buggy",
+  "repeat_last": true,
+  "turns": [
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c1",
+          "tool_name": "repo.search",
+          "arguments_json": "{\"pattern\": \"does_not_exist_anywhere\", \"path\": \".\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ]
+  ],
+  "expect": {
+    "status": "stopped",
+    "stop_reason": "no_progress",
+    "max_steps_used": 5
+  }
+}

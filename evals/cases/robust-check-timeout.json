@@ -1,0 +1,49 @@
+{
+  "id": "robust-check-timeout",
+  "category": "robustness",
+  "goal": "Run the slow check and report what happens",
+  "fixture": "calc_buggy",
+  "recipes": {
+    "slow-check": {
+      "argv": [
+        "{python}",
+        "-c",
+        "import time; time.sleep(30)"
+      ],
+      "timeout_seconds": 0.5
+    }
+  },
+  "turns": [
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c1",
+          "tool_name": "repo.check",
+          "arguments_json": "{\"recipe_id\": \"slow-check\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "text_delta",
+        "text": "The slow-check recipe timed out after 0.5s."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
+    ]
+  ],
+  "expect": {
+    "status": "succeeded",
+    "stop_reason": "final_answer",
+    "error_codes": [
+      "timeout"
+    ]
+  }
+}
