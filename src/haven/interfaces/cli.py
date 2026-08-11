@@ -91,10 +91,11 @@ class ConsoleSink:
         elif isinstance(event, Notice):
             line = f"  [{event.level}] {event.message}"
         elif isinstance(event, RunFinished):
+            cached = f" cached={event.cached_input_tokens}" if event.cached_input_tokens else ""
             line = (
                 f"finished: {event.status} ({event.stop_reason}) "
                 f"steps={event.steps} tools={event.tool_calls} "
-                f"tokens={event.input_tokens}/{event.output_tokens} "
+                f"tokens={event.input_tokens}/{event.output_tokens}{cached} "
                 f"cost=${event.cost_usd:.4f}" + (" (estimated)" if event.usage_estimated else "")
             )
         if line and self._verbose:
@@ -176,6 +177,7 @@ def run(
                         "tool_calls": outcome.tool_calls,
                         "input_tokens": outcome.input_tokens,
                         "output_tokens": outcome.output_tokens,
+                        "cached_input_tokens": outcome.cached_input_tokens,
                         "cost_usd": outcome.cost_usd,
                         "usage_estimated": outcome.usage_estimated,
                         "final_text": outcome.final_text,

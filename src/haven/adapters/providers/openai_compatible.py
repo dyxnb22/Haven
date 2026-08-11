@@ -120,10 +120,17 @@ class OpenAICompatibleModel:
 
                     if raw_usage := chunk.get("usage"):
                         details = raw_usage.get("completion_tokens_details") or {}
+                        prompt_details = raw_usage.get("prompt_tokens_details") or {}
+                        # OpenAI reports cache hits under prompt_tokens_details;
+                        # DeepSeek uses a top-level prompt_cache_hit_tokens.
+                        cached = int(prompt_details.get("cached_tokens", 0)) or int(
+                            raw_usage.get("prompt_cache_hit_tokens", 0)
+                        )
                         usage = Usage(
                             input_tokens=int(raw_usage.get("prompt_tokens", 0)),
                             output_tokens=int(raw_usage.get("completion_tokens", 0)),
                             reasoning_tokens=int(details.get("reasoning_tokens", 0)),
+                            cached_input_tokens=cached,
                             estimated=False,
                         )
                     for choice in chunk.get("choices", []):

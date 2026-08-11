@@ -61,6 +61,7 @@ class UsageSnapshot(StrictModel):
     output_tokens: int
     cost_usd: float
     usage_estimated: bool
+    cached_input_tokens: int = 0
 
     @classmethod
     def from_domain(cls, usage: BudgetUsage) -> UsageSnapshot:
@@ -72,6 +73,7 @@ class UsageSnapshot(StrictModel):
             output_tokens=usage.output_tokens,
             cost_usd=usage.cost_usd,
             usage_estimated=usage.usage_estimated,
+            cached_input_tokens=usage.cached_input_tokens,
         )
 
     def to_domain(self) -> BudgetUsage:
@@ -83,6 +85,7 @@ class UsageSnapshot(StrictModel):
             output_tokens=self.output_tokens,
             cost_usd=self.cost_usd,
             usage_estimated=self.usage_estimated,
+            cached_input_tokens=self.cached_input_tokens,
         )
 
 

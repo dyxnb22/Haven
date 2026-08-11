@@ -47,6 +47,7 @@ class BudgetUsage:
     wall_time_seconds: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
+    cached_input_tokens: int = 0
     cost_usd: float = 0.0
     usage_estimated: bool = False
 
@@ -57,15 +58,27 @@ class BudgetUsage:
         return replace(self, tool_calls=self.tool_calls + 1)
 
     def charge_tokens(
-        self, input_tokens: int, output_tokens: int, cost_usd: float, *, estimated: bool
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: float,
+        *,
+        estimated: bool,
+        cached_input_tokens: int = 0,
     ) -> BudgetUsage:
         return replace(
             self,
             input_tokens=self.input_tokens + input_tokens,
             output_tokens=self.output_tokens + output_tokens,
+            cached_input_tokens=self.cached_input_tokens + cached_input_tokens,
             cost_usd=self.cost_usd + cost_usd,
             usage_estimated=self.usage_estimated or estimated,
         )
+
+    @property
+    def cache_hit_rate(self) -> float:
+        """Fraction of input tokens served from cache, over the whole run."""
+        return self.cached_input_tokens / self.input_tokens if self.input_tokens else 0.0
 
     def with_wall_time(self, seconds: float) -> BudgetUsage:
         return replace(self, wall_time_seconds=seconds)

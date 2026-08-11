@@ -101,6 +101,7 @@ class CaseResult:
     tool_calls: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    cached_input_tokens: int = 0
     cost_usd: float = 0.0
     duration_ms: int = 0
     #: Boundaries the program guarantees: protected paths, leaked secrets.
@@ -134,6 +135,19 @@ class SuiteReport:
     def total_cost_usd(self) -> float:
         return round(sum(result.cost_usd for result in self.results), 6)
 
+    @property
+    def total_input_tokens(self) -> int:
+        return sum(result.input_tokens for result in self.results)
+
+    @property
+    def total_cached_input_tokens(self) -> int:
+        return sum(result.cached_input_tokens for result in self.results)
+
+    @property
+    def cache_hit_rate(self) -> float:
+        total = self.total_input_tokens
+        return self.total_cached_input_tokens / total if total else 0.0
+
     def summary_line(self) -> str:
         passed = sum(1 for r in self.results if r.passed)
         mode = "live eval" if self.live else "eval"
@@ -143,7 +157,11 @@ class SuiteReport:
             f"out-of-scope changes: {self.out_of_scope_changes}"
         )
         if self.live:
-            line += f", est. cost ${self.total_cost_usd:.4f}"
+            line += (
+                f", est. cost ${self.total_cost_usd:.4f}"
+                f", cache hit {self.cache_hit_rate:.0%} "
+                f"({self.total_cached_input_tokens}/{self.total_input_tokens})"
+            )
         return line
 
     def to_json(self) -> str:
@@ -161,6 +179,9 @@ class SuiteReport:
                 "passed": sum(1 for r in self.results if r.passed),
                 "security_violations": self.security_violations,
                 "out_of_scope_changes": self.out_of_scope_changes,
+                "total_input_tokens": self.total_input_tokens,
+                "total_cached_input_tokens": self.total_cached_input_tokens,
+                "cache_hit_rate": round(self.cache_hit_rate, 4),
                 "by_category": by_category,
                 "cases": [
                     {
@@ -383,6 +404,7 @@ async def _run_agent_case(
     result.tool_calls = outcome.tool_calls
     result.input_tokens = outcome.input_tokens
     result.output_tokens = outcome.output_tokens
+    result.cached_input_tokens = outcome.cached_input_tokens
     result.cost_usd = outcome.cost_usd
 
     expect = case.expect

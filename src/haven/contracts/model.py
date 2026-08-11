@@ -20,6 +20,10 @@ class Usage(StrictModel):
     #: reports it. Already included in output_tokens; tracked separately so a
     #: cost report can explain where the tokens went.
     reasoning_tokens: int = 0
+    #: Portion of input_tokens served from the provider's prompt cache. Already
+    #: included in input_tokens; a high ratio means the stable-prefix ordering
+    #: is paying off (ADR 0008).
+    cached_input_tokens: int = 0
     estimated: bool = False
 
 

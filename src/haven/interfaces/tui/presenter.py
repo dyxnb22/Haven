@@ -152,14 +152,18 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
             output_tokens=state.output_tokens + event.output_tokens,
             usage_estimated=state.usage_estimated or event.usage_estimated,
         )
-        reasoning = f" (reasoning {event.reasoning_tokens})" if event.reasoning_tokens else ""
+        extra = ""
+        if event.reasoning_tokens:
+            extra += f" reasoning={event.reasoning_tokens}"
+        if event.cached_input_tokens:
+            extra += f" cached={event.cached_input_tokens}"
         state = replace(
             state,
             trace_rows=(
                 *state.trace_rows,
                 f"step {event.step}: model ttft={event.ttft_ms}ms "
                 f"dur={event.duration_ms}ms tokens={event.input_tokens}/"
-                f"{event.output_tokens}{reasoning} finish={event.finish_reason}",
+                f"{event.output_tokens}{extra} finish={event.finish_reason}",
             ),
         )
         if event.text:

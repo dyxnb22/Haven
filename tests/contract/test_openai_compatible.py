@@ -78,6 +78,42 @@ async def test_text_stream_and_usage() -> None:
     assert isinstance(finished, StreamFinished)
 
 
+@pytest.mark.parametrize(
+    "usage_payload",
+    [
+        {
+            "prompt_tokens": 100,
+            "completion_tokens": 5,
+            "prompt_tokens_details": {"cached_tokens": 80},
+        },
+        {"prompt_tokens": 100, "completion_tokens": 5, "prompt_cache_hit_tokens": 80},
+    ],
+)
+async def test_cached_input_tokens_parsed_from_either_wire_shape(usage_payload: dict) -> None:  # type: ignore[type-arg]
+    body = (
+        chunk({"content": "hi"})
+        + chunk({}, finish="stop")
+        + sse({"choices": [], "usage": usage_payload})
+        + b"data: [DONE]\n\n"
+    )
+    events = await collect(make_model(lambda req: httpx.Response(200, content=body)))
+    usage = next(e for e in events if isinstance(e, UsageReport))
+    assert usage.usage.input_tokens == 100
+    assert usage.usage.cached_input_tokens == 80
+
+
+async def test_no_cache_field_means_zero(events_body: bytes | None = None) -> None:
+    body = (
+        chunk({"content": "hi"})
+        + chunk({}, finish="stop")
+        + sse({"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 2}})
+        + b"data: [DONE]\n\n"
+    )
+    events = await collect(make_model(lambda req: httpx.Response(200, content=body)))
+    usage = next(e for e in events if isinstance(e, UsageReport))
+    assert usage.usage.cached_input_tokens == 0
+
+
 async def test_tool_call_delta_assembly() -> None:
     body = (
         chunk(

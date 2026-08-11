@@ -78,6 +78,7 @@ class ModelCompleted(StrictModel):
     duration_ms: int
     finish_reason: str
     reasoning_tokens: int = 0
+    cached_input_tokens: int = 0
 
 
 class ToolProposed(StrictModel):
@@ -204,6 +205,7 @@ class RunFinished(StrictModel):
     tool_calls: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    cached_input_tokens: int = 0
     cost_usd: float = 0.0
     usage_estimated: bool = False
     duration_ms: int = 0
