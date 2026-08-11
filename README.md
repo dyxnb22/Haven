@@ -196,11 +196,21 @@ including one where the security gate itself was wrong.
 | `docs/ARCHITECTURE.md` | layering, execution-channel, and state-machine diagrams |
 | `docs/SECURITY.md` | assets, principals, attack surface, defenses, limitations |
 | `docs/EVAL.md` | case design, metrics, offline vs. live eval |
-| `docs/EVAL_LIVE.md` | the real-model run: results, and 4 defects only it could find |
+| `docs/EVAL_LIVE.md` | the real-model run: results, and 6 defects only it could find |
+| `course/` | a 10-module course that teaches agent engineering using this repo as the textbook |
 | `docs/DEMO.md` | 2–3 minute walkthrough script |
 | `docs/PROJECT_CARD.md` | one-page summary, measured results, trade-offs |
 | `docs/POSTMORTEM.md` | real failures, root causes, regression guards |
 | `docs/adr/` | 8 ADRs: scope, tool boundary, evidence gate, durability, eval, planning/budgets, what was *not* built, and prompt-cache ordering |
+
+## Learn from this repo
+
+`course/` is a self-paced course that teaches how to build a production-grade
+coding agent by reading and extending this one. Ten modules map to the layers
+here — from the provider contract to the execution channel, the Evidence Gate,
+durable recovery, and evaluation — each pointing at real files, ADRs, tests, and
+the failures found by running against a live model. It runs fully offline (no API
+key) and ends with a capstone. Start at [`course/README.md`](course/README.md).
 
 ## Design references
 
