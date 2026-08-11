@@ -3,6 +3,28 @@
 A 2–3 minute walkthrough that shows the guarantees, not just a happy path. All of
 it runs offline except the optional live TUI segment.
 
+## The 30-second version: record it with one command
+
+`scripts/demo.sh` runs the whole offline tour — eval, the security-only subset,
+config provenance, context inspection, and `doctor` — with pacing tuned for a
+recording. It uses a temporary data directory and needs no API key.
+
+```bash
+./scripts/demo.sh                                  # watch it
+asciinema rec demo.cast -c ./scripts/demo.sh       # record it
+agg demo.cast docs/demo.gif                        # turn it into a GIF for the README
+PACE=0 ./scripts/demo.sh                           # instant, for CI
+```
+
+Embed the result at the top of `README.md`:
+
+```markdown
+![Haven offline demo](docs/demo.gif)
+```
+
+The manual walkthrough below covers the interactive TUI, which needs a human at
+the keyboard and therefore cannot be scripted.
+
 ## 0. Setup (offline)
 
 ```bash
@@ -15,7 +37,7 @@ uv sync --locked
 uv run haven eval --offline
 ```
 
-Point out the summary line: `26/26 cases passed, security violations: 0`. Open
+Point out the summary line: `27/27 cases passed, security violations: 0`. Open
 `eval_report/report.md` and highlight the per-category table — task, robustness,
 security, injection, budget, recovery — and that security is its own hard gate,
 not averaged into a score.
