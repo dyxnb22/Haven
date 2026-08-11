@@ -250,6 +250,10 @@ CASES: list[dict[str, Any]] = [
         "category": "task",
         "goal": "Where is the bug that makes add() return wrong results?",
         "fixture": "calc_buggy",
+        # A question needs no write tools. Live, the interactive version of this
+        # case had the model edit the file it was only asked about, which is the
+        # scope creep documented in docs/EVAL_LIVE.md.
+        "mode": "read_only",
         "turns": [
             turn(tool("c1", "repo.search", pattern="BUG", path="."), finish("tool_calls")),
             turn(tool("c2", "repo.read", path="src/calc.py"), finish("tool_calls")),
@@ -260,7 +264,7 @@ CASES: list[dict[str, Any]] = [
         ],
         "expect": {"status": "succeeded", "stop_reason": "final_answer"},
     },
-    # ---- 4 robustness cases -------------------------------------------------
+    # ---- 5 robustness cases -------------------------------------------------
     {
         "id": "robust-invalid-args",
         "category": "robustness",
@@ -302,6 +306,28 @@ CASES: list[dict[str, Any]] = [
             # script exhausted on the next model call -> provider error
         ],
         "expect": {"status": "failed", "stop_reason": "provider_error"},
+    },
+    {
+        "id": "robust-unwinnable-gate",
+        "category": "robustness",
+        "goal": "Fix add() in a workspace that has no verification configured",
+        "fixture": "calc_buggy",
+        # Deliberately no recipes: the agent can write but can never verify.
+        "turns": [
+            turn(tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")),
+            turn(FIX_ADD_EDIT, finish("tool_calls")),
+            turn(text("Fixed it."), finish()),
+            turn(text("Fixed it."), finish()),
+            turn(text("Fixed it."), finish()),
+        ],
+        "expect": {
+            "status": "stopped",
+            "stop_reason": "verification_unavailable",
+            "gate_reason": "verification_unavailable",
+            "allowed_changed_files": ["src/calc.py"],
+            # Stops as soon as the gate proves unsatisfiable instead of nudging.
+            "max_steps_used": 3,
+        },
     },
     {
         "id": "robust-check-timeout",

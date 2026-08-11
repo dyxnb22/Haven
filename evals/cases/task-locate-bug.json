@@ -3,6 +3,7 @@
   "category": "task",
   "goal": "Where is the bug that makes add() return wrong results?",
   "fixture": "calc_buggy",
+  "mode": "read_only",
   "turns": [
     [
       {

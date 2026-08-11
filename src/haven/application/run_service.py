@@ -33,6 +33,7 @@ from haven.contracts.events import (
     RunCreated,
     RunFinished,
     StepStarted,
+    StreamRestarted,
 )
 from haven.contracts.model import (
     ModelMessage,
@@ -274,7 +275,9 @@ class RunService:
                 # Re-read the accumulated diff so the review sees what is on
                 # disk now, not what a stale event recorded.
                 diff_text = (await self._workspace.run_diff()).diff if ctx.ledger.has_edits else ""
-                gate = evaluate_evidence_gate(ctx.ledger, diff_text)
+                gate = evaluate_evidence_gate(
+                    ctx.ledger, diff_text, verification_available=bool(self._recipes)
+                )
                 if gate.passed:
                     reason = (
                         StopReason.EVIDENCE_SATISFIED
@@ -283,6 +286,21 @@ class RunService:
                     )
                     return await self._finish(
                         ctx, RunStatus.SUCCEEDED, reason, final_text, gate.reason_code
+                    )
+
+                if gate.terminal:
+                    # Nudging here would loop until the budget dies without any
+                    # possibility of success, and report the wrong reason.
+                    await self._emitter.emit(
+                        ctx.run_id,
+                        Notice(run_id=ctx.run_id, level="error", message=gate.detail),
+                    )
+                    return await self._finish(
+                        ctx,
+                        RunStatus.STOPPED,
+                        StopReason.VERIFICATION_UNAVAILABLE,
+                        final_text,
+                        gate.reason_code,
                     )
 
                 ctx.nudges += 1
@@ -378,8 +396,10 @@ class RunService:
 
         A model call has no side effects, so retrying a connection failure
         cannot double-apply anything — unlike a tool call, which is never
-        retried. Retry is further limited to failures that occur before any
-        event arrived, so partial output can never be duplicated.
+        retried. A partially streamed turn is also safe to retry: the assembled
+        text and tool calls are local to the attempt and discarded, and nothing
+        reaches the transcript or the tool pipeline until the turn completes.
+        Only the already-displayed text is stale, so the UI is told to reset.
         """
         for attempt in range(MODEL_RETRY_ATTEMPTS + 1):
             progress = _StreamProgress()
@@ -387,8 +407,12 @@ class RunService:
                 return await self._stream_once(ctx, step, request, progress)
             except ProviderError as exc:
                 exhausted = attempt == MODEL_RETRY_ATTEMPTS
-                if not exc.retryable or progress.started or exhausted:
+                if not exc.retryable or exhausted:
                     raise
+                if progress.started:
+                    await self._emitter.emit(
+                        ctx.run_id, StreamRestarted(run_id=ctx.run_id, step=step)
+                    )
                 delay = MODEL_RETRY_BASE_DELAY * (2**attempt)
                 await self._emitter.emit(
                     ctx.run_id,

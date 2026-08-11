@@ -555,6 +555,59 @@ class TestDeterministicReview:
         assert outcome.stop_reason is StopReason.FINAL_ANSWER
 
 
+class TestUnwinnableEvidenceGate:
+    """Regression for a live failure: no recipes + a write = unwinnable."""
+
+    @staticmethod
+    def _edit_turns() -> list[list[ModelEvent]]:
+        return [
+            [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
+            [
+                tool(
+                    "c2",
+                    "repo.edit",
+                    path="src/calc.py",
+                    old_string="return a - b  # BUG: should be +",
+                    new_string="return a + b",
+                ),
+                finish("tool_calls"),
+            ],
+            [text("Fixed it."), finish()],
+            [text("Fixed it."), finish()],
+            [text("Fixed it."), finish()],
+            [text("Fixed it."), finish()],
+        ]
+
+    async def test_stops_immediately_with_an_accurate_reason(self, tmp_path: Path) -> None:
+        h = Harness(make_repo(tmp_path), self._edit_turns())
+        h.service._recipes = {}  # type: ignore[attr-defined]  # noqa: SLF001
+
+        outcome = await h.service.run("Fix add()")
+        assert outcome.status is RunStatus.STOPPED
+        assert outcome.stop_reason is StopReason.VERIFICATION_UNAVAILABLE
+        assert outcome.gate_reason == "verification_unavailable"
+
+    async def test_does_not_burn_the_budget_nudging(self, tmp_path: Path) -> None:
+        h = Harness(make_repo(tmp_path), self._edit_turns())
+        h.service._recipes = {}  # type: ignore[attr-defined]  # noqa: SLF001
+
+        outcome = await h.service.run("Fix add()")
+        # 3 steps to read, edit, and answer — then it stops, instead of
+        # nudging twice more and eventually exhausting the budget.
+        assert outcome.steps == 3
+
+    async def test_prompt_does_not_promise_a_check_that_does_not_exist(
+        self, tmp_path: Path
+    ) -> None:
+        h = Harness(make_repo(tmp_path), [[text("nothing to do"), finish()]])
+        h.service._recipes = {}  # type: ignore[attr-defined]  # noqa: SLF001
+
+        await h.service.run("Just answer")
+        prompt = h.model.requests_seen[0].messages[0].content
+        assert "NO check recipes are registered" in prompt
+        assert "you MUST call repo.diff and then repo.check" not in prompt
+
+
 class TestPolicyEnforcement:
     async def test_read_only_mode_denies_edit(self, tmp_path: Path) -> None:
         repo = make_repo(tmp_path)

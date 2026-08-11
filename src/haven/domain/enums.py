@@ -36,6 +36,7 @@ class StopReason(StrEnum):
     FINAL_ANSWER = "final_answer"
     EVIDENCE_SATISFIED = "evidence_satisfied"
     EVIDENCE_MISSING = "evidence_missing"
+    VERIFICATION_UNAVAILABLE = "verification_unavailable"
     STEP_BUDGET_EXHAUSTED = "step_budget_exhausted"
     TOOL_BUDGET_EXHAUSTED = "tool_budget_exhausted"
     TOKEN_BUDGET_EXHAUSTED = "token_budget_exhausted"

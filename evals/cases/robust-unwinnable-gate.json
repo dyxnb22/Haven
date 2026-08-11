@@ -1,0 +1,75 @@
+{
+  "id": "robust-unwinnable-gate",
+  "category": "robustness",
+  "goal": "Fix add() in a workspace that has no verification configured",
+  "fixture": "calc_buggy",
+  "turns": [
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c1",
+          "tool_name": "repo.read",
+          "arguments_json": "{\"path\": \"src/calc.py\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c2",
+          "tool_name": "repo.edit",
+          "arguments_json": "{\"path\": \"src/calc.py\", \"old_string\": \"return a - b  # BUG: should be +\", \"new_string\": \"return a + b\", \"summary\": \"use addition in add()\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "text_delta",
+        "text": "Fixed it."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
+    ],
+    [
+      {
+        "kind": "text_delta",
+        "text": "Fixed it."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
+    ],
+    [
+      {
+        "kind": "text_delta",
+        "text": "Fixed it."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
+    ]
+  ],
+  "expect": {
+    "status": "stopped",
+    "stop_reason": "verification_unavailable",
+    "gate_reason": "verification_unavailable",
+    "allowed_changed_files": [
+      "src/calc.py"
+    ],
+    "max_steps_used": 3
+  }
+}

@@ -67,17 +67,41 @@ class GateResult:
     passed: bool
     reason_code: str
     detail: str
+    #: True when no amount of further work by the agent can satisfy the gate.
+    #: The loop must stop instead of nudging, or it burns its whole budget in
+    #: an unwinnable state.
+    terminal: bool = False
 
 
-def evaluate_evidence_gate(ledger: EvidenceLedger, diff_text: str = "") -> GateResult:
+def evaluate_evidence_gate(
+    ledger: EvidenceLedger,
+    diff_text: str = "",
+    *,
+    verification_available: bool = True,
+) -> GateResult:
     """Program decision on whether a final answer may count as success.
 
     `diff_text` is the run's accumulated diff; when supplied it is reviewed for
     obviously dangerous content (see `domain.review`). A run must both produce
     evidence and not have written something plainly wrong.
+
+    `verification_available` says whether any check recipe is registered. If a
+    run has written files and none is, the gate can never be satisfied — the
+    agent cannot conjure a verifier — so the failure is terminal rather than
+    something to retry.
     """
     if not ledger.has_edits:
         return GateResult(True, "no_writes", "Run made no file changes; final answer accepted.")
+
+    if not verification_available:
+        return GateResult(
+            False,
+            "verification_unavailable",
+            "Files were changed but no check recipe is registered, so the change "
+            "cannot be verified. Register a recipe in .haven.toml, or re-run the "
+            "task in read-only mode if it did not need changes.",
+            terminal=True,
+        )
 
     last_write = ledger.last_edit_seq
 
