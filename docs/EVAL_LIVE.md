@@ -46,7 +46,9 @@ They are reported as an existence proof and a cost figure, not as a benchmark.
 
 ## What the live run found that offline testing could not
 
-Four real defects, all invisible to the mocked contract tests:
+Six real defects, all invisible to the mocked contract tests. Four in the
+provider path (below), plus the unwinnable Evidence Gate and the scope-creep
+misconfiguration described further down.
 
 **1. Reasoning content was silently dropped.** `deepseek-v4-flash` streams
 `reasoning_content` before any `content`. The adapter only read `content`, so the
@@ -81,11 +83,16 @@ Three of eight cases in one run died on `ConnectError` before any token arrived.
 The adapter already classified those as retryable, but nothing retried them.
 
 A model call has no side effects, so retrying a connection failure cannot
-double-apply anything — unlike a tool call, which is never retried. Retry is
-additionally limited to failures that occur *before any event arrived*, so
-partial output can never be duplicated. With two bounded retries and exponential
-backoff, the suite went from 5/8 to 6/8; the remaining failure dropped
-mid-stream, which is correctly *not* retried.
+double-apply anything — unlike a tool call, which is never retried. With two
+bounded retries and exponential backoff the suite went from 5/8 to 6/8.
+
+The remaining failure dropped *mid-stream*, which the first version of the retry
+refused to touch on the theory that partial output would be duplicated. That was
+too conservative: the assembled text and tool calls are local to the attempt and
+never reach the transcript or the tool pipeline until the turn completes, so
+only the already-displayed characters are stale. Mid-stream drops are now
+retried too, with a `stream.restarted` event telling the UI to discard what it
+showed — which means a transient blip no longer destroys a 20k-token run.
 
 ## The most interesting behavioral finding
 
@@ -96,13 +103,30 @@ satisfy, and then burned all 48 tool calls trying to satisfy it. Final state:
 `stopped (tool_budget_exhausted)`, one out-of-scope file change, ~128k tokens.
 
 Nothing was silently wrong — the budget stopped it, the gate refused to call it
-success, and the out-of-scope detector flagged the write. But it is a real
-lesson: **giving an agent write tools for a read-only question invites scope
-creep.** The same question run as `haven run --read-only` behaves perfectly: the
-model located the bug on line 2, had its edit and check denied with
-`read_only_mode`, and said so explicitly in its answer, citing the empty diff.
-That transcript is the single best demonstration in the project that policy, not
-prompting, is what constrains the agent.
+success, and the out-of-scope detector flagged the write. But two real defects
+were hiding underneath.
+
+**The case registered no check recipes.** So the instant the model edited a
+file, the Evidence Gate demanded a passing check that *could not exist*, and the
+loop nudged the model toward an outcome it had no means to reach. That is a gate
+design flaw, not a case typo: a gate that cannot be satisfied must stop, not
+retry. `evaluate_evidence_gate` now returns a terminal
+`verification_unavailable` result when a run has written files and no recipe is
+registered, and the loop halts immediately with that stop reason instead of
+burning 48 tool calls and blaming the budget. The system prompt no longer
+instructs the model to run a check when none is configured — it tells it to
+prefer answering from reading, which removes the trap at its source.
+
+**A question does not need write tools.** The case now runs `read_only`, which
+is how it should always have been configured. Run that way the behavior is
+exactly right: the model locates the bug on line 2, has its edit and check
+denied with `read_only_mode`, and says so explicitly while citing the empty
+diff. That transcript is the single best demonstration in the project that
+policy, not prompting, is what constrains an agent.
+
+Regression coverage: `robust-unwinnable-gate` (eval) and
+`TestUnwinnableEvidenceGate` (integration), which asserts the run stops after 3
+steps rather than exhausting its budget.
 
 ## Cost accounting
 

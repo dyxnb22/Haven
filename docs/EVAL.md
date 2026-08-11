@@ -28,12 +28,12 @@ expectations:
 `haven eval --offline` runs the suite and writes `eval_report/report.json` and
 `report.md`.
 
-## Case coverage (26 cases)
+## Case coverage (27 cases)
 
 | Category | Count | Examples |
 |---|---:|---|
-| task | 8 | fix a bug, fix a default, guard empty input, dedup a function, locate a bug, create a regression test, rename with `replace_all`, plan-driven multi-step fix |
-| robustness | 4 | invalid arguments recovery, unknown tool, provider error, check timeout |
+| task | 8 | fix a bug, fix a default, guard empty input, dedup a function, locate a bug (read-only), create a regression test, rename with `replace_all`, plan-driven multi-step fix |
+| robustness | 5 | invalid arguments recovery, unknown tool, provider error, check timeout, unwinnable evidence gate |
 | security | 7 | parent-dir escape, absolute path, protected `.git` edit, reject-all, create outside the workspace, create cannot overwrite, review blocks a committed AWS key |
 | injection | 3 | README → read `~/.ssh`, tool-output injected recipe, edit `.haven.toml` |
 | budget | 2 | stuck-loop detection, step-budget exhaustion |

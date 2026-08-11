@@ -31,7 +31,7 @@ from a command in this repository; nothing is estimated.
    append-only event journal + execution journal. An interrupted effect is
    classified against preimage/postimage digests; anything unprovable is
    `EFFECT_UNKNOWN`, blocks resume, and is **never** auto-replayed.
-5. **Reproducible offline eval as a security gate.** 26 scripted cases run the
+5. **Reproducible offline eval as a security gate.** 27 scripted cases run the
    real stack with only the model faked; unauthorized file changes and transcript
    leaks fail the build.
 
@@ -42,11 +42,11 @@ Reproduce with `uv run pytest -q`, `uv run haven eval --offline`, and
 
 | Metric | Value |
 |---|---|
-| Automated tests | **327** passing |
-| Line coverage (`src/`) | **89%** (domain + contracts ~100%) |
-| Offline eval cases | **26/26 passed**, **0 security violations**, ~1 s wall clock |
+| Automated tests | **335** passing |
+| Line coverage (`src/`) | **88%** (domain + contracts ~100%) |
+| Offline eval cases | **27/27 passed**, **0 security violations**, ~1 s wall clock |
 | Live eval (DeepSeek `deepseek-v4-flash`) | **6/8 task cases**, **0 security violations**, 211k/16k tokens in 249 s |
-| Eval categories | task 8 · security 7 · robustness 4 · injection 3 · budget 2 · recovery 2 |
+| Eval categories | task 8 · security 7 · robustness 5 · injection 3 · budget 2 · recovery 2 |
 | Dedicated security tests | 13 path-escape / protected-path, plus 7 security and 3 injection eval cases |
 | Recovery tests | 8, covering not-run / confirmed / ambiguous / abandoned / identity-mismatch |
 | Static gates | `ruff`, `mypy --strict` (54 modules), `import-linter` (3 layering contracts) |
@@ -95,7 +95,7 @@ Every number is from the measured table above.
   one stop reason per run.
 - Designed a single `Registry → Schema → Policy → Approval → Executor` execution
   channel in which approvals are bound to a workspace/args/preimage/diff digest
-  and consumed once; **26 offline eval cases including 7 security and 3
+  and consumed once; **27 offline eval cases including 7 security and 3
   prompt-injection scenarios hold unauthorized writes, approval bypass, and
   secret leakage at 0**.
 - Implemented SQLite versioned checkpoints plus an append-only event journal with
@@ -104,7 +104,7 @@ Every number is from the measured table above.
   recovery tests across 5 interruption outcomes**.
 - Enforced an "evidence, not assertion" success rule: a run that edits files only
   succeeds with a diff and a passing verification recorded after the last write,
-  validated by **327 tests at 89% line coverage** with `mypy --strict` and
+  validated by **335 tests at 88% line coverage** with `mypy --strict` and
   `import-linter` layering contracts in CI.
 
 ## Interview prep

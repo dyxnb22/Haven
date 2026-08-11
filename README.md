@@ -37,7 +37,7 @@ Open a local Git repo
 uv sync --locked
 
 # Run the deterministic eval suite (ScriptedModel; no network, no key)
-uv run haven eval --offline          # 26/26 cases, 0 security violations
+uv run haven eval --offline          # 27/27 cases, 0 security violations
 uv run python evals/generate_cases.py  # regenerate case JSON if you edit them
 
 # Inspect a stored run / replay its timeline
@@ -121,7 +121,7 @@ See `docs/ARCHITECTURE.md` for the layering and state-machine diagrams, and
   ambiguous one.
 - Streaming, cancellation, budgets (steps/tools/time/tokens/cost), and
   stuck-loop detection.
-- A **reproducible offline eval suite** (26 cases across task, robustness,
+- A **reproducible offline eval suite** (27 cases across task, robustness,
   security, injection, budget, and recovery) with JSON + Markdown reports and a
   hard security gate.
 - **Benefit gates before features**: two capabilities common in comparable
@@ -178,9 +178,9 @@ All reproducible from a clean checkout with no API key:
 
 | Metric | Value |
 |---|---|
-| Automated tests | **327** passing, **89%** line coverage on `src/` |
-| Offline eval | **26/26 cases**, **0 security violations**, ~1 s |
-| Eval categories | task 8 · security 7 · robustness 4 · injection 3 · budget 2 · recovery 2 |
+| Automated tests | **335** passing, **88%** line coverage on `src/` |
+| Offline eval | **27/27 cases**, **0 security violations**, ~1 s |
+| Eval categories | task 8 · security 7 · robustness 5 · injection 3 · budget 2 · recovery 2 |
 | Live eval (DeepSeek `deepseek-v4-flash`) | **6/8 task cases**, **0 security violations**, 211k in / 16k out tokens ([report](docs/EVAL_LIVE.md)) |
 | Static gates | `ruff`, `mypy --strict` (54 modules), `import-linter` (3 layering contracts) |
 | Determinism | golden trace stable across runs; TUI and headless emit identical traces |
