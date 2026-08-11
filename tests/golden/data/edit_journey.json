@@ -1,0 +1,590 @@
+[
+  {
+    "kind": "run.created",
+    "goal": "Fix the bug in add()",
+    "mode": "interactive",
+    "model_name": "scripted",
+    "max_steps": 24
+  },
+  {
+    "kind": "step.started",
+    "step": 1
+  },
+  {
+    "kind": "context.built",
+    "step": 1,
+    "segments": [
+      {
+        "source": "system_rules",
+        "trust": "trusted",
+        "size_bytes": 1439,
+        "reason": "fixed operating rules"
+      },
+      {
+        "source": "user_goal",
+        "trust": "trusted",
+        "size_bytes": 71,
+        "reason": "the task being solved"
+      }
+    ],
+    "total_bytes": 1510
+  },
+  {
+    "kind": "model.completed",
+    "step": 1,
+    "text": "Locating the bug.",
+    "tool_call_count": 1,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_estimated": false,
+    "finish_reason": "tool_calls",
+    "reasoning_tokens": 0
+  },
+  {
+    "kind": "tool.proposed",
+    "step": 1,
+    "call_id": "c1",
+    "tool_name": "repo.search",
+    "args_summary": "{\"pattern\": \"BUG\", \"path\": \".\"}"
+  },
+  {
+    "kind": "policy.decided",
+    "call_id": "c1",
+    "decision": "allow",
+    "reason_code": "read_only_tool",
+    "risk": "none"
+  },
+  {
+    "kind": "execution.started",
+    "call_id": "c1",
+    "tool_name": "repo.search"
+  },
+  {
+    "kind": "tool.completed",
+    "call_id": "c1",
+    "tool_name": "repo.search",
+    "status": "ok",
+    "error_code": "",
+    "summary": "{\"matches\": [{\"path\": \"src/calc.py\", \"line\": 2, \"text\": \"return a - b  # BUG: should be +\"}], \"files_scanned\": 1}",
+    "truncated": false
+  },
+  {
+    "kind": "step.started",
+    "step": 2
+  },
+  {
+    "kind": "context.built",
+    "step": 2,
+    "segments": [
+      {
+        "source": "system_rules",
+        "trust": "trusted",
+        "size_bytes": 1439,
+        "reason": "fixed operating rules"
+      },
+      {
+        "source": "user_goal",
+        "trust": "trusted",
+        "size_bytes": 71,
+        "reason": "the task being solved"
+      },
+      {
+        "source": "assistant",
+        "trust": "untrusted",
+        "size_bytes": 17,
+        "reason": "model's own prior turn"
+      },
+      {
+        "source": "tool_output",
+        "trust": "untrusted",
+        "size_bytes": 189,
+        "reason": "observation for the model"
+      }
+    ],
+    "total_bytes": 1716
+  },
+  {
+    "kind": "model.completed",
+    "step": 2,
+    "text": "",
+    "tool_call_count": 1,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_estimated": false,
+    "finish_reason": "tool_calls",
+    "reasoning_tokens": 0
+  },
+  {
+    "kind": "tool.proposed",
+    "step": 2,
+    "call_id": "c2",
+    "tool_name": "repo.read",
+    "args_summary": "{\"path\": \"src/calc.py\"}"
+  },
+  {
+    "kind": "policy.decided",
+    "call_id": "c2",
+    "decision": "allow",
+    "reason_code": "read_only_tool",
+    "risk": "none"
+  },
+  {
+    "kind": "execution.started",
+    "call_id": "c2",
+    "tool_name": "repo.read"
+  },
+  {
+    "kind": "tool.completed",
+    "call_id": "c2",
+    "tool_name": "repo.read",
+    "status": "ok",
+    "error_code": "",
+    "summary": "{\"path\": \"src/calc.py\", \"start_line\": 1, \"end_line\": 6, \"total_lines\": 6, \"content\": \"def add(a, b):\\n    return a - b  # BUG: should be +\\n\\n\\ndef sub(a, b):\\n    return a - b\\n\"}",
+    "truncated": false
+  },
+  {
+    "kind": "step.started",
+    "step": 3
+  },
+  {
+    "kind": "context.built",
+    "step": 3,
+    "segments": [
+      {
+        "source": "system_rules",
+        "trust": "trusted",
+        "size_bytes": 1439,
+        "reason": "fixed operating rules"
+      },
+      {
+        "source": "user_goal",
+        "trust": "trusted",
+        "size_bytes": 71,
+        "reason": "the task being solved"
+      },
+      {
+        "source": "assistant",
+        "trust": "untrusted",
+        "size_bytes": 17,
+        "reason": "model's own prior turn"
+      },
+      {
+        "source": "tool_output",
+        "trust": "untrusted",
+        "size_bytes": 189,
+        "reason": "observation for the model"
+      },
+      {
+        "source": "assistant",
+        "trust": "untrusted",
+        "size_bytes": 0,
+        "reason": "model's own prior turn"
+      },
+      {
+        "source": "tool_output",
+        "trust": "untrusted",
+        "size_bytes": 254,
+        "reason": "observation for the model"
+      }
+    ],
+    "total_bytes": 1970
+  },
+  {
+    "kind": "model.completed",
+    "step": 3,
+    "text": "",
+    "tool_call_count": 1,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_estimated": false,
+    "finish_reason": "tool_calls",
+    "reasoning_tokens": 0
+  },
+  {
+    "kind": "tool.proposed",
+    "step": 3,
+    "call_id": "c3",
+    "tool_name": "repo.edit",
+    "args_summary": "{\"path\": \"src/calc.py\", \"old_string\": \"return a - b  # BUG: should be +\", \"new_string\": \"return a + b\", \"summary\": \"fix add()\"}"
+  },
+  {
+    "kind": "policy.decided",
+    "call_id": "c3",
+    "decision": "ask",
+    "reason_code": "write_requires_approval",
+    "risk": "medium"
+  },
+  {
+    "kind": "approval.requested",
+    "call_id": "c3",
+    "tool_name": "repo.edit",
+    "summary": "edit src/calc.py (+1 -1): fix add()",
+    "preview": "<144-char preview>",
+    "risk": "medium"
+  },
+  {
+    "kind": "approval.decided",
+    "decision": "approved"
+  },
+  {
+    "kind": "execution.started",
+    "call_id": "c3",
+    "tool_name": "repo.edit"
+  },
+  {
+    "kind": "evidence.recorded",
+    "evidence_kind": "edit",
+    "summary": "edited src/calc.py: postimage <digest>"
+  },
+  {
+    "kind": "tool.completed",
+    "call_id": "c3",
+    "tool_name": "repo.edit",
+    "status": "ok",
+    "error_code": "",
+    "summary": "{\"path\": \"src/calc.py\", \"applied\": true, \"postimage_digest\": \"<digest>\", \"diff\": \"--- a/src/calc.py\\n+++ b/src/calc.py\\n@@ -1,5 +1,5 @@\\n def ad... [truncated 24 chars]",
+    "truncated": false
+  },
+  {
+    "kind": "step.started",
+    "step": 4
+  },
+  {
+    "kind": "context.built",
+    "step": 4,
+    "segments": [
+      {
+        "source": "system_rules",
+        "trust": "trusted",
+        "size_bytes": 1439,
+        "reason": "fixed operating rules"
+      },
+      {
+        "source": "user_goal",
+        "trust": "trusted",
+        "size_bytes": 71,
+        "reason": "the task being solved"
+      },
+      {
+        "source": "assistant",
+        "trust": "untrusted",
+        "size_bytes": 17,
+        "reason": "model's own prior turn"
+      },
+      {
+        "source": "tool_output",
+        "trust": "untrusted",
+        "size_bytes": 189,
+        "reason": "observation for the model"
+      },
+      {
+        "source": "assistant",
+        "trust": "untrusted",
+        "size_bytes": 0,
+        "reason": "model's own prior turn"
+      },
+      {
+        "source": "tool_output",
+        "trust": "untrusted",
+        "size_bytes": 254,
+        "reason": "observation for the model"
+      },
+      {
+        "source": "assistant",
+        "trust": "untrusted",
+        "size_bytes": 0,
+        "reason": "model's own prior turn"
+      },
+      {
+        "source": "tool_output",
+        "trust": "untrusted",
+        "size_bytes": 367,
+        "reason": "observation for the model"
+      }
+    ],
+    "total_bytes": 2337
+  },
+  {
+    "kind": "model.completed",
+    "step": 4,
+    "text": "",
+    "tool_call_count": 1,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_estimated": false,
+    "finish_reason": "tool_calls",
+    "reasoning_tokens": 0
+  },
+  {
+    "kind": "tool.proposed",
+    "step": 4,
+    "call_id": "c4",
+    "tool_name": "repo.diff",
+    "args_summary": "{}"
+  },
+  {
+    "kind": "policy.decided",
+    "call_id": "c4",
+    "decision": "allow",
+    "reason_code": "read_only_tool",
+    "risk": "none"
+  },
+  {
+    "kind": "execution.started",
+    "call_id": "c4",
+    "tool_name": "repo.diff"
+  },
+  {
+    "kind": "diff.preview",
+    "files_changed": 1,
+    "insertions": 1,
+    "deletions": 1,
+    "preview": "<144-char preview>"
+  },
+  {
+    "kind": "evidence.recorded",
+    "evidence_kind": "diff",
+    "summary": "1 file(s), +1 -1"
+  },
+  {
+    "kind": "tool.completed",
+    "call_id": "c4",
+    "tool_name": "repo.diff",
+    "status": "ok",
+    "error_code": "",
+    "summary": "{\"files\": [\"src/calc.py\"], \"insertions\": 1, \"deletions\": 1, \"diff\": \"--- a/src/calc.py\\n+++ b/src/calc.py\\n@@ -1,5 +1,5 @@\\n def add(a, b):\\n-    return a - b  # BUG: should be +\\n+    return a + b\\n ... [truncated 24 chars]",
+    "truncated": false
+  },
+  {
+    "kind": "step.started",
+    "step": 5
+  },
+  {
+    "kind": "context.built",
+    "step": 5,
+    "segments": [
+      {
+        "source": "system_rules",
+        "trust": "trusted",
+        "size_bytes": 1439,
+        "reason": "fixed operating rules"
+      },
+      {
+        "source": "user_goal",
+        "trust": "trusted",
+        "size_bytes": 71,
+        "reason": "the task being solved"
+      },
+      {
+        "source": "assistant",
+        "trust": "untrusted",
+        "size_bytes": 17,
+        "reason": "model's own prior turn"
+      },
+      {
+        "source": "tool_output",
+        "trust": "untrusted",
+        "size_bytes": 189,
+        "reason": "observation for the model"
+      },
+      {
+        "source": "assistant",
+        "trust": "untrusted",
+        "size_bytes": 0,
+        "reason": "model's own prior turn"
+      },
+      {
+        "source": "tool_output",
+        "trust": "untrusted",
+        "size_bytes": 254,
+        "reason": "observation for the model"
+      },
+      {
+        "source": "assistant",
+        "trust": "untrusted",
+        "size_bytes": 0,
+        "reason": "model's own prior turn"
+      },
+      {
+        "source": "tool_output",
+        "trust": "untrusted",
+        "size_bytes": 367,
+        "reason": "observation for the model"
+      },
+      {
+        "source": "assistant",
+        "trust": "untrusted",
+        "size_bytes": 0,
+        "reason": "model's own prior turn"
+      },
+      {
+        "source": "tool_output",
+        "trust": "untrusted",
+        "size_bytes": 298,
+        "reason": "observation for the model"
+      }
+    ],
+    "total_bytes": 2635
+  },
+  {
+    "kind": "model.completed",
+    "step": 5,
+    "text": "",
+    "tool_call_count": 1,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_estimated": false,
+    "finish_reason": "tool_calls",
+    "reasoning_tokens": 0
+  },
+  {
+    "kind": "tool.proposed",
+    "step": 5,
+    "call_id": "c5",
+    "tool_name": "repo.check",
+    "args_summary": "{\"recipe_id\": \"verify-calc\"}"
+  },
+  {
+    "kind": "policy.decided",
+    "call_id": "c5",
+    "decision": "ask",
+    "reason_code": "check_requires_approval",
+    "risk": "medium"
+  },
+  {
+    "kind": "approval.requested",
+    "call_id": "c5",
+    "tool_name": "repo.check",
+    "summary": "run check recipe 'verify-calc'",
+    "preview": "<58-char preview>",
+    "risk": "medium"
+  },
+  {
+    "kind": "approval.decided",
+    "decision": "approved"
+  },
+  {
+    "kind": "execution.started",
+    "call_id": "c5",
+    "tool_name": "repo.check"
+  },
+  {
+    "kind": "evidence.recorded",
+    "evidence_kind": "check",
+    "summary": "verify-calc: exit=0 in <ms>"
+  },
+  {
+    "kind": "tool.completed",
+    "call_id": "c5",
+    "tool_name": "repo.check",
+    "status": "ok",
+    "error_code": "",
+    "summary": "{\"recipe_id\": \"verify-calc\", \"exit_code\": 0, \"duration_ms\": <ms>, \"stdout_tail\": \"\", \"stderr_tail\": \"\"}",
+    "truncated": false
+  },
+  {
+    "kind": "step.started",
+    "step": 6
+  },
+  {
+    "kind": "context.built",
+    "step": 6,
+    "segments": [
+      {
+        "source": "system_rules",
+        "trust": "trusted",
+        "size_bytes": 1439,
+        "reason": "fixed operating rules"
+      },
+      {
+        "source": "user_goal",
+        "trust": "trusted",
+        "size_bytes": 71,
+        "reason": "the task being solved"
+      },
+      {
+        "source": "assistant",
+        "trust": "untrusted",
+        "size_bytes": 17,
+        "reason": "model's own prior turn"
+      },
+      {
+        "source": "tool_output",
+        "trust": "untrusted",
+        "size_bytes": 189,
+        "reason": "observation for the model"
+      },
+      {
+        "source": "assistant",
+        "trust": "untrusted",
+        "size_bytes": 0,
+        "reason": "model's own prior turn"
+      },
+      {
+        "source": "tool_output",
+        "trust": "untrusted",
+        "size_bytes": 254,
+        "reason": "observation for the model"
+      },
+      {
+        "source": "assistant",
+        "trust": "untrusted",
+        "size_bytes": 0,
+        "reason": "model's own prior turn"
+      },
+      {
+        "source": "tool_output",
+        "trust": "untrusted",
+        "size_bytes": 367,
+        "reason": "observation for the model"
+      },
+      {
+        "source": "assistant",
+        "trust": "untrusted",
+        "size_bytes": 0,
+        "reason": "model's own prior turn"
+      },
+      {
+        "source": "tool_output",
+        "trust": "untrusted",
+        "size_bytes": 298,
+        "reason": "observation for the model"
+      },
+      {
+        "source": "assistant",
+        "trust": "untrusted",
+        "size_bytes": 0,
+        "reason": "model's own prior turn"
+      },
+      {
+        "source": "tool_output",
+        "trust": "untrusted",
+        "size_bytes": 176,
+        "reason": "observation for the model"
+      }
+    ],
+    "total_bytes": 2811
+  },
+  {
+    "kind": "model.completed",
+    "step": 6,
+    "text": "Fixed add(); diff and verify-calc both recorded.",
+    "tool_call_count": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "usage_estimated": false,
+    "finish_reason": "stop",
+    "reasoning_tokens": 0
+  },
+  {
+    "kind": "run.finished",
+    "status": "succeeded",
+    "stop_reason": "evidence_satisfied",
+    "gate_reason": "evidence_satisfied",
+    "steps": 6,
+    "tool_calls": 5,
+    "input_tokens": 3242,
+    "output_tokens": 20,
+    "usage_estimated": true
+  }
+]
