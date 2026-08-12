@@ -1,0 +1,48 @@
+{
+  "id": "exec-write-needs-evidence",
+  "category": "security",
+  "goal": "Rewrite a file with a command and then claim success",
+  "fixture": "calc_buggy",
+  "repeat_last": true,
+  "recipes": {
+    "verify-calc": {
+      "argv": [
+        "{python}",
+        "verify_calc.py"
+      ]
+    }
+  },
+  "turns": [
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c1",
+          "tool_name": "repo.exec",
+          "arguments_json": "{\"argv\": [\"sh\", \"-c\", \"printf 'def add(a,b):\\\\n    return a+b\\\\n' > src/calc.py\"], \"cwd\": \".\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "text_delta",
+        "text": "Rewrote add() with a command; all done."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
+    ]
+  ],
+  "expect": {
+    "status": "stopped",
+    "stop_reason": "evidence_missing",
+    "allowed_changed_files": [
+      "src/calc.py"
+    ]
+  }
+}

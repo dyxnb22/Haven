@@ -9,6 +9,7 @@ preimages, applies them atomically, and tracks per-run originals so
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import difflib
 import os
 import re
@@ -28,6 +29,7 @@ from haven.ports.workspace import (
     SearchMatch,
     SearchResult,
     WorkspaceError,
+    WorkspaceSnapshot,
 )
 
 MAX_READ_BYTES = 128 * 1024
@@ -63,6 +65,7 @@ IGNORED_DIRS = frozenset(
         ".venv",
         ".vscode",
         "__pycache__",
+        ".haven-scratch",
         "bower_components",
         "build",
         "coverage",
@@ -631,3 +634,34 @@ class FsWorkspace:
 
     def restore_originals(self, originals: dict[str, str]) -> None:
         self._originals = dict(originals)
+
+    # -- process-write attribution (ADR 0012) ----------------------------------
+
+    def capture_snapshot(self) -> WorkspaceSnapshot:
+        """Digest every regular file, and keep the text of the diffable ones.
+
+        The digest map is gate-complete: any change, text or binary, moves a
+        digest. The content map is what the run diff can render. Protected and
+        ignored directories are excluded, so a process that only writes bytecode
+        caches or the sandbox scratch dir records no change.
+        """
+        digests: dict[str, str] = {}
+        contents: dict[str, str] = {}
+        for file_path in self._iter_files(self._root):
+            try:
+                data = file_path.read_bytes()
+            except OSError:
+                continue
+            normalized = file_path.relative_to(self._root).as_posix()
+            digests[normalized] = sha256_bytes(data)
+            if len(data) <= MAX_EDIT_FILE_BYTES:
+                with contextlib.suppress(UnicodeDecodeError):
+                    contents[normalized] = data.decode("utf-8")
+        return WorkspaceSnapshot(digests=digests, contents=contents)
+
+    def register_run_original(self, path: str, content: str) -> None:
+        """Seed the run diff's original for a path a process changed, but only
+        if it is not already tracked — a file edited earlier in the run must
+        keep its true run-start original, not be reset to its pre-process one."""
+        if path not in self._originals:
+            self._originals[path] = content

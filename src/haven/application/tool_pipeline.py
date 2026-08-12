@@ -71,7 +71,12 @@ from haven.ports.sandbox import (
     default_readable_roots,
 )
 from haven.ports.session import ExecutionRecord, SessionStorePort
-from haven.ports.workspace import EditPreview, WorkspaceError, WorkspacePort
+from haven.ports.workspace import (
+    EditPreview,
+    WorkspaceError,
+    WorkspacePort,
+    WorkspaceSnapshot,
+)
 
 MODEL_PAYLOAD_CHARS = 8_000
 PREVIEW_CHARS = 4_000
@@ -688,6 +693,7 @@ class ToolPipeline:
             timeout_seconds=args.timeout_seconds,
             sandbox=self._sandbox_spec(),
         )
+        before = self._workspace.capture_snapshot()
         try:
             outcome = await self._executor.run_exec(spec)
         except BaseException:
@@ -696,6 +702,11 @@ class ToolPipeline:
 
         # A nonzero exit is a completed execution, not an unknown effect.
         await self._store.update_execution_state(call.call_id, EffectState.CONFIRMED)
+        # Any file the command changed is attributed to it as edit evidence, so
+        # a write through exec cannot escape the Evidence Gate (ADR 0012).
+        await self._record_process_writes(
+            ctx, call.tool_name, before, self._workspace.capture_snapshot()
+        )
         if outcome.timed_out:
             return ToolExecution(
                 _error(
@@ -718,6 +729,41 @@ class ToolPipeline:
             )
         )
 
+    async def _record_process_writes(
+        self,
+        ctx: RunContext,
+        tool_name: str,
+        before: WorkspaceSnapshot,
+        after: WorkspaceSnapshot,
+    ) -> None:
+        """Attribute any workspace change a process caused to the ledger.
+
+        Only edit/create used to write evidence, so a file changed by a process
+        was invisible to the Evidence Gate (ADR 0012). Here a before/after
+        snapshot is diffed and every change becomes edit evidence, so a run that
+        mutates the tree through any tool is held to the same evidence standard.
+        """
+        changes = _detect_changes(before, after)
+        if not changes:
+            return
+        summary = f"{len(changes)} file(s) changed by {tool_name}: " + ", ".join(
+            change.path for change in changes[:5]
+        )
+        envelope = await self._emitter.emit(
+            ctx.run_id,
+            EvidenceRecorded(run_id=ctx.run_id, evidence_kind="edit", summary=_clip(summary, 200)),
+        )
+        for change in changes:
+            self._workspace.register_run_original(change.path, change.before_content)
+            ctx.ledger = ctx.ledger.with_edit(
+                EditEvidence(
+                    seq=envelope.seq,
+                    path=change.path,
+                    preimage_digest=change.preimage_digest,
+                    postimage_digest=change.postimage_digest,
+                )
+            )
+
     async def _execute_check(
         self, ctx: RunContext, call: ToolCallProposal, args: RepoCheckArgs, ticket_digest: str
     ) -> ToolExecution:
@@ -734,6 +780,7 @@ class ToolPipeline:
                 path="",
             )
         )
+        before = self._workspace.capture_snapshot()
         try:
             outcome = await self._executor.run_recipe(recipe, self._workspace.root)
         except BaseException:
@@ -741,6 +788,11 @@ class ToolPipeline:
             raise
 
         await self._store.update_execution_state(call.call_id, EffectState.CONFIRMED)
+        # A check that mutates the tree (e.g. a formatter) is recorded like any
+        # other write, before the check evidence, so the gate sees it.
+        await self._record_process_writes(
+            ctx, call.tool_name, before, self._workspace.capture_snapshot()
+        )
         envelope = await self._emitter.emit(
             ctx.run_id,
             EvidenceRecorded(
@@ -809,6 +861,37 @@ class ToolPipeline:
             ),
         )
         return ToolExecution(result=result, effect_unknown=effect_unknown)
+
+
+@dataclass(frozen=True, slots=True)
+class _ExternalChange:
+    path: str
+    preimage_digest: str
+    postimage_digest: str
+    before_content: str
+
+
+def _detect_changes(before: WorkspaceSnapshot, after: WorkspaceSnapshot) -> list[_ExternalChange]:
+    """Files whose digest appeared, disappeared, or moved between snapshots.
+
+    Pure over the two digest maps, so the change set is a function of the
+    snapshots alone. Deletion yields an empty postimage, creation an empty
+    preimage — the convention the edit/create paths already use.
+    """
+    changed = sorted(
+        path
+        for path in before.digests.keys() | after.digests.keys()
+        if before.digests.get(path) != after.digests.get(path)
+    )
+    return [
+        _ExternalChange(
+            path=path,
+            preimage_digest=before.digests.get(path, ""),
+            postimage_digest=after.digests.get(path, ""),
+            before_content=before.contents.get(path, ""),
+        )
+        for path in changed
+    ]
 
 
 def _ok(call: ToolCallProposal, payload: dict[str, object], truncated: bool = False) -> ToolResult:

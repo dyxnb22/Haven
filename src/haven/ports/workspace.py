@@ -87,6 +87,19 @@ class RunDiff:
     truncated: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class WorkspaceSnapshot:
+    """A point-in-time view of the workspace, used to attribute process writes.
+
+    `digests` covers every regular file, so a change to any of them — text or
+    binary — is detectable. `contents` holds only the diffable subset (valid
+    UTF-8 under the edit size cap), so the run diff can render what changed.
+    """
+
+    digests: dict[str, str] = field(default_factory=dict)
+    contents: dict[str, str] = field(default_factory=dict)
+
+
 class WorkspaceError(Exception):
     """Raised for workspace violations; always maps to a stable tool error."""
 
@@ -140,3 +153,7 @@ class WorkspacePort(Protocol):
     def original_contents(self) -> dict[str, str]: ...
 
     def restore_originals(self, originals: dict[str, str]) -> None: ...
+
+    def capture_snapshot(self) -> WorkspaceSnapshot: ...
+
+    def register_run_original(self, path: str, content: str) -> None: ...

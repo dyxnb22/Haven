@@ -5,8 +5,53 @@ from pathlib import Path
 import pytest
 
 from haven.adapters.workspace_fs import MAX_EDIT_FILE_BYTES, FsWorkspace
-from haven.domain.digest import sha256_text
+from haven.domain.digest import sha256_bytes, sha256_text
 from haven.ports.workspace import WorkspaceError
+
+
+class TestCaptureSnapshot:
+    def test_lists_every_regular_file_by_digest(self, workspace: FsWorkspace, repo: Path) -> None:
+        snapshot = workspace.capture_snapshot()
+        assert snapshot.digests["src/calc.py"] == sha256_bytes(
+            (repo / "src" / "calc.py").read_bytes()
+        )
+        assert "README.md" in snapshot.digests
+
+    def test_text_files_keep_their_contents_for_diffing(self, workspace: FsWorkspace) -> None:
+        snapshot = workspace.capture_snapshot()
+        assert "return a - b" in snapshot.contents["src/calc.py"]
+
+    def test_protected_and_ignored_paths_are_excluded(
+        self, workspace: FsWorkspace, repo: Path
+    ) -> None:
+        (repo / ".git").mkdir()
+        (repo / ".git" / "config").write_text("[core]\n")
+        (repo / "__pycache__").mkdir()
+        (repo / "__pycache__" / "x.pyc").write_bytes(b"\x00\x01")
+        snapshot = workspace.capture_snapshot()
+        assert not any(path.startswith(".git") for path in snapshot.digests)
+        assert not any("__pycache__" in path for path in snapshot.digests)
+
+    def test_binary_files_are_digested_but_not_kept_as_text(
+        self, workspace: FsWorkspace, repo: Path
+    ) -> None:
+        (repo / "blob.bin").write_bytes(b"\x00\x01\x02\xff")
+        snapshot = workspace.capture_snapshot()
+        assert "blob.bin" in snapshot.digests
+        assert "blob.bin" not in snapshot.contents
+
+    def test_a_change_moves_the_digest(self, workspace: FsWorkspace, repo: Path) -> None:
+        before = workspace.capture_snapshot()
+        (repo / "src" / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+        after = workspace.capture_snapshot()
+        assert before.digests["src/calc.py"] != after.digests["src/calc.py"]
+
+    def test_register_run_original_seeds_the_diff_only_if_absent(
+        self, workspace: FsWorkspace, repo: Path
+    ) -> None:
+        workspace.register_run_original("src/calc.py", "ORIGINAL")
+        workspace.register_run_original("src/calc.py", "SECOND")
+        assert workspace.original_contents()["src/calc.py"] == "ORIGINAL"
 
 
 @pytest.fixture()
