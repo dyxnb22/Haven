@@ -9,7 +9,8 @@ from pathlib import Path
 
 from haven.application.approvals import AutoApprover
 from haven.contracts.events import ApprovalRequested, ToolCompleted
-from haven.domain.enums import RunStatus
+from haven.domain.approval import ApprovalRequest
+from haven.domain.enums import ApprovalDecision, RunStatus
 from tests.integration.harness import Harness, finish, make_repo, text, tool
 
 
@@ -110,6 +111,34 @@ class TestMove:
         assert (repo / "README.md").exists()
         assert not (tmp_path / "escaped.md").exists()
         assert completed(h)[0].error_code == "denied"
+
+
+class TestContentIsPinnedAtApproval:
+    """A file that changes between approval and execution must not be deleted or
+    moved on its stale content — the TOCTOU guarantee the tool descriptions make.
+    """
+
+    async def test_delete_refuses_a_file_that_changed_after_approval(self, tmp_path: Path) -> None:
+        repo = make_repo(tmp_path)
+
+        class MutatingApprover(AutoApprover):
+            def __init__(self) -> None:
+                super().__init__("approve_all")
+
+            async def respond(self, request: ApprovalRequest) -> ApprovalDecision:
+                # Change the file after it was proposed but before it executes.
+                (repo / "README.md").write_text("changed out from under the run\n")
+                return await super().respond(request)
+
+        turns = [
+            [tool("c1", "repo.delete", path="README.md"), finish("tool_calls")],
+            [text("stale"), finish()],
+        ]
+        h = Harness(repo, turns, approver=MutatingApprover())
+        await h.service.run("Delete the readme")
+
+        assert (repo / "README.md").exists(), "a changed file must not be deleted on stale content"
+        assert completed(h)[0].error_code == "stale_preimage"
 
 
 class TestDeleteNeedsEvidence:

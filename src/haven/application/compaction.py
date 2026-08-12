@@ -163,7 +163,8 @@ def summarize_dropped(
     digest = build_run_digest(dropped)
     if not digest:
         return kept, "", -1
-    # The digest takes the place of the first message it replaces, so
-    # everything before that point keeps its bytes.
-    position = min(dropped_indices) - sum(1 for i in dropped_indices if i < min(dropped_indices))
+    # The digest takes the place of the first message it replaces. Everything
+    # before that index is kept (the first dropped index is, by definition, the
+    # smallest), so its position in `kept` is exactly that index.
+    position = min(dropped_indices)
     return kept, digest, position

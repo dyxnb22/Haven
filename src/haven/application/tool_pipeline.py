@@ -191,8 +191,16 @@ class ToolPipeline:
                     started,
                 )
             # Re-verify the preimage after the human decision (TOCTOU guard).
-            if isinstance(validated, RepoEditArgs):
-                current = self._workspace.path_facts(validated.path)
+            # Every tool that pins a file's content at approval — edit, delete,
+            # and the source of a move — is re-checked against what is on disk
+            # now, so a change between approval and execution fails closed.
+            guarded_path: str | None = None
+            if isinstance(validated, RepoEditArgs | RepoDeleteArgs):
+                guarded_path = validated.path
+            elif isinstance(validated, RepoMoveArgs):
+                guarded_path = validated.src
+            if guarded_path is not None:
+                current = self._workspace.path_facts(guarded_path)
                 if current.digest != preimage:
                     return await self._finish(
                         ctx,
@@ -585,10 +593,10 @@ class ToolPipeline:
             return await self._execute_write(ctx, call, args, ticket_digest, preview)
 
         if isinstance(args, RepoDeleteArgs):
-            return await self._execute_delete(ctx, call, args, ticket_digest)
+            return await self._execute_delete(ctx, call, args, ticket_digest, preview)
 
         if isinstance(args, RepoMoveArgs):
-            return await self._execute_move(ctx, call, args, ticket_digest)
+            return await self._execute_move(ctx, call, args, ticket_digest, preview)
 
         if isinstance(args, RepoExecArgs):
             return await self._execute_exec(ctx, call, args, ticket_digest)
@@ -735,9 +743,17 @@ class ToolPipeline:
         )
 
     async def _execute_delete(
-        self, ctx: RunContext, call: ToolCallProposal, args: RepoDeleteArgs, ticket_digest: str
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: RepoDeleteArgs,
+        ticket_digest: str,
+        preview: EditPreview | None,
     ) -> ToolExecution:
-        preimage = self._workspace.path_facts(args.path).digest or ""
+        # The approval-bound preimage, not a fresh read: apply_delete compares
+        # the file on disk against this, so a change since approval fails closed.
+        assert preview is not None  # facts collection always builds it for a delete
+        preimage = preview.preimage_digest
         await self._store.record_execution(
             ExecutionRecord(
                 call_id=call.call_id,
@@ -778,9 +794,17 @@ class ToolPipeline:
         return ToolExecution(_ok(call, {"path": outcome.path, "deleted": True}))
 
     async def _execute_move(
-        self, ctx: RunContext, call: ToolCallProposal, args: RepoMoveArgs, ticket_digest: str
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: RepoMoveArgs,
+        ticket_digest: str,
+        preview: EditPreview | None,
     ) -> ToolExecution:
-        preimage = self._workspace.path_facts(args.src).digest or ""
+        # The approval-bound preimage of the source, so apply_move fails closed
+        # if the source changed between approval and execution.
+        assert preview is not None  # facts collection always builds it for a move
+        preimage = preview.preimage_digest
         await self._store.record_execution(
             ExecutionRecord(
                 call_id=call.call_id,
