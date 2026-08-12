@@ -635,7 +635,18 @@ async def run_suite(
 
     results = []
     for index, case in enumerate(cases, start=1):
-        result = await run_case(case, fixtures_dir, model_factory)
+        try:
+            result = await run_case(case, fixtures_dir, model_factory)
+        except Exception as exc:  # noqa: BLE001 — one case must not end the suite
+            # A live suite is long, costs money, and is not reproducible, so an
+            # unexpected failure in one case is recorded as that case failing
+            # rather than discarding every result after it.
+            result = CaseResult(
+                case_id=case.id,
+                category=case.category,
+                passed=False,
+                failures=[f"case raised {type(exc).__name__}: {exc}"],
+            )
         results.append(result)
         with progress_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(asdict(result), separators=(",", ":")) + "\n")

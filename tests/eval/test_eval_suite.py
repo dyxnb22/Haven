@@ -74,6 +74,48 @@ def test_unknown_category_is_an_error(tmp_path: Path) -> None:
         asyncio.run(run_suite(cases_dir=CASES_DIR, out_dir=tmp_path, categories=("nope",)))
 
 
+def test_one_crashing_case_does_not_discard_the_rest(tmp_path: Path) -> None:
+    """Found live: an unwrapped SSLError in case 7 aborted a 31-case run and
+    threw away the 24 that had not run yet. A live suite is expensive and not
+    reproducible, so a crash must be recorded as that case failing."""
+    import asyncio
+
+    from haven.adapters.providers.scripted import ScriptedModel
+    from haven.contracts.model import StreamFinished, TextDelta
+    from haven.evalkit import runner as runner_module
+
+    calls = {"n": 0}
+    real_run_case = runner_module.run_case
+
+    async def flaky_run_case(case, fixtures_dir, model_factory=None):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transport exploded")
+        return await real_run_case(case, fixtures_dir, model_factory)
+
+    def factory() -> ScriptedModel:
+        return ScriptedModel([[TextDelta(text="done"), StreamFinished()]])
+
+    runner_module.run_case = flaky_run_case  # type: ignore[assignment]
+    try:
+        report = asyncio.run(
+            run_suite(
+                cases_dir=CASES_DIR,
+                out_dir=tmp_path,
+                model_factory=factory,
+                categories=("task",),
+                report_name="report-live",
+            )
+        )
+    finally:
+        runner_module.run_case = real_run_case  # type: ignore[assignment]
+
+    assert len(report.results) > 1, "the suite continued past the crash"
+    crashed = report.results[0]
+    assert not crashed.passed
+    assert any("RuntimeError" in f for f in crashed.failures)
+
+
 def test_live_mode_uses_the_injected_model_and_skips_scripted_expectations(
     tmp_path: Path,
 ) -> None:

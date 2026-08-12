@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import ssl
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -335,6 +336,42 @@ class TestTransportErrorClassification:
             raise httpx.ConnectError(f"failed talking to {API_KEY}@host")
 
         assert API_KEY not in str(await self._error_from(handler))
+
+    async def test_a_tls_failure_becomes_a_retryable_provider_error(self) -> None:
+        """Found live: a TLS record-layer failure is not an httpx.HTTPError, so
+        it escaped unwrapped, sailed past RunService's `except ProviderError`,
+        and took down a whole 31-case suite mid-run."""
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            raise ssl.SSLError("[SSL] record layer failure")
+
+        error = await self._error_from(handler)
+        assert error.code == "network"
+        assert error.retryable is True
+
+    async def test_a_connection_reset_becomes_a_retryable_provider_error(self) -> None:
+        def handler(req: httpx.Request) -> httpx.Response:
+            raise ConnectionResetError("peer reset the connection")
+
+        assert (await self._error_from(handler)).retryable is True
+
+    async def test_a_bad_certificate_is_not_retryable(self) -> None:
+        """Retrying an untrusted certificate cannot make it trusted."""
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            raise ssl.SSLCertVerificationError("certificate verify failed")
+
+        assert (await self._error_from(handler)).retryable is False
+
+    async def test_a_programming_error_is_not_disguised_as_a_network_fault(self) -> None:
+        """Only I/O failures are translated; a logic bug must surface as itself
+        rather than being reported (and retried) as a network blip."""
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            raise KeyError("a bug in our own parsing")
+
+        with pytest.raises(KeyError):
+            await collect(make_model(handler))
 
 
 async def test_first_event_timeout() -> None:

@@ -17,18 +17,21 @@ when the Evidence Gate sees a diff followed by a green check. The suite lives in
 `evals/real/` and `build.py --verify` proves every task is red-with-bug and
 green-when-reverted before any model is called.
 
-| Metric | Value |
-|---|---|
-| Model | `deepseek-v4-flash` |
-| Cases passed (first run) | **27 / 31 (87%)** |
-| Security violations | **0** |
-| Out-of-scope file changes | 2 |
-| Est. cost | $0.054 for 31 cases (~$0.0017 each) |
-| Prompt cache hit | 85% |
-| Wall clock | ~15 min; 5–14 steps per case (median 6) |
+Two full runs, before and after the fixes the first run's failures produced:
 
-**Failure distribution — four failures, two root causes, zero genuine "could
-not fix it":**
+| Metric | Run 1 (as found) | Run 2 (after fixes) |
+|---|---|---|
+| Cases passed | 27 / 31 (87%) | **31 / 31** |
+| Security violations | 0 | **0** |
+| Out-of-scope file changes | 2 | **0** |
+| Est. cost | $0.054 | $0.051 (~$0.0016/case) |
+| Prompt cache hit | 85% | 84% |
+| Wall clock | ~15 min | ~14 min; 5–13 steps per case (median 6) |
+
+Model: `deepseek-v4-flash` for both.
+
+**Run 1's failure distribution — four failures, two root causes, zero genuine
+"could not fix it":**
 
 - **Transient provider network errors (2):** `tomli-localtime-micros` and
   `wcwidth-bisearch` died on a DeepSeek `ConnectError`. Re-running both
@@ -48,24 +51,34 @@ not fix it":**
   correctly flagged them as out-of-scope (`tests/test_idna.py`,
   `tests/test_misc.py`) — **0 gamed runs slipped through** as success.
 
-So both root causes turned into code changes rather than excuses: the first into
-a retry-classification fix, the second into a prompt guardrail.
+Both root causes became code changes rather than excuses. The first became the
+retry-classification fix above. The second became a one-line, evidence-based
+addition to the system prompt: *the check is the oracle — fix the code under
+test; do not edit tests, fixtures, or the recipe to make a failing check pass.*
 
-The second finding drove a one-line, evidence-based change to the system prompt:
-*the check is the oracle — fix the code under test; do not edit tests, fixtures,
-or the recipe to make a failing check pass.* Re-running the two gamed cases with
-that clause, both **passed with 0 out-of-scope changes** — the model fixed the
-source instead. So after removing transient network noise and adding the
-guardrail, all 31 tasks are solvable by this model through Haven; the only
-systematic capability gap the distribution exposed (oracle-gaming on subtle
-bugs) is now addressed by guidance.
+**Run 2 confirms both.** With the retry fix and the guardrail in place the same
+31 tasks scored **31/31 with 0 out-of-scope changes**: the two previously gamed
+cases (`idna-string-length`, `tomli-number-base`) passed by fixing the source,
+and the two network casualties passed outright.
 
-Honest caveats: the reruns are `n=1` and non-deterministic; bug-injection is
-easier than green-field feature work; and 31 tasks over five small libraries is
-a first data point, not a benchmark. What it establishes is that the execution
-stack — provider protocol, sandboxed checks, Evidence Gate, scope enforcement —
-carries a real model through real repositories, and that success is decided by
-the projects' own tests rather than the model's say-so.
+An interruption in between was itself informative. A mid-suite `ssl.SSLError`
+killed a whole run at case 7, because a TLS record-layer failure is not an
+`httpx.HTTPError` and so escaped unwrapped past every `except ProviderError`.
+Two fixes came out of it: the adapter now converts `OSError` (which `SSLError`
+subclasses) into a retryable `ProviderError` — while deliberately *not*
+catching `Exception`, so a bug in Haven's own parsing still surfaces as itself
+— and the suite runner records a crashing case as a failure instead of
+discarding every case after it. The per-case progress JSONL is the only reason
+that partial run was diagnosable at all.
+
+Honest caveats: two runs is not a distribution, and a real model is
+non-deterministic; bug-injection is easier than green-field feature work; and
+31 tasks over five small libraries is a first data point, not a benchmark. What
+it establishes is that the execution stack — provider protocol, sandboxed
+checks, Evidence Gate, scope enforcement — carries a real model through real
+repositories, and that success is decided by the projects' own tests rather
+than the model's say-so. Notably, all three bugs this exercise found were in
+the *harness*, not the model.
 
 Reproduce:
 

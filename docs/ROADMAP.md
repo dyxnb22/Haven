@@ -27,10 +27,11 @@ decision, respectively.
 - **Phase 4 — measuring task success: first real number.** Beyond the
   quality/safety report split, there is now a real-repo live suite
   (`evals/real/`, 31 bug-injection tasks across five pinned third-party
-  projects, each project's own tests as the oracle). First run on
-  `deepseek-v4-flash`: 27/31, with the failure distribution and the resulting
-  anti-oracle-gaming guardrail written up in `docs/EVAL_LIVE.md`. Scaling to
-  50–100 tasks and green-field (non-bug-injection) work remains.
+  projects, each project's own tests as the oracle). On `deepseek-v4-flash`:
+  27/31 as found, then **31/31** after fixing the two failure causes the run
+  exposed (an unretried connection drop and the model gaming the oracle by
+  editing tests). Written up in `docs/EVAL_LIVE.md`. Scaling to 50–100 tasks,
+  green-field (non-bug-injection) work, and zero-config repos remains.
 - **Phase 5 — extension boundary: decided (ADR 0016).** Guardrails documented;
   MCP, LSP, plugins, and multi-agent stay deferred with unlock conditions,
   consistent with the thesis.

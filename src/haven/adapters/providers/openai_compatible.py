@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import ssl
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -165,6 +166,18 @@ class OpenAICompatibleModel:
             transient = isinstance(exc, httpx.NetworkError | httpx.RemoteProtocolError)
             raise ProviderError(
                 "network", f"transport error: {type(exc).__name__}", retryable=transient
+            ) from exc
+        except OSError as exc:
+            # Not every I/O failure arrives wrapped as an httpx error: a TLS
+            # record-layer failure surfaces as ssl.SSLError (an OSError), and
+            # escaping unwrapped means it sails past every `except ProviderError`
+            # and kills the run. Certificate rejection is the one that retrying
+            # cannot fix. `except Exception` is deliberately not used here, so a
+            # bug in our own parsing still surfaces as itself.
+            raise ProviderError(
+                "network",
+                f"transport error: {type(exc).__name__}",
+                retryable=not isinstance(exc, ssl.SSLCertVerificationError),
             ) from exc
 
     def _build_payload(self, request: ModelRequest) -> dict[str, Any]:
