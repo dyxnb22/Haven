@@ -53,11 +53,42 @@ def normalize(envelopes: list[EventEnvelope]) -> list[dict[str, Any]]:
             # digests and byte counts appear inside human summaries
             stable["summary"] = _mask(stable["summary"])
         if "preview" in stable:
-            stable["preview"] = f"<{len(stable['preview'])}-char preview>"
+            # Previews embed absolute paths (the interpreter a recipe runs,
+            # the workspace root), so even their length varies by machine.
+            # What a preview must contain is asserted by the integration tests
+            # that care; here only its presence is part of the contract.
+            stable["preview"] = "<preview>"
+        if stable.get("kind") == "context.built":
+            stable = _mask_timing_sizes(stable)
+        if stable.get("usage_estimated") is True:
+            # An estimated count is characters//4 over a transcript that
+            # contains measured durations, so a check taking 99 ms instead of
+            # 100 ms moves it by a token. That the estimate *was* used is
+            # behavior and stays; its exact value is a stopwatch artifact.
+            for key in ("input_tokens", "output_tokens"):
+                if key in stable:
+                    stable[key] = "<estimated>"
         if "text" in stable and len(str(stable["text"])) > 120:
             stable["text"] = f"<{len(str(stable['text']))} chars>"
         normalized.append(stable)
     return normalized
+
+
+def _mask_timing_sizes(event: dict[str, Any]) -> dict[str, Any]:
+    """Drop byte counts that a stopwatch can change.
+
+    A tool output carries `duration_ms`, so a check that takes 99 ms produces a
+    segment one byte smaller than one taking 100 ms. The sizes worth pinning
+    are the program-authored ones — the system prompt above all — so those stay
+    and only the timing-bearing segments are masked.
+    """
+    masked = dict(event)
+    masked.pop("total_bytes", None)
+    masked["segments"] = [
+        {**segment, "size_bytes": "<varies>"} if segment.get("source") == "tool_output" else segment
+        for segment in event.get("segments", [])
+    ]
+    return masked
 
 
 def _mask(value: str) -> str:

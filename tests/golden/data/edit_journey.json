@@ -33,8 +33,7 @@
         "size_bytes": 40,
         "reason": "live budget counters, kept last so the prefix stays cacheable"
       }
-    ],
-    "total_bytes": 1773
+    ]
   },
   {
     "kind": "model.completed",
@@ -106,7 +105,7 @@
       {
         "source": "tool_output",
         "trust": "untrusted",
-        "size_bytes": 189,
+        "size_bytes": "<varies>",
         "reason": "observation for the model"
       },
       {
@@ -115,8 +114,7 @@
         "size_bytes": 40,
         "reason": "live budget counters, kept last so the prefix stays cacheable"
       }
-    ],
-    "total_bytes": 1979
+    ]
   },
   {
     "kind": "model.completed",
@@ -188,7 +186,7 @@
       {
         "source": "tool_output",
         "trust": "untrusted",
-        "size_bytes": 189,
+        "size_bytes": "<varies>",
         "reason": "observation for the model"
       },
       {
@@ -200,7 +198,7 @@
       {
         "source": "tool_output",
         "trust": "untrusted",
-        "size_bytes": 254,
+        "size_bytes": "<varies>",
         "reason": "observation for the model"
       },
       {
@@ -209,8 +207,7 @@
         "size_bytes": 40,
         "reason": "live budget counters, kept last so the prefix stays cacheable"
       }
-    ],
-    "total_bytes": 2233
+    ]
   },
   {
     "kind": "model.completed",
@@ -243,7 +240,7 @@
     "call_id": "c3",
     "tool_name": "repo.edit",
     "summary": "edit src/calc.py (+1 -1): fix add()",
-    "preview": "<144-char preview>",
+    "preview": "<preview>",
     "risk": "medium"
   },
   {
@@ -299,7 +296,7 @@
       {
         "source": "tool_output",
         "trust": "untrusted",
-        "size_bytes": 189,
+        "size_bytes": "<varies>",
         "reason": "observation for the model"
       },
       {
@@ -311,7 +308,7 @@
       {
         "source": "tool_output",
         "trust": "untrusted",
-        "size_bytes": 254,
+        "size_bytes": "<varies>",
         "reason": "observation for the model"
       },
       {
@@ -323,7 +320,7 @@
       {
         "source": "tool_output",
         "trust": "untrusted",
-        "size_bytes": 367,
+        "size_bytes": "<varies>",
         "reason": "observation for the model"
       },
       {
@@ -332,8 +329,7 @@
         "size_bytes": 40,
         "reason": "live budget counters, kept last so the prefix stays cacheable"
       }
-    ],
-    "total_bytes": 2600
+    ]
   },
   {
     "kind": "model.completed",
@@ -372,7 +368,7 @@
     "files_changed": 1,
     "insertions": 1,
     "deletions": 1,
-    "preview": "<144-char preview>"
+    "preview": "<preview>"
   },
   {
     "kind": "evidence.recorded",
@@ -417,7 +413,7 @@
       {
         "source": "tool_output",
         "trust": "untrusted",
-        "size_bytes": 189,
+        "size_bytes": "<varies>",
         "reason": "observation for the model"
       },
       {
@@ -429,7 +425,7 @@
       {
         "source": "tool_output",
         "trust": "untrusted",
-        "size_bytes": 254,
+        "size_bytes": "<varies>",
         "reason": "observation for the model"
       },
       {
@@ -441,7 +437,7 @@
       {
         "source": "tool_output",
         "trust": "untrusted",
-        "size_bytes": 367,
+        "size_bytes": "<varies>",
         "reason": "observation for the model"
       },
       {
@@ -453,7 +449,7 @@
       {
         "source": "tool_output",
         "trust": "untrusted",
-        "size_bytes": 298,
+        "size_bytes": "<varies>",
         "reason": "observation for the model"
       },
       {
@@ -462,8 +458,7 @@
         "size_bytes": 40,
         "reason": "live budget counters, kept last so the prefix stays cacheable"
       }
-    ],
-    "total_bytes": 2898
+    ]
   },
   {
     "kind": "model.completed",
@@ -496,7 +491,7 @@
     "call_id": "c5",
     "tool_name": "repo.check",
     "summary": "run check recipe 'verify-calc'",
-    "preview": "<58-char preview>",
+    "preview": "<preview>",
     "risk": "medium"
   },
   {
@@ -552,7 +547,7 @@
       {
         "source": "tool_output",
         "trust": "untrusted",
-        "size_bytes": 189,
+        "size_bytes": "<varies>",
         "reason": "observation for the model"
       },
       {
@@ -564,7 +559,7 @@
       {
         "source": "tool_output",
         "trust": "untrusted",
-        "size_bytes": 254,
+        "size_bytes": "<varies>",
         "reason": "observation for the model"
       },
       {
@@ -576,7 +571,7 @@
       {
         "source": "tool_output",
         "trust": "untrusted",
-        "size_bytes": 367,
+        "size_bytes": "<varies>",
         "reason": "observation for the model"
       },
       {
@@ -588,7 +583,7 @@
       {
         "source": "tool_output",
         "trust": "untrusted",
-        "size_bytes": 298,
+        "size_bytes": "<varies>",
         "reason": "observation for the model"
       },
       {
@@ -600,7 +595,7 @@
       {
         "source": "tool_output",
         "trust": "untrusted",
-        "size_bytes": 176,
+        "size_bytes": "<varies>",
         "reason": "observation for the model"
       },
       {
@@ -609,8 +604,7 @@
         "size_bytes": 40,
         "reason": "live budget counters, kept last so the prefix stays cacheable"
       }
-    ],
-    "total_bytes": 3074
+    ]
   },
   {
     "kind": "model.completed",
@@ -631,8 +625,8 @@
     "gate_reason": "evidence_satisfied",
     "steps": 6,
     "tool_calls": 5,
-    "input_tokens": 3634,
-    "output_tokens": 20,
+    "input_tokens": "<estimated>",
+    "output_tokens": "<estimated>",
     "cached_input_tokens": 0,
     "usage_estimated": true
   }
