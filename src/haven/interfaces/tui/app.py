@@ -214,6 +214,10 @@ class HavenApp(App[None]):
         await self._services.run_service.run(goal)
 
     @work(exclusive=True, group="run")
+    async def _execute_continue(self, previous_run_id: str, follow_up: str) -> None:
+        await self._services.run_service.continue_run(previous_run_id, follow_up)
+
+    @work(exclusive=True, group="run")
     async def _execute_resume(self, ctx: Any) -> None:
         await self._services.run_service.resume(ctx)
 
@@ -321,7 +325,13 @@ class HavenApp(App[None]):
         if self._state.running:
             self._log_line("system", "a run is already active; Ctrl+C to cancel it first")
             return
-        self._run_worker = self._execute_run(text)
+        # A follow-up after a finished run continues the same conversation, so
+        # the model keeps the prior turn's context instead of starting blank
+        # (Phase 2). The first submit of the session starts a fresh run.
+        if self._state.run_id:
+            self._run_worker = self._execute_continue(self._state.run_id, text)
+        else:
+            self._run_worker = self._execute_run(text)
 
     def _handle_command(self, command: str) -> None:
         name = command.split()[0].lower()

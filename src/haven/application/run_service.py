@@ -166,6 +166,45 @@ class RunService:
             mode=self._mode,
             budget=self._budget,
         )
+        await self._announce_run(ctx, goal)
+        return await self._drive(ctx)
+
+    async def continue_run(self, previous_run_id: str, follow_up: str) -> RunOutcome:
+        """Start a follow-up turn that inherits the prior run's transcript.
+
+        The prior conversation is carried forward so the model has context, but
+        this is a fresh Run: a new id, a fresh budget, and a fresh evidence
+        ledger, so the follow-up's success is judged on its own edits. The
+        session's head goal stays stable (good for the prompt cache) and the
+        follow-up is threaded in as a user message.
+        """
+        follow_up = follow_up.strip()
+        if not (3 <= len(follow_up) <= 4000):
+            raise ValueError("follow-up must be between 3 and 4000 characters")
+
+        checkpoint = await self._store.load_checkpoint(previous_run_id)
+        if checkpoint is None:
+            raise ValueError(f"no checkpoint for run {previous_run_id!r}; cannot continue it")
+
+        transcript = list(checkpoint.messages)
+        transcript.append(ModelMessage(role="user", content=f"Follow-up request: {follow_up}"))
+        ctx = RunContext(
+            run_id=new_run_id(),
+            goal=checkpoint.goal,
+            mode=self._mode,
+            budget=self._budget,
+            transcript=transcript,
+            plan=checkpoint.plan,
+            files_read=dict(checkpoint.files_read),
+        )
+        await self._announce_run(ctx, checkpoint.goal, parent_run_id=previous_run_id)
+        await self._emitter.emit(
+            ctx.run_id,
+            Notice(run_id=ctx.run_id, level="info", message=f"continuing session: {follow_up}"),
+        )
+        return await self._drive(ctx)
+
+    async def _announce_run(self, ctx: RunContext, goal: str, *, parent_run_id: str = "") -> None:
         await self._store.create_run(
             ctx.run_id,
             str(self._workspace.root),
@@ -186,9 +225,9 @@ class RunService:
                 git_commit=self._git_commit,
                 max_steps=self._budget.max_steps,
                 sandbox_backend=(self._launcher.backend if self._launcher is not None else "none"),
+                parent_run_id=parent_run_id,
             ),
         )
-        return await self._drive(ctx)
 
     async def resume(self, ctx: RunContext) -> RunOutcome:
         """Continue a recovered run context (built by RecoveryService)."""

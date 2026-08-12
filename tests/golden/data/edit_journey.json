@@ -5,7 +5,8 @@
     "mode": "interactive",
     "model_name": "scripted",
     "max_steps": 24,
-    "sandbox_backend": "recording"
+    "sandbox_backend": "recording",
+    "parent_run_id": ""
   },
   {
     "kind": "step.started",

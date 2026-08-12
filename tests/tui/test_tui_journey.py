@@ -134,6 +134,36 @@ async def test_edit_journey_with_approval(tmp_path: Path) -> None:
 
 
 @pytest.mark.timeout(30)
+async def test_follow_up_continues_the_same_session(tmp_path: Path) -> None:
+    """A second prompt after a finished run continues it, so the model keeps
+    the first turn's context instead of starting from a blank run (Phase 2)."""
+    from haven.contracts.events import RunCreated
+
+    repo = make_repo(tmp_path)
+    turns = [
+        [text("First answer."), finish()],
+        [text("Second answer, building on the first."), finish()],
+    ]
+    app = HavenApp(workspace=repo, services_builder=make_builder(repo, turns))
+
+    async with app.run_test() as pilot:
+        await _wait_ready(app, pilot)
+        await _submit(app, pilot, "Explain calc.py")
+        await _settle(pilot, 40)
+        first_run_id = app._state.run_id  # noqa: SLF001
+        assert app._state.status == "succeeded"  # noqa: SLF001
+
+        await _submit(app, pilot, "Now suggest a fix")
+        await _settle(pilot, 40)
+        second_run_id = app._state.run_id  # noqa: SLF001
+
+        assert second_run_id and second_run_id != first_run_id
+        events = await app._services.store.load_events(second_run_id)  # noqa: SLF001
+        created = [e.event for e in events if isinstance(e.event, RunCreated)]
+        assert created and created[0].parent_run_id == first_run_id
+
+
+@pytest.mark.timeout(30)
 async def test_reject_journey_leaves_file_untouched(tmp_path: Path) -> None:
     repo = make_repo(tmp_path)
     turns = [

@@ -200,6 +200,58 @@ def run(
     raise typer.Exit(asyncio.run(_run()))
 
 
+@app.command("continue")
+def continue_(
+    run_id: str = typer.Argument(..., help="The prior run to continue."),
+    follow_up: str = typer.Argument(..., help="The follow-up request."),
+    workspace: Path = typer.Option(Path("."), "--workspace", "-w"),
+    json_output: bool = typer.Option(False, "--json", help="Print the outcome as JSON."),
+) -> None:
+    """Ask a follow-up in the context of a prior run (read-only, headless).
+
+    The prior transcript is carried forward, so the model answers with the
+    earlier turn's context rather than from a blank slate (Phase 2).
+    """
+
+    async def _continue() -> int:
+        from haven.bootstrap import BootstrapError, build_services
+
+        sink = NullSink() if json_output else ConsoleSink()
+        try:
+            services = await build_services(
+                workspace,
+                mode=PermissionMode.READ_ONLY,
+                approvals=AutoApprover("reject_all"),
+                sinks=[sink],
+            )
+        except (BootstrapError, ConfigError) as exc:
+            typer.echo(f"error: {exc}")
+            return EXIT_USAGE
+        try:
+            outcome = await services.run_service.continue_run(run_id, follow_up)
+        except ValueError as exc:
+            typer.echo(f"error: {exc}")
+            return EXIT_USAGE
+        finally:
+            await services.close()
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "run_id": outcome.run_id,
+                        "parent_run_id": run_id,
+                        "status": outcome.status.value,
+                        "stop_reason": outcome.stop_reason.value,
+                        "final_text": outcome.final_text,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        return _exit_code_for(outcome.status, outcome.stop_reason)
+
+    raise typer.Exit(asyncio.run(_continue()))
+
+
 @app.command()
 def doctor(
     workspace: Path = typer.Option(Path("."), "--workspace", "-w"),

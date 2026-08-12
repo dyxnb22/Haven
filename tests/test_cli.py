@@ -84,6 +84,16 @@ def test_replay_missing_run() -> None:
     assert result.exit_code == 2
 
 
+def test_continue_missing_run_is_usage_error(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app, ["continue", "run-nope", "a follow up", "--workspace", str(tmp_path)]
+    )
+    # No API key in the test env, so bootstrap refuses before the run lookup;
+    # with a key it would fail on the missing checkpoint. Both are usage errors.
+    assert result.exit_code == 2
+    assert "no checkpoint" in result.stdout or "API key" in result.stdout
+
+
 def test_reconcile_validates_resolution() -> None:
     result = runner.invoke(app, ["reconcile", "run-1", "call-1", "--as", "bogus"])
     assert result.exit_code == 2

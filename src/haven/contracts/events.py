@@ -32,6 +32,8 @@ class RunCreated(StrictModel):
     git_commit: str = ""
     max_steps: int = 0
     sandbox_backend: str = ""
+    #: The run this one continues, when it is a session follow-up (Phase 2).
+    parent_run_id: str = ""
 
 
 class StepStarted(StrictModel):
