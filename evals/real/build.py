@@ -93,6 +93,11 @@ def _case_json(task: Task | RefactorTask, repo: Repo) -> dict:
         "fixture": task.id,
         "approval_policy": "approve_all",
         "recipes": {"verify": {"argv": argv, "timeout_seconds": repo.timeout}},
+        # The hidden grader: the harness reruns `verify` on the final tree
+        # after the agent finishes. An agent that answers its way to
+        # "succeeded" without fixing anything fails here (found live: a
+        # tier-4 bug-fix case passed with zero edits before this existed).
+        "hidden_check": "verify",
         "expect": {
             "status": "succeeded",
             "allowed_changed_files": list(task.allowed),

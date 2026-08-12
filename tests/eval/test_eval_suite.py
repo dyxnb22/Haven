@@ -139,6 +139,43 @@ def test_one_crashing_case_does_not_discard_the_rest(tmp_path: Path) -> None:
     assert any("RuntimeError" in f for f in crashed.failures)
 
 
+def test_hidden_grader_fails_a_success_that_left_the_tree_broken(tmp_path: Path) -> None:
+    """A run can reach `succeeded` by answering without editing; on a bug-fix
+    case that is a false pass. The hidden grader reruns the verify recipe on
+    the final tree — red means the case fails no matter what the run said.
+    Found live on tier 4: a real-issue case passed with zero edits."""
+    import asyncio
+    import json
+
+    from haven.evalkit.runner import EvalCase, run_case
+
+    fixture = tmp_path / "fixtures" / "broken"
+    fixture.mkdir(parents=True)
+    (fixture / "check.py").write_text("import sys; sys.exit(1)\n")  # forever red
+    case = EvalCase.model_validate_json(
+        json.dumps(
+            {
+                "id": "hidden-grader-catches-answer-only",
+                "category": "real",
+                "goal": "Fix the bug (the scripted model just answers instead)",
+                "fixture": "broken",
+                "hidden_check": "verify",
+                "recipes": {"verify": {"argv": ["{python}", "check.py"]}},
+                "turns": [
+                    [
+                        {"kind": "text_delta", "text": "All good, nothing to fix."},
+                        {"kind": "finished", "finish_reason": "stop"},
+                    ]
+                ],
+                "expect": {"status": "succeeded", "allowed_changed_files": []},
+            }
+        )
+    )
+    result = asyncio.run(run_case(case, tmp_path / "fixtures"))
+    assert not result.passed
+    assert any("hidden grader" in f for f in result.failures)
+
+
 def test_per_case_event_streams_are_persisted(tmp_path: Path) -> None:
     """Failure forensics must be a read, not a re-run: each case leaves its
     event envelopes (minus transient streaming chunks) as JSONL."""

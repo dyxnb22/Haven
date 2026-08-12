@@ -48,6 +48,7 @@ from haven.contracts.tools import RecipeSpec
 from haven.domain.budget import Budget, BudgetUsage
 from haven.domain.digest import sha256_bytes
 from haven.domain.enums import EffectState, PermissionMode, RunStatus
+from haven.ports.executor import CheckOutcome
 from haven.ports.model import ModelPort
 from haven.ports.session import ExecutionRecord
 
@@ -89,6 +90,12 @@ class EvalCase(StrictModel):
     #: accepting `haven discover`'s output. Measures the discovery loop
     #: end-to-end on repositories with no .haven.toml.
     discover: bool = False
+    #: A recipe id the *harness* runs after the agent finishes, invisible to
+    #: the model: the hidden grader. A case that expects a fixed tree must
+    #: still be green here — which closes the loophole where an agent answers
+    #: its way to `succeeded` without ever fixing anything (found live on
+    #: tier 4: a bug-fix case passed with zero edits).
+    hidden_check: str = ""
     budget: dict[str, int | float] = Field(default_factory=dict)
     recipes: dict[str, RecipeDef] = Field(default_factory=dict)
     turns: list[list[dict[str, Any]]] = Field(default_factory=list)
@@ -411,6 +418,15 @@ async def run_case(
             result.passed = False
             result.failures.append(f"changes outside the task's scope: {out_of_scope}")
 
+        if case.hidden_check and case.expect.status == "succeeded":
+            outcome = await _run_hidden_check(case, repo)
+            if outcome is not None and outcome.exit_code != 0:
+                result.passed = False
+                result.failures.append(
+                    f"hidden grader: recipe {case.hidden_check!r} red after completion "
+                    f"(exit {outcome.exit_code}) — the reported success left the tree broken"
+                )
+
         if not live:
             # Literal content assertions only make sense for a scripted
             # trajectory. Against a real model the registered check recipe is
@@ -435,6 +451,22 @@ async def run_case(
 #: Transient streaming chunks: high-volume, no forensic value — the assembled
 #: text arrives in model.completed and the transcript. Everything else is kept.
 _EPHEMERAL_EVENT_KINDS = frozenset({"assistant.delta", "assistant.reasoning"})
+
+
+async def _run_hidden_check(case: EvalCase, repo: Path) -> CheckOutcome | None:
+    """Run the named recipe against the final tree, outside the model's view.
+
+    Uses the same sandboxed executor path a repo.check gets, so the grader
+    cannot pass where the agent's own check could not.
+    """
+    from haven.bootstrap import select_launcher
+
+    definition = case.recipes.get(case.hidden_check)
+    if definition is None:
+        return None
+    spec = _materialize_recipes({case.hidden_check: definition})[case.hidden_check]
+    executor = ProcessExecutor(launcher=select_launcher())
+    return await executor.run_recipe(spec, repo)
 
 
 async def _run_agent_case(

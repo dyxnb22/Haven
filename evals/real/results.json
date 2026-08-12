@@ -36,6 +36,14 @@
       "passed": 20,
       "total": 20,
       "as_found": "15/20"
+    },
+    {
+      "id": "tier4-real-and-hard",
+      "label": "real historical issues + cross-file refactors + honesty (no-solution) tasks",
+      "passed": 9,
+      "total": 13,
+      "as_found": "9-10/13 across two runs",
+      "note": "First non-saturated tier: the 4 failures are genuine model-capability limits (honesty/no-solution reasoning and the hardest localizations), not harness bugs. Both cross-file refactors passed. Distribution and per-failure attribution in docs/EVAL_LIVE.md."
     }
   ]
 }

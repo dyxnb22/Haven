@@ -12,7 +12,7 @@ import asyncio
 import json
 import ssl
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 import httpx
@@ -70,10 +70,42 @@ class OpenAICompatibleModel:
         await self._client.aclose()
 
     def generate_stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
-        return self._stream(request)
+        return self._stream_with_reasoning_retry(request)
 
-    async def _stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
-        payload = self._build_payload(request)
+    async def _stream_with_reasoning_retry(
+        self, request: ModelRequest
+    ) -> AsyncIterator[ModelEvent]:
+        """Self-heal the one 400 that reasoning replay exists to prevent.
+
+        If the profile flag is off but the provider actually demands replayed
+        reasoning on a tool-call turn, the first request 400s before any event
+        is yielded. That is safe to retry precisely — nothing was emitted — so
+        we re-issue once with replay forced on. A 400 for any other reason, or
+        one after streaming has begun, is not retried here (the run loop's
+        bounded retry still covers genuinely transient failures).
+        """
+        force_reasoning = self._requires_tool_call_reasoning
+        try:
+            async for event in self._stream(request, replay_reasoning=force_reasoning):
+                yield event
+            return
+        except ProviderError as exc:
+            retryable_reasoning = (
+                not force_reasoning
+                and exc.code == "protocol"
+                and "reasoning" in str(exc).lower()
+                and any(m.role == "assistant" and m.tool_calls for m in request.messages)
+            )
+            if not retryable_reasoning:
+                raise
+        # Retry path, outside the except block so its own errors surface plainly.
+        async for event in self._stream(request, replay_reasoning=True):
+            yield event
+
+    async def _stream(
+        self, request: ModelRequest, *, replay_reasoning: bool
+    ) -> AsyncIterator[ModelEvent]:
+        payload = self._build_payload(request, replay_reasoning=replay_reasoning)
         # Exact reverse map for this request, so a wire name is never guessed.
         from_wire = {_to_wire_tool_name(t.name): t.name for t in request.tools}
         deadline = time.monotonic() + self._total_timeout
@@ -180,15 +212,20 @@ class OpenAICompatibleModel:
                 retryable=not isinstance(exc, ssl.SSLCertVerificationError),
             ) from exc
 
-    def _build_payload(self, request: ModelRequest) -> dict[str, Any]:
+    def _build_payload(
+        self, request: ModelRequest, *, replay_reasoning: bool | None = None
+    ) -> dict[str, Any]:
+        replay = (
+            self._requires_tool_call_reasoning if replay_reasoning is None else replay_reasoning
+        )
         payload: dict[str, Any] = {
             "model": self._model,
             "stream": True,
             "stream_options": {"include_usage": True},
             "temperature": request.temperature,
             "messages": [
-                _to_wire_message(m, replay_reasoning=self._requires_tool_call_reasoning)
-                for m in request.messages
+                _to_wire_message(m, replay_reasoning=replay)
+                for m in _sanitize_history(request.messages)
             ],
         }
         if request.max_output_tokens is not None:
@@ -279,6 +316,58 @@ def _parse_sse_line(line: str) -> str | None:
 def _map_finish_reason(reason: str) -> Any:
     mapping = {"stop": "stop", "tool_calls": "tool_calls", "length": "length"}
     return mapping.get(reason, "stop")
+
+
+def _sanitize_history(messages: Sequence[ModelMessage]) -> list[ModelMessage]:
+    """Repair structural defects a strict provider (DeepSeek V4) 400s on.
+
+    Every OpenAI-compatible provider enforces the same tool-call/tool-result
+    contract: an assistant turn's tool_calls must each be answered by exactly
+    one following tool message, and a tool message must answer a tool_call in
+    the immediately preceding assistant turn. Compaction and crash recovery
+    can leave that invariant locally broken; rather than trust every upstream
+    path to keep it, the adapter enforces it deterministically at the wire
+    boundary — the one place every request passes through.
+
+    Repairs (all deterministic, none inventing content):
+    - drop a tool message that answers no in-flight tool_call (orphaned
+      result — the assistant turn that made the call was dropped);
+    - synthesize a minimal error tool result for any tool_call the history
+      never answered (orphaned call — the result was dropped), because a
+      dangling call is exactly what triggers the 400.
+    """
+    out: list[ModelMessage] = []
+    pending: dict[str, int] = {}  # unanswered call_id -> index in `out`
+
+    def flush_pending() -> None:
+        # Any tool_call still unanswered when the next assistant/user turn
+        # begins gets a synthetic result appended, in call order.
+        for call_id in list(pending):
+            out.append(
+                ModelMessage(
+                    role="tool",
+                    content='{"status":"error","message":"result unavailable '
+                    '(dropped from history)"}',
+                    tool_call_id=call_id,
+                )
+            )
+        pending.clear()
+
+    for message in messages:
+        if message.role == "tool":
+            if message.tool_call_id and message.tool_call_id in pending:
+                del pending[message.tool_call_id]
+                out.append(message)
+            # else: orphaned result — drop it silently.
+            continue
+        # A new assistant or user turn: close out any unanswered calls first.
+        flush_pending()
+        out.append(message)
+        if message.role == "assistant":
+            for call in message.tool_calls:
+                pending[call.call_id] = len(out) - 1
+    flush_pending()
+    return out
 
 
 def _to_wire_message(message: ModelMessage, *, replay_reasoning: bool = False) -> dict[str, Any]:

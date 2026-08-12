@@ -189,6 +189,93 @@ async def _wire_messages(messages: tuple[ModelMessage, ...], *, requires_reasoni
     return captured["messages"]
 
 
+def _tool_result(call_id: str = "c1") -> ModelMessage:
+    return ModelMessage(role="tool", content='{"ok":true}', tool_call_id=call_id)
+
+
+class TestHistorySanitizer:
+    """The wire boundary repairs the tool-call/tool-result pairing a strict
+    provider 400s on, so no upstream path (compaction, recovery) can leak a
+    malformed history onto the wire."""
+
+    async def test_a_well_formed_history_is_unchanged(self) -> None:
+        wire = await _wire_messages(
+            (_assistant_with_tool_call("t"), _tool_result()), requires_reasoning=False
+        )
+        assert [m["role"] for m in wire] == ["assistant", "tool"]
+
+    async def test_an_orphaned_tool_result_is_dropped(self) -> None:
+        # A tool message answering a call that is not in the prior assistant
+        # turn (its assistant turn was compacted away).
+        wire = await _wire_messages(
+            (ModelMessage(role="user", content="hi"), _tool_result("ghost")),
+            requires_reasoning=False,
+        )
+        assert [m["role"] for m in wire] == ["user"]
+
+    async def test_an_unanswered_tool_call_gets_a_synthetic_result(self) -> None:
+        # The tool result was dropped; the dangling call is what 400s, so a
+        # minimal error result is synthesized to close it.
+        wire = await _wire_messages(
+            (_assistant_with_tool_call("t"), ModelMessage(role="user", content="next")),
+            requires_reasoning=False,
+        )
+        assert [m["role"] for m in wire] == ["assistant", "tool", "user"]
+        assert wire[1]["tool_call_id"] == "c1"
+        assert "unavailable" in wire[1]["content"]
+
+    async def test_a_trailing_unanswered_call_is_closed(self) -> None:
+        wire = await _wire_messages((_assistant_with_tool_call("t"),), requires_reasoning=False)
+        assert [m["role"] for m in wire] == ["assistant", "tool"]
+
+
+class TestMissingReasoningRetry:
+    """If the profile flag is off but the provider demands replayed reasoning,
+    the first request 400s before any event; the adapter retries once with
+    replay forced on."""
+
+    async def test_a_reasoning_400_is_retried_with_replay(self) -> None:
+        calls: list[dict[str, Any]] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            body = json.loads(req.content)
+            calls.append(body)
+            if len(calls) == 1:
+                return httpx.Response(
+                    400, json={"error": {"message": "reasoning_content is required"}}
+                )
+            return httpx.Response(200, content=chunk({}, finish="stop") + b"data: [DONE]\n\n")
+
+        model = make_model(handler, requires_tool_call_reasoning=False)
+        try:
+            messages = (_assistant_with_tool_call("prior thought"), _tool_result())
+            events = [e async for e in model.generate_stream(ModelRequest(messages=messages))]
+        finally:
+            await model.aclose()
+
+        assert len(calls) == 2, "the 400 was retried exactly once"
+        assert "reasoning_content" not in calls[0]["messages"][0]
+        assert calls[1]["messages"][0]["reasoning_content"] == "prior thought"
+        assert any(isinstance(e, StreamFinished) for e in events)
+
+    async def test_a_non_reasoning_400_is_not_retried(self) -> None:
+        calls: list[dict[str, Any]] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            calls.append(json.loads(req.content))
+            return httpx.Response(400, json={"error": {"message": "bad temperature"}})
+
+        model = make_model(handler, requires_tool_call_reasoning=False)
+        try:
+            messages = (_assistant_with_tool_call("t"), _tool_result())
+            with pytest.raises(ProviderError):
+                async for _ in model.generate_stream(ModelRequest(messages=messages)):
+                    pass
+        finally:
+            await model.aclose()
+        assert len(calls) == 1, "a 400 unrelated to reasoning is not retried"
+
+
 class TestReasoningReplay:
     async def test_tool_call_turn_carries_reasoning_when_required(self) -> None:
         wire = await _wire_messages(
