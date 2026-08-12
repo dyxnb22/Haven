@@ -1,0 +1,33 @@
+{
+  "id": "t4-jinja-set-in-all-branches",
+  "category": "real",
+  "goal": "A user reports: \"If a template reads an attribute of a variable and then assigns that same variable name in every branch of an if/elif/else, the variable renders empty after the block \u2014 {% if x %}{{ a.b }}{% set a = 1 %}{% elif y %}{% set a = 2 %}{% else %}{% set a = 3 %}{% endif %}{{ a }} prints nothing for the final value. Leave any one branch without the set and it works fine.\" Find the cause, fix it, then run the `verify` check.",
+  "fixture": "t4-jinja-set-in-all-branches",
+  "approval_policy": "approve_all",
+  "recipes": {
+    "verify": {
+      "argv": [
+        "{python}",
+        "-m",
+        "pytest",
+        "-q",
+        "-x",
+        "-p",
+        "no:cacheprovider",
+        "-p",
+        "no:respx",
+        "tests"
+      ],
+      "timeout_seconds": 180.0
+    }
+  },
+  "expect": {
+    "status": "succeeded",
+    "allowed_changed_files": [
+      "src/jinja2/idtracking.py"
+    ]
+  },
+  "budget": {
+    "max_input_tokens": 800000
+  }
+}

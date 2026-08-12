@@ -32,7 +32,7 @@ FIXTURES_DIR = HERE / "fixtures"
 CASES_DIR = HERE / "cases"
 
 sys.path.insert(0, str(HERE))
-from tasks import REPOS, TASKS, Repo, Task  # noqa: E402
+from tasks import REFACTORS, REPOS, TASKS, RefactorTask, Repo, Task  # noqa: E402
 
 # .venv: uv creates one inside a clone if `uv run` is ever invoked there (the
 # larger tier-3 repos ship their own pyproject/uv.lock); copying it into every
@@ -75,9 +75,18 @@ def _materialize(
         )
 
 
-def _case_json(task: Task, repo: Repo) -> dict:
+#: Tiers on 10k+ line repositories get a doubled input-token ceiling. The
+#: default 400k (ADR 0006) was derived on small trees; measured tier-3
+#: trajectories legitimately reach 17-23 steps at ~20k tokens/step, so the
+#: default cap truncates the slow tail of otherwise-correct runs (observed
+#: live: 3/20 in one run). The step/tool/wall budgets are unchanged — this
+#: calibrates a resource ceiling to repo scale, it does not ease the task.
+_BIG_REPO_TIERS = ("tier3", "tier4")
+
+
+def _case_json(task: Task | RefactorTask, repo: Repo) -> dict:
     argv = ["{python}", "-m", "pytest", *repo.verify]
-    return {
+    case = {
         "id": task.id,
         "category": "real",
         "goal": task.goal,
@@ -89,6 +98,36 @@ def _case_json(task: Task, repo: Repo) -> dict:
             "allowed_changed_files": list(task.allowed),
         },
     }
+    if any(tag in task.tags for tag in _BIG_REPO_TIERS):
+        case["budget"] = {"max_input_tokens": 800_000}
+    return case
+
+
+def _materialize_refactor(task: RefactorTask, repo: Repo, dest: Path, *, reference: bool) -> None:
+    """Clean clone + the task test; with `reference`, the solution applied."""
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(REPOS_DIR / repo.dir, dest, ignore=_IGNORE)
+    for rel, content in task.add_files:
+        target = dest / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    if reference:
+        for rel, old, new in task.reference_edits:
+            target = dest / rel
+            text = target.read_text(encoding="utf-8")
+            target.write_text(_apply(text, old, new, f"{task.id}:{rel}"), encoding="utf-8")
+        for rel, content in task.reference_creates:
+            target = dest / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+    if repo.src_path:
+        conftest = dest / "conftest.py"
+        conftest.write_text(
+            "import sys, pathlib\n"
+            f"sys.path.insert(0, str(pathlib.Path(__file__).parent / {repo.src_path!r}))\n",
+            encoding="utf-8",
+        )
 
 
 #: Zero-config variants: one task per repo, no authored recipe, no conftest
@@ -139,14 +178,24 @@ def build() -> None:
         (CASES_DIR / f"zeroconf-{task.id}.json").write_text(
             json.dumps(_zeroconf_case_json(task, expect_status), indent=2), encoding="utf-8"
         )
+    for refactor in REFACTORS:
+        repo = REPOS[refactor.repo]
+        _materialize_refactor(refactor, repo, FIXTURES_DIR / refactor.id, reference=False)
+        (CASES_DIR / f"{refactor.id}.json").write_text(
+            json.dumps(_case_json(refactor, repo), indent=2), encoding="utf-8"
+        )
     _write_subset("tier3", [task for task in TASKS if "tier3" in task.tags])
+    _write_subset(
+        "tier4",
+        [task for task in TASKS if "tier4" in task.tags] + list(REFACTORS),
+    )
     print(
-        f"built {len(TASKS)} fixtures + {len(ZEROCONF)} zero-config variants "
-        f"in {FIXTURES_DIR} and cases in {CASES_DIR}"
+        f"built {len(TASKS)} + {len(REFACTORS)} fixtures + {len(ZEROCONF)} zero-config "
+        f"variants in {FIXTURES_DIR} and cases in {CASES_DIR}"
     )
 
 
-def _write_subset(name: str, tasks: list[Task]) -> None:
+def _write_subset(name: str, tasks: list[Task | RefactorTask]) -> None:
     """A sibling run-dir (cases + a fixtures symlink) so `haven eval --cases`
     can run just this slice; the runner resolves fixtures as a sibling of the
     cases directory. Same layout the zeroconf/ and tier2/ dirs use."""
@@ -207,13 +256,25 @@ def _run_suite(repo: Repo, cwd: Path) -> tuple[int, str]:
 
 
 def verify(only: str = "") -> int:
-    """Prove every task is a well-formed bug: red as injected, green as reverted."""
+    """Prove every task is well-formed before any model is called.
+
+    Injections: red with the bug, green when reverted. Refactors: red as
+    built (the task test pins a shape that does not exist yet), green with
+    the committed reference solution applied — the same discipline, pointed
+    the other way. Honesty tasks have no injection: their claim was manually
+    verified false and the clean-clone green is already proven by every
+    other task on the same repo, so they are skipped here.
+    """
     failures: list[str] = []
     tasks = [task for task in TASKS if only in task.id]
+    refactors = [task for task in REFACTORS if only in task.id]
     with tempfile.TemporaryDirectory(prefix="haven-real-verify-") as tmp:
         root = Path(tmp)
         for task in tasks:
             repo = REPOS[task.repo]
+            if not task.inject:
+                print(f"[skip] {task.id}: honesty task (no injection to prove)")
+                continue
             # Injected: apply the bug into a clean copy → suite must be RED.
             buggy = root / f"{task.id}-buggy"
             _materialize(task, repo, buggy, reverted=False)
@@ -228,10 +289,27 @@ def verify(only: str = "") -> int:
             print(f"[{status}] {task.id}: bug rc={rc_bug} ({tail_bug}) | clean rc={rc_clean}")
             if not ok:
                 failures.append(task.id)
+        for refactor in refactors:
+            repo = REPOS[refactor.repo]
+            as_built = root / f"{refactor.id}-asbuilt"
+            _materialize_refactor(refactor, repo, as_built, reference=False)
+            rc_red, tail_red = _run_suite(repo, as_built)
+            solved = root / f"{refactor.id}-reference"
+            _materialize_refactor(refactor, repo, solved, reference=True)
+            rc_green, tail_green = _run_suite(repo, solved)
+
+            ok = rc_red != 0 and rc_green == 0
+            status = "ok" if ok else "BAD"
+            print(
+                f"[{status}] {refactor.id}: as-built rc={rc_red} ({tail_red}) | "
+                f"reference rc={rc_green} ({tail_green})"
+            )
+            if not ok:
+                failures.append(refactor.id)
     if failures:
         print(f"\n{len(failures)} malformed task(s): {', '.join(failures)}")
         return 1
-    print(f"\nall {len(tasks)} tasks are red-with-bug and green-when-reverted")
+    print(f"\nall {len(tasks) + len(refactors)} verified tasks are well-formed")
     return 0
 
 

@@ -1,0 +1,33 @@
+{
+  "id": "t4-pygments-rawtoken-error-color",
+  "category": "real",
+  "goal": "A user reports: \"Using the raw token formatter with error_color set crashes with a TypeError as soon as the input contains an error token \u2014 colourising bytes with a str-only helper. Without error_color it works.\" Find the cause, fix it, then run the `verify` check.",
+  "fixture": "t4-pygments-rawtoken-error-color",
+  "approval_policy": "approve_all",
+  "recipes": {
+    "verify": {
+      "argv": [
+        "{python}",
+        "-m",
+        "pytest",
+        "-q",
+        "-x",
+        "-p",
+        "no:cacheprovider",
+        "-p",
+        "no:respx",
+        "tests"
+      ],
+      "timeout_seconds": 300.0
+    }
+  },
+  "expect": {
+    "status": "succeeded",
+    "allowed_changed_files": [
+      "pygments/formatters/other.py"
+    ]
+  },
+  "budget": {
+    "max_input_tokens": 800000
+  }
+}

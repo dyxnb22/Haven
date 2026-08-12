@@ -138,6 +138,15 @@ def render_block() -> str:
                 "as-found runs and root causes in docs/EVAL_LIVE.md",
             )
         )
+        rerun = live.get("single_version_rerun")
+        if isinstance(rerun, dict):
+            rows.append(
+                (
+                    "Same-version full rerun",
+                    f"{rerun['passed']}/{rerun['total']} in one uninterrupted run "
+                    "(failure attribution in docs/EVAL_LIVE.md)",
+                )
+            )
 
     lines = [BEGIN, "", "| Metric | Value |", "|---|---|"]
     lines += [f"| {label} | {value} |" for label, value in rows]

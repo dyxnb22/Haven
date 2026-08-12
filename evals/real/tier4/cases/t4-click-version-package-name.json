@@ -1,0 +1,35 @@
+{
+  "id": "t4-click-version-package-name",
+  "category": "real",
+  "goal": "A user reports: \"click.version_option() raises RuntimeError \\\"'PIL' is not installed\\\" for packages whose import name differs from the distribution name \u2014 PIL is installed as Pillow. It should resolve the import name to the installed distribution instead of giving up.\" Find the cause, fix it, then run the `verify` check.",
+  "fixture": "t4-click-version-package-name",
+  "approval_policy": "approve_all",
+  "recipes": {
+    "verify": {
+      "argv": [
+        "{python}",
+        "-m",
+        "pytest",
+        "-q",
+        "-x",
+        "-p",
+        "no:cacheprovider",
+        "-p",
+        "no:respx",
+        "-k",
+        "not path_dash_no_byteswarning and not echo_via_pager",
+        "tests"
+      ],
+      "timeout_seconds": 180.0
+    }
+  },
+  "expect": {
+    "status": "succeeded",
+    "allowed_changed_files": [
+      "src/click/decorators.py"
+    ]
+  },
+  "budget": {
+    "max_input_tokens": 800000
+  }
+}

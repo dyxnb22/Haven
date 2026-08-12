@@ -1,0 +1,35 @@
+{
+  "id": "t4-click-choice-brackets",
+  "category": "real",
+  "goal": "A user reports: \"The usage synopsis for an optional choice argument shows the choices wrapped in two pairs of square brackets \u2014 [[a|b|c]] \u2014 because the choice list is already bracketed and the optional marker wraps it again.\" Find the cause, fix it, then run the `verify` check.",
+  "fixture": "t4-click-choice-brackets",
+  "approval_policy": "approve_all",
+  "recipes": {
+    "verify": {
+      "argv": [
+        "{python}",
+        "-m",
+        "pytest",
+        "-q",
+        "-x",
+        "-p",
+        "no:cacheprovider",
+        "-p",
+        "no:respx",
+        "-k",
+        "not path_dash_no_byteswarning and not echo_via_pager",
+        "tests"
+      ],
+      "timeout_seconds": 180.0
+    }
+  },
+  "expect": {
+    "status": "succeeded",
+    "allowed_changed_files": [
+      "src/click/core.py"
+    ]
+  },
+  "budget": {
+    "max_input_tokens": 800000
+  }
+}

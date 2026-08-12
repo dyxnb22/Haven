@@ -294,6 +294,11 @@ def _snapshot(root: Path) -> dict[str, str]:
     for path in sorted(root.rglob("*")):
         if "__pycache__" in path.parts or ".pytest_cache" in path.parts or path.suffix == ".pyc":
             continue
+        # setuptools regenerates egg-info metadata when a check imports or
+        # builds the project; like pytest's cache it is derived tool state,
+        # not a source mutation (seen live: wcwidth.egg-info/PKG-INFO).
+        if any(part.endswith(".egg-info") for part in path.parts):
+            continue
         # Sandbox scratch, not a source mutation.
         if RECIPE_SCRATCH_DIRNAME in path.parts:
             continue
@@ -466,6 +471,8 @@ async def _run_agent_case(
             max_wall_time_seconds=float(
                 case.budget.get("max_wall_time_seconds", budget.max_wall_time_seconds)
             ),
+            max_input_tokens=int(case.budget.get("max_input_tokens", budget.max_input_tokens)),
+            max_output_tokens=int(case.budget.get("max_output_tokens", budget.max_output_tokens)),
             max_cost_usd=float(case.budget.get("max_cost_usd", budget.max_cost_usd)),
         )
     # The real backend, so eval cases exercise the same confinement a real run

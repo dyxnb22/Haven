@@ -3,6 +3,11 @@
   "model": "deepseek-v4-flash",
   "date": "2026-08-12",
   "security_violations": 0,
+  "single_version_rerun": {
+    "passed": 61,
+    "total": 65,
+    "note": "one uninterrupted same-version run of every case; the 4 failures are token-budget tails and one honest-stop case editing out of scope, attributed in EVAL_LIVE.md"
+  },
   "tiers": [
     {
       "id": "tier1-injection",
