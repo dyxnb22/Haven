@@ -501,25 +501,40 @@ def discover(
 ) -> None:
     """Suggest verification recipes from the project's files.
 
-    Reads pyproject.toml, package.json, Makefile, Cargo.toml, and go.mod and
-    prints the `[recipes]` block each implies, so a fresh repo can get a check
-    the Evidence Gate will accept. Runs nothing and writes nothing: review the
-    output and paste what you trust into `.haven.toml`.
+    Reads the ordinary project files (pyproject.toml, tox.ini, setup.cfg,
+    package.json, Makefile, Cargo.toml, go.mod) plus a shallow look at the
+    tests/ and src/ layout, and prints the `[recipes]` block they imply, so a
+    fresh repo can get a check the Evidence Gate will accept. Runs nothing and
+    writes nothing: review the output and paste what you trust into
+    `.haven.toml`.
     """
-    from haven.domain.discovery import discover_recipes
+    from haven.domain.discovery import KNOWN_FILES, discover_recipes
 
     ws = workspace.resolve()
-    known = ("pyproject.toml", "package.json", "Makefile", "Cargo.toml", "go.mod")
     files: dict[str, str] = {}
-    for name in known:
+    for name in KNOWN_FILES:
         candidate = ws / name
         if candidate.is_file():
             try:
                 files[name] = candidate.read_text(encoding="utf-8", errors="replace")[:65536]
             except OSError:
                 continue
+    # A shallow listing is all the structural signals need: the tests/test
+    # directories' entries and any src/<pkg>/__init__.py.
+    paths: list[str] = []
+    for sub in ("tests", "test", "src"):
+        directory = ws / sub
+        if not directory.is_dir():
+            continue
+        try:
+            for child in directory.iterdir():
+                paths.append(f"{sub}/{child.name}")
+                if sub == "src" and child.is_dir() and (child / "__init__.py").is_file():
+                    paths.append(f"src/{child.name}/__init__.py")
+        except OSError:
+            continue
 
-    recipes = discover_recipes(files)
+    recipes = discover_recipes(files, paths)
     if not recipes:
         typer.echo(
             "no verification commands detected; add a [recipes] block to .haven.toml by hand"

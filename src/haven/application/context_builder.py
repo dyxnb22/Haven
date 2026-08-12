@@ -124,7 +124,9 @@ class ContextBuilder:
                 "(a registered recipe) before giving your final answer. Success "
                 "requires that evidence; your words alone do not count.\n"
                 "- The check is the oracle: fix the code under test. Do NOT edit "
-                "tests, fixtures, or the recipe to make a failing check pass.\n"
+                "tests, fixtures, or the recipe, and do NOT plant environment "
+                "hooks (conftest.py, sitecustomize.py) to make a failing check "
+                "pass. If the check itself cannot run, say so plainly instead.\n"
                 f"- Registered check recipes you may use: {', '.join(self._recipes)}."
             )
         else:

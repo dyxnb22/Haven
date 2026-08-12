@@ -77,13 +77,18 @@ class RecipeDef(StrictModel):
 
 class EvalCase(StrictModel):
     id: str
-    category: str  # task | robustness | security | injection | budget | recovery
+    category: str  # task | robustness | security | injection | budget | recovery | real
     goal: str
     fixture: str
     mode: str = "interactive"
     approval_policy: str = "approve_all"
     repeat_last: bool = False
     scenario: str = ""  # "" | crash_not_run | crash_ambiguous
+    #: Zero-config mode: instead of hand-authored recipes, run `discover_recipes`
+    #: on the fixture and register what it suggests — simulating the user
+    #: accepting `haven discover`'s output. Measures the discovery loop
+    #: end-to-end on repositories with no .haven.toml.
+    discover: bool = False
     budget: dict[str, int | float] = Field(default_factory=dict)
     recipes: dict[str, RecipeDef] = Field(default_factory=dict)
     turns: list[list[dict[str, Any]]] = Field(default_factory=list)
@@ -278,10 +283,16 @@ def _allowed(path: str, patterns: tuple[str, ...]) -> bool:
 
 
 def _snapshot(root: Path) -> dict[str, str]:
-    """Digest every source file; derived bytecode is not a source mutation."""
+    """Digest every source file; derived tool state is not a source mutation.
+
+    `.pytest_cache` earns its place the way `__pycache__` did: a discovered
+    verify command (unlike the authored ones) does not pass
+    `-p no:cacheprovider`, so a perfectly clean zero-config run would otherwise
+    be flagged for pytest's own cache files.
+    """
     digests: dict[str, str] = {}
     for path in sorted(root.rglob("*")):
-        if "__pycache__" in path.parts or path.suffix == ".pyc":
+        if "__pycache__" in path.parts or ".pytest_cache" in path.parts or path.suffix == ".pyc":
             continue
         # Sandbox scratch, not a source mutation.
         if RECIPE_SCRATCH_DIRNAME in path.parts:
@@ -297,6 +308,40 @@ def _materialize_recipes(defs: dict[str, RecipeDef]) -> dict[str, RecipeSpec]:
         argv = tuple(sys.executable if item == "{python}" else item for item in definition.argv)
         recipes[recipe_id] = RecipeSpec(
             id=recipe_id, argv=argv, timeout_seconds=definition.timeout_seconds
+        )
+    return recipes
+
+
+def _discovered_recipes(repo: Path) -> dict[str, RecipeSpec]:
+    """What `haven discover` would suggest for this fixture, registered as-is.
+
+    This simulates the intended zero-config flow — discovery proposes, the user
+    accepts — so a case measures whether the loop actually yields a working
+    verification on a repository with no .haven.toml. `python` is pinned to
+    this interpreter the same way `{python}` is in authored recipes.
+    """
+    from haven.domain.discovery import KNOWN_FILES, discover_recipes
+
+    files: dict[str, str] = {}
+    for name in KNOWN_FILES:
+        candidate = repo / name
+        if candidate.is_file():
+            files[name] = candidate.read_text(encoding="utf-8", errors="replace")[:65536]
+    paths: list[str] = []
+    for sub in ("tests", "test", "src"):
+        directory = repo / sub
+        if not directory.is_dir():
+            continue
+        for child in directory.iterdir():
+            paths.append(f"{sub}/{child.name}")
+            if sub == "src" and child.is_dir() and (child / "__init__.py").is_file():
+                paths.append(f"src/{child.name}/__init__.py")
+
+    recipes = {}
+    for candidate_recipe in discover_recipes(files, paths):
+        argv = tuple(sys.executable if item == "python" else item for item in candidate_recipe.argv)
+        recipes[candidate_recipe.id] = RecipeSpec(
+            id=candidate_recipe.id, argv=argv, timeout_seconds=180.0
         )
     return recipes
 
@@ -413,6 +458,7 @@ async def _run_agent_case(
     # gets. Every exec case asserts a policy-level outcome, which is identical
     # whether or not this platform has a backend.
     launcher = select_launcher()
+    recipes = _discovered_recipes(repo) if case.discover else _materialize_recipes(case.recipes)
     service = RunService(
         model=model,
         workspace=workspace,
@@ -420,7 +466,7 @@ async def _run_agent_case(
         store=store,
         emitter=EventEmitter(store, [Sink()]),
         approvals=approver,
-        recipes=_materialize_recipes(case.recipes),
+        recipes=recipes,
         mode=PermissionMode(case.mode),
         budget=budget,
         launcher=launcher,

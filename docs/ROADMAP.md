@@ -30,8 +30,12 @@ decision, respectively.
   projects, each project's own tests as the oracle). On `deepseek-v4-flash`:
   27/31 as found, then **31/31** after fixing the two failure causes the run
   exposed (an unretried connection drop and the model gaming the oracle by
-  editing tests). Written up in `docs/EVAL_LIVE.md`. Scaling to 50–100 tasks,
-  green-field (non-bug-injection) work, and zero-config repos remains.
+  editing tests). Zero-config is measured too: recipe discovery went 1/5 → 4/5
+  working commands after four evidence-driven detector fixes, and the live
+  `discover: true` cases score 5/5 — four end-to-end completions plus one
+  honest stop where the repo's own pytest config is broken. Written up in
+  `docs/EVAL_LIVE.md`. Scaling to 50–100 tasks and green-field
+  (non-bug-injection) work remains.
 - **Phase 5 — extension boundary: decided (ADR 0016).** Guardrails documented;
   MCP, LSP, plugins, and multi-agent stay deferred with unlock conditions,
   consistent with the thesis.

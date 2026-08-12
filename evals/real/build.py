@@ -41,7 +41,9 @@ def _apply(text: str, old: str, new: str, where: str) -> str:
     return text.replace(old, new)
 
 
-def _materialize(task: Task, repo: Repo, dest: Path, *, reverted: bool) -> None:
+def _materialize(
+    task: Task, repo: Repo, dest: Path, *, reverted: bool, write_conftest: bool = True
+) -> None:
     """Copy the clone to dest and apply (or, if reverted, do not apply) the bug."""
     if dest.exists():
         shutil.rmtree(dest)
@@ -54,9 +56,11 @@ def _materialize(task: Task, repo: Repo, dest: Path, *, reverted: bool) -> None:
             # bug-injected tree needs reverting. Nothing to do here.
             continue
         target.write_text(_apply(text, old, new, f"{task.id}:{rel}"), encoding="utf-8")
-    if repo.src_path:
+    if repo.src_path and write_conftest:
         # src-layout projects are not installed in the fixture; a root conftest
         # puts the package on sys.path so `python -m pytest` can import it.
+        # Zero-config fixtures skip this: the shim is pre-configuration, and the
+        # discovered command must solve the import path on its own.
         conftest = dest / "conftest.py"
         conftest.write_text(
             "import sys, pathlib\n"
@@ -81,6 +85,35 @@ def _case_json(task: Task, repo: Repo) -> dict:
     }
 
 
+#: Zero-config variants: one task per repo, no authored recipe, no conftest
+#: shim — the runner registers whatever `discover_recipes` proposes, measuring
+#: the discovery loop end-to-end. Expectations follow the measured hit rate:
+#: wcwidth's own tox.ini addopts demand pytest-cov (absent here), so its
+#: discovered check can never pass and the honest outcome is a stop.
+ZEROCONF: list[tuple[str, str]] = [
+    ("jmespath-starts-with", "succeeded"),
+    ("idna-label-length", "succeeded"),
+    ("wcwidth-ascii", "stopped"),
+    ("tomli-tz-sign", "succeeded"),
+    ("tabulate-padleft", "succeeded"),
+]
+
+
+def _zeroconf_case_json(task: Task, expect_status: str) -> dict:
+    return {
+        "id": f"zeroconf-{task.id}",
+        "category": "real",
+        "goal": task.goal.replace("the `verify` check", "the project's tests"),
+        "fixture": f"zeroconf-{task.id}",
+        "approval_policy": "approve_all",
+        "discover": True,
+        "expect": {
+            "status": expect_status,
+            "allowed_changed_files": list(task.allowed),
+        },
+    }
+
+
 def build() -> None:
     FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
     CASES_DIR.mkdir(parents=True, exist_ok=True)
@@ -90,7 +123,20 @@ def build() -> None:
         (CASES_DIR / f"{task.id}.json").write_text(
             json.dumps(_case_json(task, repo), indent=2), encoding="utf-8"
         )
-    print(f"built {len(TASKS)} fixtures in {FIXTURES_DIR} and cases in {CASES_DIR}")
+    by_id = {task.id: task for task in TASKS}
+    for task_id, expect_status in ZEROCONF:
+        task = by_id[task_id]
+        repo = REPOS[task.repo]
+        _materialize(
+            task, repo, FIXTURES_DIR / f"zeroconf-{task.id}", reverted=False, write_conftest=False
+        )
+        (CASES_DIR / f"zeroconf-{task.id}.json").write_text(
+            json.dumps(_zeroconf_case_json(task, expect_status), indent=2), encoding="utf-8"
+        )
+    print(
+        f"built {len(TASKS)} fixtures + {len(ZEROCONF)} zero-config variants "
+        f"in {FIXTURES_DIR} and cases in {CASES_DIR}"
+    )
 
 
 def _run_suite(repo: Repo, cwd: Path) -> tuple[int, str]:

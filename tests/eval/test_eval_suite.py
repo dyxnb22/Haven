@@ -74,6 +74,29 @@ def test_unknown_category_is_an_error(tmp_path: Path) -> None:
         asyncio.run(run_suite(cases_dir=CASES_DIR, out_dir=tmp_path, categories=("nope",)))
 
 
+def test_discover_mode_registers_what_discovery_proposes(tmp_path: Path) -> None:
+    """A `discover: true` case simulates the zero-config flow: the harness runs
+    recipe discovery on the fixture and registers the suggestions, exactly as a
+    user accepting `haven discover` output would."""
+    import sys
+
+    from haven.evalkit.runner import _discovered_recipes
+
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_x.py").write_text("def test_ok():\n    assert True\n")
+    recipes = _discovered_recipes(tmp_path)
+
+    assert "pytest" in recipes
+    assert recipes["pytest"].argv == (sys.executable, "-m", "pytest", "-q", "tests")
+
+
+def test_discover_mode_on_a_bare_repo_registers_nothing(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("nothing to see\n")
+    from haven.evalkit.runner import _discovered_recipes
+
+    assert _discovered_recipes(tmp_path) == {}
+
+
 def test_one_crashing_case_does_not_discard_the_rest(tmp_path: Path) -> None:
     """Found live: an unwrapped SSLError in case 7 aborted a 31-case run and
     threw away the 24 that had not run yet. A live suite is expensive and not

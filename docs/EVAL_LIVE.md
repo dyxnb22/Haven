@@ -80,6 +80,43 @@ repositories, and that success is decided by the projects' own tests rather
 than the model's say-so. Notably, all three bugs this exercise found were in
 the *harness*, not the model.
 
+### Zero-config repositories (2026-08-12)
+
+The suite above pre-registers a `verify` recipe, which sidesteps the gap every
+external review flagged first: a fresh repository has no `.haven.toml`. Two
+measurements attack that directly.
+
+**Deterministic: does discovery propose a command that actually runs green on
+the clean clone?** As found, **1/5** repos (only tabulate; jmespath ships
+setup.py-only packaging, wcwidth configures pytest in `tox.ini`, tomli's src
+layout is not importable, and idna's suggestion silently tested the *installed*
+idna — a transitive dependency of Haven itself — instead of the checkout,
+because bare `pytest` does not put the CWD on `sys.path`). Four evidence-driven
+changes to `domain/discovery.py` — always `python -m pytest`, `tox.ini` /
+`setup.cfg` as config signals, a tests-directory structural fallback, and
+`-o pythonpath=src` repair for src layouts — took it to **4/5**. The residual
+is wcwidth, whose own pytest config demands a coverage plugin the environment
+lacks: a dependency problem, deliberately not papered over by overriding the
+project's addopts (other projects' addopts are load-bearing).
+
+**Live: `discover: true` eval cases** register exactly what discovery proposes
+(simulating a user accepting `haven discover` output) on fixtures with no
+authored recipe and no shims. Result: **5/5** — four end-to-end zero-config
+completions (`evidence_satisfied` via the discovered check), and wcwidth
+finishing `stopped/evidence_missing`: it fixed the code, could not verify with
+the repo's broken-config check, and said so rather than claiming success.
+
+The first attempt at this run scored 0/5, and both causes were again harness
+bugs, not model failures: pytest's `.pytest_cache` (which authored recipes
+suppressed but discovered commands legitimately create) was being counted as an
+out-of-scope change, and — more interesting — when wcwidth's check kept dying
+on its missing plugin, the model **planted a `sitecustomize.py`** to bend the
+Python startup environment. The scope guard caught it; the oracle guardrail in
+the system prompt now names environment hooks (`conftest.py`,
+`sitecustomize.py`) alongside test edits as forbidden ways to make a failing
+check pass, and instructs the model to say plainly when the check itself cannot
+run — which is exactly what it then did.
+
 Reproduce:
 
 ```bash
