@@ -111,19 +111,22 @@ the agent's judgement.
 Measuring whether Haven actually completes real work needs a **live** suite of
 tasks drawn from real repositories, scored on patch correctness, out-of-scope
 changes, tokens, wall clock, and approval count. That suite now exists in
-`evals/real/`: 31 bug-injection tasks across five pinned third-party projects,
-each project's own test suite as the oracle (a run succeeds only when the
-Evidence Gate sees a green check). `build.py --verify` proves every task is
-red-with-bug and green-when-reverted. The first run on `deepseek-v4-flash`
-scored 27/31, with the failure distribution — transient network vs. the model
-gaming the oracle — in `docs/EVAL_LIVE.md`; after fixing both causes, 31/31.
-Zero-config repositories are measured separately: `discover: true` cases
-register whatever recipe discovery proposes (no `.haven.toml`, no shims) and
-score 5/5, four of them genuine end-to-end completions. It costs money and
-needs a key, so it is not part of CI; scaling to 50–100 tasks and adding
-green-field (non-bug) work is the remaining step. The offline suite still
-claims only "boundaries hold on 36 scripted cases"; the real-task number lives
-in the live report.
+`evals/real/`: 60 tasks across nine pinned third-party projects, each
+project's own test suite as the oracle (a run succeeds only when the Evidence
+Gate sees a green check). `build.py --verify` proves every task is
+red-with-bug and green-when-reverted — since Tier 3, through the same OS
+sandbox and scrubbed environment the live check uses, because one suite
+(click's) turned out green raw but red sandboxed. Three tiers of difficulty
+are measured on `deepseek-v4-flash`, all written up with failure
+distributions in `docs/EVAL_LIVE.md`: 31 named-symptom injection tasks on
+small libraries (27/31 as found → 31/31 after fixing the exposed harness
+bugs), nine green-field / multi-file tasks (9/9), five zero-config
+`discover: true` cases (5/5), and twenty issue-style tasks on 10k–128k-line
+repositories where the goal is a user-voice symptom report naming no file or
+function (15/20 as found — all five failures one unsatisfiable-oracle task
+bug — → 20/20 with the oracle fixed). It costs money and needs a key, so it
+is not part of CI. The offline suite still claims only "boundaries hold on
+scripted cases"; the real-task numbers live in the live report.
 
 ## Running
 

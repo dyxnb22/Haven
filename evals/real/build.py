@@ -15,11 +15,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+from haven.adapters.process_executor import ENV_ALLOWLIST, RECIPE_SCRATCH_DIRNAME
+from haven.bootstrap import select_launcher
+from haven.ports.sandbox import SandboxSpec, default_private_roots, default_readable_roots
 
 HERE = Path(__file__).resolve().parent
 REPOS_DIR = HERE / "repos"
@@ -29,7 +34,10 @@ CASES_DIR = HERE / "cases"
 sys.path.insert(0, str(HERE))
 from tasks import REPOS, TASKS, Repo, Task  # noqa: E402
 
-_IGNORE = shutil.ignore_patterns(".git", "__pycache__", "*.pyc", ".pytest_cache", ".tox")
+# .venv: uv creates one inside a clone if `uv run` is ever invoked there (the
+# larger tier-3 repos ship their own pyproject/uv.lock); copying it into every
+# fixture would be huge and meaningless.
+_IGNORE = shutil.ignore_patterns(".git", "__pycache__", "*.pyc", ".pytest_cache", ".tox", ".venv")
 
 
 def _apply(text: str, old: str, new: str, where: str) -> str:
@@ -131,29 +139,80 @@ def build() -> None:
         (CASES_DIR / f"zeroconf-{task.id}.json").write_text(
             json.dumps(_zeroconf_case_json(task, expect_status), indent=2), encoding="utf-8"
         )
+    _write_subset("tier3", [task for task in TASKS if "tier3" in task.tags])
     print(
         f"built {len(TASKS)} fixtures + {len(ZEROCONF)} zero-config variants "
         f"in {FIXTURES_DIR} and cases in {CASES_DIR}"
     )
 
 
+def _write_subset(name: str, tasks: list[Task]) -> None:
+    """A sibling run-dir (cases + a fixtures symlink) so `haven eval --cases`
+    can run just this slice; the runner resolves fixtures as a sibling of the
+    cases directory. Same layout the zeroconf/ and tier2/ dirs use."""
+    subset = HERE / name
+    (subset / "cases").mkdir(parents=True, exist_ok=True)
+    for stale in (subset / "cases").glob("*.json"):
+        stale.unlink()
+    link = subset / "fixtures"
+    if not link.is_symlink():
+        link.symlink_to("../fixtures")
+    for task in tasks:
+        repo = REPOS[task.repo]
+        (subset / "cases" / f"{task.id}.json").write_text(
+            json.dumps(_case_json(task, repo), indent=2), encoding="utf-8"
+        )
+
+
+#: The same backend the live eval's executor will select. Verification must
+#: run the suite the way `repo.check` will, or it proves the wrong thing.
+_LAUNCHER = select_launcher()
+
+
 def _run_suite(repo: Repo, cwd: Path) -> tuple[int, str]:
+    """Run the verify command exactly as a registered check would run it:
+    wrapped by the OS sandbox and given the executor's scrubbed environment.
+
+    Tier 3 taught this the hard way: click's suite is green when run raw but
+    red inside the sandbox (a pager test kills its child process, which
+    Seatbelt denies), so every click case burned its budget against an oracle
+    that could never pass. Red/green proven through the real confinement
+    catches that class before any model is called.
+    """
+    argv: tuple[str, ...] = (sys.executable, "-m", "pytest", *repo.verify)
+    scratch = cwd / RECIPE_SCRATCH_DIRNAME
+    scratch.mkdir(parents=True, exist_ok=True)
+    if _LAUNCHER is not None:
+        argv = _LAUNCHER.wrap(
+            argv,
+            SandboxSpec(
+                workspace_root=cwd,
+                scratch_dir=scratch,
+                writable=True,
+                private_roots=default_private_roots(),
+                extra_readable_roots=default_readable_roots(),
+            ),
+        )
+    env = {key: os.environ[key] for key in ENV_ALLOWLIST if key in os.environ}
+    env["TMPDIR"] = str(scratch)
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", *repo.verify],
+        argv,
         cwd=cwd,
         capture_output=True,
         text=True,
         timeout=repo.timeout,
+        env=env,
     )
     return proc.returncode, (proc.stdout + proc.stderr).splitlines()[-1] if proc.stdout else ""
 
 
-def verify() -> int:
+def verify(only: str = "") -> int:
     """Prove every task is a well-formed bug: red as injected, green as reverted."""
     failures: list[str] = []
+    tasks = [task for task in TASKS if only in task.id]
     with tempfile.TemporaryDirectory(prefix="haven-real-verify-") as tmp:
         root = Path(tmp)
-        for task in TASKS:
+        for task in tasks:
             repo = REPOS[task.repo]
             # Injected: apply the bug into a clean copy → suite must be RED.
             buggy = root / f"{task.id}-buggy"
@@ -172,17 +231,22 @@ def verify() -> int:
     if failures:
         print(f"\n{len(failures)} malformed task(s): {', '.join(failures)}")
         return 1
-    print(f"\nall {len(TASKS)} tasks are red-with-bug and green-when-reverted")
+    print(f"\nall {len(tasks)} tasks are red-with-bug and green-when-reverted")
     return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--verify", action="store_true", help="check each task is red/green")
+    parser.add_argument(
+        "--only",
+        default="",
+        help="verify only tasks whose id contains this substring (build stays full)",
+    )
     args = parser.parse_args()
     build()
     if args.verify:
-        return verify()
+        return verify(args.only)
     return 0
 
 

@@ -75,6 +75,49 @@ REPOS: dict[str, Repo] = {
         dir="tabulate",
         verify=("-q", "-x", "-p", "no:cacheprovider", "test"),
     ),
+    # ---- tier 3: larger repositories (10k+ source lines) -----------------
+    # `-p no:respx` on every tier-3 recipe: Haven's dev venv ships respx, whose
+    # pytest plugin imports httpx, whose optional CLI import chain pulls the
+    # *installed* click/rich/pygments into sys.modules before the fixture's
+    # conftest shim can put the checkout first. Blocking the plugin keeps the
+    # checkout authoritative; build.py --verify proves it (a bug injected into
+    # the checkout must turn the suite red, which is impossible if the suite
+    # were importing site-packages).
+    "click": Repo(
+        dir="click",
+        # Two exclusions, both environmental (same class as wcwidth's
+        # package_version): test_path_dash_no_byteswarning spawns
+        # `python -bb -c "import click"` in a subprocess, bypassing the
+        # conftest shim and testing the *installed* click; echo_via_pager
+        # kills its pager child process, which the check sandbox (Seatbelt)
+        # denies — green raw, red sandboxed, so it cannot be an oracle.
+        verify=(
+            "-q",
+            "-x",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "no:respx",
+            "-k",
+            "not path_dash_no_byteswarning and not echo_via_pager",
+            "tests",
+        ),
+        src_path="src",
+    ),
+    "jinja": Repo(
+        dir="jinja",
+        verify=("-q", "-x", "-p", "no:cacheprovider", "-p", "no:respx", "tests"),
+        src_path="src",
+    ),
+    "pygments": Repo(
+        dir="pygments",
+        verify=("-q", "-x", "-p", "no:cacheprovider", "-p", "no:respx", "tests"),
+        timeout=300.0,
+    ),
+    "rich": Repo(
+        dir="rich",
+        verify=("-q", "-x", "-p", "no:cacheprovider", "-p", "no:respx", "tests"),
+    ),
 }
 
 
@@ -821,5 +864,435 @@ TASKS: list[Task] = [
         ("wcwidth/_wcwidth.py", "wcwidth/bisearch.py"),
         "hard",
         ("multi-file",),
+    ),
+    # ---- tier 3: issue-style goals on 10k+ line repositories --------------
+    # The goal is a user-voice symptom report: it names observable behavior
+    # and user-facing feature names, never a file or a function. Locating the
+    # defect is the part under measurement; the injection below stays a
+    # single surgical edit so the oracle (red-with-bug, green-reverted) and
+    # the scope check stay exact. Difficulty is the vagueness of the report
+    # times the size of the search space, labelled per task.
+    #
+    # ---- tier 3: jinja ----------------------------------------------------
+    Task(
+        "t3-jinja-default-filter",
+        "jinja",
+        'A user reports: "Since this build, templates using the default filter '
+        "render empty output for variables that are not defined at all — "
+        "{{ missing|default('n/a') }} prints nothing instead of n/a. "
+        "Defined-but-falsy values with the boolean flag still work, so only "
+        'the undefined case regressed." Find the cause, fix it, then run the '
+        "`verify` check.",
+        (
+            (
+                "src/jinja2/filters.py",
+                "    if isinstance(value, Undefined) or (boolean and not value):\n"
+                "        return default_value",
+                "    if boolean and not value:\n        return default_value",
+            ),
+        ),
+        ("src/jinja2/filters.py",),
+        "easy",
+        ("tier3", "issue-style"),
+    ),
+    Task(
+        "t3-jinja-loop-first",
+        "jinja",
+        'A user reports: "Inside {% for %} loops the first-iteration flag on '
+        "the loop variable is never true anymore, so the header we render "
+        "once at the top of each loop has disappeared. The last-iteration "
+        'flag still behaves." Find the cause, fix it, then run the `verify` '
+        "check.",
+        (
+            (
+                "src/jinja2/runtime.py",
+                "        return self.index0 == 0",
+                "        return self.index0 == 1",
+            ),
+        ),
+        ("src/jinja2/runtime.py",),
+        "easy",
+        ("tier3", "issue-style"),
+    ),
+    Task(
+        "t3-jinja-truncate-leeway",
+        "jinja",
+        'A user reports: "The truncate filter now chops strings that are only '
+        "a character or two over the limit. It used to leave short overruns "
+        "alone unless they exceeded the tolerance margin; truncation of "
+        'clearly-too-long strings is still correct." Find the cause, fix it, '
+        "then run the `verify` check.",
+        (
+            (
+                "src/jinja2/filters.py",
+                "    if len(s) <= length + leeway:\n        return s",
+                "    if len(s) <= length - leeway:\n        return s",
+            ),
+        ),
+        ("src/jinja2/filters.py",),
+        "medium",
+        ("tier3", "issue-style"),
+    ),
+    Task(
+        "t3-jinja-trim-blocks",
+        "jinja",
+        'A user reports: "Template whitespace went weird after upgrading: with '
+        "trim_blocks enabled the newline after a block tag is no longer "
+        "removed, and with it disabled the newline disappears — exactly "
+        'backwards from what the documentation says." Find the cause, fix it, '
+        "then run the `verify` check.",
+        (
+            (
+                "src/jinja2/lexer.py",
+                '        block_suffix_re = "\\\\n?" if environment.trim_blocks else ""',
+                '        block_suffix_re = "" if environment.trim_blocks else "\\\\n?"',
+            ),
+        ),
+        ("src/jinja2/lexer.py",),
+        "medium",
+        ("tier3", "issue-style"),
+    ),
+    Task(
+        "t3-jinja-async-loop-last",
+        "jinja",
+        'A user reports: "When we render templates asynchronously, the '
+        "last-iteration flag on the loop variable never becomes true — the "
+        "trailing comma we suppress on the last item now shows up after every "
+        "item. Rendering the same template synchronously is correct, so it is "
+        'specific to async." Find the cause, fix it, then run the `verify` '
+        "check.",
+        (
+            (
+                "src/jinja2/runtime.py",
+                "    async def last(self) -> bool:  # type: ignore\n"
+                "        return await self._peek_next() is missing",
+                "    async def last(self) -> bool:  # type: ignore\n"
+                "        return await self._peek_next() is not missing",
+            ),
+        ),
+        ("src/jinja2/runtime.py",),
+        "hard",
+        ("tier3", "issue-style"),
+    ),
+    # ---- tier 3: click ----------------------------------------------------
+    Task(
+        "t3-click-echo-stderr",
+        "click",
+        'A user reports: "Messages our CLI prints with the error flag are '
+        "showing up in standard output instead of standard error, so piping "
+        "the command captures diagnostics along with the real output. It used "
+        'to keep them apart." Find the cause, fix it, then run the `verify` '
+        "check.",
+        (
+            (
+                "src/click/utils.py",
+                "        if err:\n            file = _default_text_stderr()",
+                "        if err:\n            file = _default_text_stdout()",
+            ),
+        ),
+        ("src/click/utils.py",),
+        "easy",
+        ("tier3", "issue-style"),
+    ),
+    Task(
+        "t3-click-bool-onoff",
+        "click",
+        'A user reports: "Boolean options stopped accepting on/off: '
+        "--feature=on now fails with 'is not a valid boolean', although "
+        "true/false, yes/no and 1/0 all still work. Our deploy scripts use "
+        'on/off everywhere." Find the cause, fix it, then run the `verify` '
+        "check.",
+        (
+            (
+                "src/click/types.py",
+                '        "on": True,\n        "off": False,\n',
+                "",
+            ),
+        ),
+        ("src/click/types.py",),
+        "easy",
+        ("tier3", "issue-style"),
+    ),
+    Task(
+        "t3-click-range-clamp",
+        "click",
+        'A user reports: "Integer range options with clamping enabled clamp to '
+        "the wrong end: with a 0..10 range, passing -5 comes back as 10 and "
+        "passing 100 comes back as 0. Without clamping the range check still "
+        'errors correctly." Find the cause, fix it, then run the `verify` '
+        "check.",
+        (
+            (
+                "src/click/types.py",
+                "        if self.clamp:\n"
+                "            if min is not None and lt_min:\n"
+                "                return self._clamp(min, 1, self.min_open)\n"
+                "\n"
+                "            if max is not None and gt_max:\n"
+                "                return self._clamp(max, -1, self.max_open)",
+                "        if self.clamp:\n"
+                "            if min is not None and lt_min:\n"
+                "                return self._clamp(max, -1, self.max_open)\n"
+                "\n"
+                "            if max is not None and gt_max:\n"
+                "                return self._clamp(min, 1, self.min_open)",
+            ),
+        ),
+        ("src/click/types.py",),
+        "medium",
+        ("tier3", "issue-style"),
+    ),
+    Task(
+        "t3-click-show-default",
+        "click",
+        "A user reports: \"--help no longer prints '[default: ...]' for "
+        "options that ask for it — the only place a default still shows is "
+        "when it was given as an explicit string. Everything else about the "
+        'help output looks normal." Find the cause, fix it, then run the '
+        "`verify` check.",
+        (
+            (
+                "src/click/core.py",
+                "        if show_default_is_str or (\n"
+                "            show_default and (default_value not in (None, UNSET))\n"
+                "        ):",
+                "        if show_default_is_str or (\n"
+                "            show_default and (default_value in (None, UNSET))\n"
+                "        ):",
+            ),
+        ),
+        ("src/click/core.py",),
+        "medium",
+        ("tier3", "issue-style"),
+    ),
+    Task(
+        "t3-click-nargs-order",
+        "click",
+        'A user reports: "Positional arguments that take a fixed number of '
+        "values receive them reversed — a copy command declared to take SRC "
+        "DST as one two-value argument now gets DST first. Options taking "
+        'multiple values are unaffected." Find the cause, fix it, then run '
+        "the `verify` check.",
+        (
+            (
+                "src/click/parser.py",
+                "            # If we're reversed, we're pulling in the arguments in reverse,\n"
+                "            # so we need to turn them around.\n"
+                "            if spos is not None:\n"
+                "                x.reverse()",
+                "            # If we're reversed, we're pulling in the arguments in reverse,\n"
+                "            # so we need to turn them around.\n"
+                "            if spos is None:\n"
+                "                x.reverse()",
+            ),
+        ),
+        ("src/click/parser.py",),
+        "hard",
+        ("tier3", "issue-style"),
+    ),
+    # ---- tier 3: rich -----------------------------------------------------
+    Task(
+        "t3-rich-style-bold",
+        "rich",
+        'A user reports: "Text styled as bold renders faint/dim in the '
+        "terminal instead of bold. Every other attribute — italic, "
+        "underline, reverse — still comes out right, and bold looks correct "
+        'in exported HTML, so it is the terminal escape codes." Find the '
+        "cause, fix it, then run the `verify` check.",
+        (
+            (
+                "rich/style.py",
+                '    _style_map = {\n        0: "1",',
+                '    _style_map = {\n        0: "2",',
+            ),
+        ),
+        ("rich/style.py",),
+        "easy",
+        ("tier3", "issue-style"),
+    ),
+    Task(
+        "t3-rich-padding-pair",
+        "rich",
+        'A user reports: "Padding given a two-value tuple applies the values '
+        "sideways: (1, 4) now pads 4 rows above and below and 1 column left "
+        "and right. The docs say two values mean vertical then horizontal, "
+        'like CSS. Single values and 4-tuples behave." Find the cause, fix '
+        "it, then run the `verify` check.",
+        (
+            (
+                "rich/padding.py",
+                "        if len(pad) == 2:\n"
+                "            pad_top, pad_right = pad\n"
+                "            return (pad_top, pad_right, pad_top, pad_right)",
+                "        if len(pad) == 2:\n"
+                "            pad_top, pad_right = pad\n"
+                "            return (pad_right, pad_top, pad_right, pad_top)",
+            ),
+        ),
+        ("rich/padding.py",),
+        "medium",
+        ("tier3", "issue-style"),
+    ),
+    Task(
+        "t3-rich-progress-percentage",
+        "rich",
+        'A user reports: "Progress displays are stuck near zero — a task more '
+        "than half done shows 0% and a sliver of bar, and even a finished "
+        "task barely registers 1%. The completed and total counts themselves "
+        'are right." Find the cause, fix it, then run the `verify` check.',
+        (
+            (
+                "rich/progress.py",
+                "        completed = (self.completed / self.total) * 100.0",
+                "        completed = self.completed / self.total",
+            ),
+        ),
+        ("rich/progress.py",),
+        "medium",
+        ("tier3", "issue-style"),
+    ),
+    Task(
+        "t3-rich-truncate-ellipsis",
+        "rich",
+        'A user reports: "Text truncated with an ellipsis ends up one cell '
+        "too wide, so truncated cells overflow their column and table "
+        "borders break on long content. Crop and fold overflow modes are "
+        'fine — only ellipsis." Find the cause, fix it, then run the '
+        "`verify` check.",
+        (
+            (
+                "rich/text.py",
+                '                    self.plain = set_cell_size(self.plain, max_width - 1) + "…"',
+                '                    self.plain = set_cell_size(self.plain, max_width) + "…"',
+            ),
+        ),
+        ("rich/text.py",),
+        "medium",
+        ("tier3", "issue-style"),
+    ),
+    Task(
+        "t3-rich-cell-width",
+        "rich",
+        'A user reports: "Anything containing CJK text or emoji misaligns: '
+        "table borders drift right by one cell for every wide character in a "
+        "row, and zero-width characters push borders too. ASCII-only content "
+        'lines up perfectly." Find the cause, fix it, then run the `verify` '
+        "check.",
+        (
+            (
+                "rich/cells.py",
+                "        else:\n            return width\n    return 1",
+                "        else:\n            return 1\n    return 1",
+            ),
+        ),
+        ("rich/cells.py",),
+        "hard",
+        ("tier3", "issue-style"),
+    ),
+    # ---- tier 3: pygments -------------------------------------------------
+    Task(
+        "t3-pygments-html-linenos",
+        "pygments",
+        'A user reports: "HTML output with inline line numbers starts '
+        "counting at 2 — every displayed number and anchor is one higher "
+        "than the actual source line. The table style of line numbering is "
+        'not affected." Find the cause, fix it, then run the `verify` check.',
+        (
+            (
+                "pygments/formatters/html.py",
+                "        num = self.linenostart\n",
+                "        num = self.linenostart + 1\n",
+            ),
+        ),
+        ("pygments/formatters/html.py",),
+        "medium",
+        ("tier3", "issue-style"),
+    ),
+    Task(
+        "t3-pygments-irc-color-pad",
+        "pygments",
+        'A user reports: "Code snippets our bot posts to IRC render broken '
+        "colors whenever the colored text begins with a digit — the color "
+        "code swallows it. IRC clients need the color number zero-padded to "
+        "two digits, and the output no longer pads it, so a code like 2 "
+        'followed by the text 123 reads as color 21." Find the cause, fix '
+        "it, then run the `verify` check.",
+        (
+            (
+                "pygments/formatters/irc.py",
+                "        add += '\\x03' + str(IRC_COLOR_MAP[color]).zfill(2)",
+                "        add += '\\x03' + str(IRC_COLOR_MAP[color])",
+            ),
+        ),
+        ("pygments/formatters/irc.py",),
+        "medium",
+        ("tier3", "issue-style"),
+    ),
+    Task(
+        "t3-pygments-shebang",
+        "pygments",
+        'A user reports: "Choosing a highlighter by shebang broke: extension-'
+        "less scripts that start with #!/usr/bin/env python (or any "
+        "interpreter path) are no longer recognized as that language. "
+        'Detection by file extension still works." Find the cause, fix it, '
+        "then run the `verify` check.",
+        (
+            (
+                "pygments/util.py",
+                "            found = [x for x in split_path_re.split(first_line[2:].strip())\n"
+                "                     if x and not x.startswith('-')][-1]",
+                "            found = [x for x in split_path_re.split(first_line[2:].strip())\n"
+                "                     if x and not x.startswith('-')][0]",
+            ),
+        ),
+        ("pygments/util.py",),
+        "medium",
+        ("tier3", "issue-style"),
+    ),
+    Task(
+        "t3-pygments-float-exponent",
+        "pygments",
+        'A user reports: "In Python code, floats written in scientific '
+        "notation with a lowercase e and no decimal point — like 1e100 — "
+        "split into a number token followed by a name token. 1E100 and "
+        '1.5e100 still highlight as a single float." Find the cause, fix it, '
+        "then run the `verify` check.",
+        (
+            (
+                "pygments/lexers/python.py",
+                "            (r'\\d(?:_?\\d)*[eE][+-]?\\d(?:_?\\d)*j?', Number.Float),",
+                "            (r'\\d(?:_?\\d)*[E][+-]?\\d(?:_?\\d)*j?', Number.Float),",
+            ),
+        ),
+        ("pygments/lexers/python.py",),
+        "hard",
+        ("tier3", "issue-style"),
+    ),
+    Task(
+        "t3-pygments-token-subtype",
+        "pygments",
+        'A user reports: "Style rules and filters that target a broad token '
+        "category no longer apply to its more specific subtypes — a rule for "
+        "String does nothing to String.Double — while, bizarrely, the broad "
+        'category now counts as a subtype of its own children." Find the '
+        "cause, fix it, then run the `verify` check.",
+        (
+            (
+                "pygments/token.py",
+                "    def __contains__(self, val):\n"
+                "        return self is val or (\n"
+                "            type(val) is self.__class__ and\n"
+                "            val[:len(self)] == self\n"
+                "        )",
+                "    def __contains__(self, val):\n"
+                "        return self is val or (\n"
+                "            type(val) is self.__class__ and\n"
+                "            self[:len(val)] == val\n"
+                "        )",
+            ),
+        ),
+        ("pygments/token.py",),
+        "hard",
+        ("tier3", "issue-style"),
     ),
 ]

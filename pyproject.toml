@@ -34,6 +34,18 @@ dev = [
     "respx",
     "ruff",
 ]
+# Test-only dependencies of the pinned third-party repos in evals/real
+# (their suites must run green in this venv; see evals/real/repos.lock):
+# markupsafe + trio are jinja's declared test deps, wcag-contrast-ratio is
+# pygments'. Pure test plumbing — Haven itself never imports any of them.
+real-evals = [
+    "markupsafe",
+    "trio",
+    "wcag-contrast-ratio",
+]
+
+[tool.uv]
+default-groups = ["dev", "real-evals"]
 
 [build-system]
 requires = ["uv_build>=0.12.3,<0.13.0"]

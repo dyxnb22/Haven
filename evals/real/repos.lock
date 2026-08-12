@@ -6,3 +6,9 @@ idna b54576b13fd31e0d5b51ba9ce36d018feeeebaec https://github.com/kjd/idna
 wcwidth 551710eabf316ed2d9e3782c1fe9cf80ff0f6ed9 https://github.com/jquast/wcwidth
 tomli 5a77b12a7a9f052ce5a20c335d2825658f6aea52 https://github.com/hukkin/tomli
 tabulate 268615a5c27dc40e5c22454c07b44d5c50410da0 https://github.com/astanin/python-tabulate
+
+# Tier 3: larger repositories (10k+ source lines), issue-style vague goals.
+click 9c4dfdaebe0e6b2aabc566eb81f6f10eb5cd6ea1 https://github.com/pallets/click
+jinja 5ef70112a1ff19c05324ff889dd30405b1002044 https://github.com/pallets/jinja
+pygments 19c581704c466cde59fd1a49e04c3424449110f3 https://github.com/pygments/pygments
+rich 9d8f9a372cc5916fd4781fec207ced7ddac2f08f https://github.com/Textualize/rich

@@ -141,15 +141,144 @@ the system prompt now names environment hooks (`conftest.py`,
 check pass, and instructs the model to say plainly when the check itself cannot
 run — which is exactly what it then did.
 
+### Tier 3: issue-style goals on 10k+ line repositories (2026-08-12)
+
+The earlier tiers saturated on small pure-Python libraries with goals that
+name the broken function. Tier 3 escalates both axes at once: **larger real
+repositories** (click 12.6k source lines, jinja 14.4k, rich 38.5k, pygments
+128k — pinned in `repos.lock`; sqlparse was evaluated and dropped at 4.2k
+lines) and **issue-style goals** written as a user's symptom report — feature
+names and observable behavior only, never a file or function name
+(*"Positional arguments that take a fixed number of values receive them
+reversed…"*). Localization cost is the thing under measurement. Twenty tasks,
+five per repo, difficulty labelled in `tasks.py`: 5 easy (the symptom names a
+feature whose name greps straight to the module), 10 medium (feature-level
+symptom with no direct name-to-file mapping), 5 hard (the symptom is
+downstream of the real cause — an async-only flag, a low-level cell-width
+helper surfacing as broken table borders, a parser-internal ordering bug).
+
+Suite mechanics are unchanged — one surgical injected bug per task, the
+project's own suite as the oracle through a registered `verify` recipe, and
+`build.py --verify` proving red-with-bug / green-when-reverted before any
+model call. Three pure test dependencies were added to the venv for the new
+repos' suites, recorded as the `real-evals` dependency group in
+`pyproject.toml`: `markupsafe` and `trio` (jinja's own declared test deps)
+and `wcag-contrast-ratio` (pygments'). Two environmental test exclusions are
+documented on the click recipe (a subprocess test that can only see the
+*installed* click, and the pager tests — below). One deterministic finding
+from construction is worth keeping: Haven's dev venv ships `respx`, whose
+pytest plugin imports httpx, whose optional CLI import chain pre-imports the
+*installed* click/rich/pygments before a fixture `conftest.py` can put the
+checkout first — every tier-3 recipe therefore carries `-p no:respx`, and the
+red/green proof is what guarantees the checkout (not site-packages) is what
+the oracle tests.
+
+Two runs, same shape as the first tier's report — as found, then after fixing
+what the failures exposed:
+
+| Metric | Run 1 (as found) | Run 2 (click cases, fixed oracle) |
+|---|---|---|
+| Cases passed | 15 / 20 | **5 / 5** (→ 20/20 combined) |
+| Security violations | 0 | **0** |
+| Out-of-scope file changes | 0 | **0** |
+| Oracle gaming | 0 | **0** |
+| Est. cost | $0.133 | $0.021 |
+| Prompt cache hit | 87% | 88% |
+| Steps per passing case | 6–16, median 9 | (same population) |
+
+**Run 1's failure distribution: five failures, one root cause, zero model
+failures.** Every click case died `stopped / token_budget_exhausted` around
+20 steps and ~400–436k input tokens; every non-click case passed, including
+all the hard ones (the async-only `loop.last` in 7 steps, the pygments
+scientific-notation lexing bug in 9, the rich cell-width bug behind broken
+CJK table borders in 13). The cluster pattern pointed away from the model,
+and a deterministic replay confirmed it: **click's suite is green when run
+raw but red inside the check sandbox** — `test_echo_via_pager[test5-cat]`
+kills its pager child process, which Seatbelt denies (`PermissionError` from
+`os.kill`). The oracle was unsatisfiable on a clean tree, so the Evidence
+Gate — correctly — never granted success, and the agent burned its budget
+against a phantom failure it could not fix. The token budget was the right
+backstop (the stuck-loop detector correctly stayed quiet: the model was
+making *different* attempts each round), and the runs still show 0
+out-of-scope changes — the flailing stayed within the task's file.
+
+The defect was in task construction, not the harness: `build.py --verify`
+ran the suites **unsandboxed**, so it proved red/green in an environment the
+live run does not use. Two fixes, both committed:
+
+- The verify gate now runs every red/green proof **through the same OS
+  sandbox wrap and scrubbed environment** (`SandboxLauncher.wrap` +
+  `ENV_ALLOWLIST` + scratch `TMPDIR`) that `repo.check` uses, so an oracle
+  that is red-in-sandbox can never reach a paid run again.
+- click's recipe excludes the pager tests (they kill a child process, which
+  the sandbox forbids by design), documented next to the existing
+  installed-dist exclusion. All 60 tasks re-prove red/green under the
+  sandboxed gate.
+
+**Run 2 confirms the attribution:** with a sound oracle the five click cases
+pass 5/5 — including the hard parser-internals `nargs` ordering bug (15
+steps) — which closes the combined tier at 20/20.
+
+Budget calibration held, barely visible but worth recording: the heaviest
+*passing* case used 295k of the 400k input-token cap (74%), median 85k. The
+cap that killed the click runs was doing its job — bounding an unwinnable
+run — not starving winnable ones. Wall clock ~34 min for Run 1, ~6 min for
+Run 2; ~$0.16 total including the two-case smoke.
+
+**Conclusion: Tier 3 is saturated too, and the interesting failure again
+lived in the harness's own assumptions.** On 10k–128k-line repositories,
+with user-voice symptom reports that never name a file or function,
+`deepseek-v4-flash` under this harness localized and fixed 20/20 injected
+bugs with the projects' own suites green, at a median of 9 steps (~50% above
+the tier-1 median of 6 — the price of localization) and under $0.01 per
+task. Difficulty labels did not predict step count (the hard async case took
+7 steps; an easy filter case took 16): for this model, *verification*
+rounds, not localization, dominate the step budget. What this tier cannot
+claim: the bugs are still single-file, single-cause, injected, and
+symptom-described by someone who understands the behavior — real issues are
+messier on every axis.
+
+**Next escalation (design draft — deliberately not started):**
+
+1. **Real-issue reproduction set.** 10–15 tasks adapted from the pinned
+   repos' actual issue history: check out the parent of a real bug-fix
+   commit, restore the fix's regression test (the test is the oracle; the
+   fix itself is withheld), and use the original issue title/body — lightly
+   anonymized — as the goal. This removes the "injected by someone who knows
+   the answer" bias and makes symptom text genuinely adversarial (wrong
+   guesses, missing context, multiple symptoms). Construction cost is the
+   bottleneck: each task needs the historical test to run green post-fix and
+   red pre-fix in Haven's venv, which the now-sandboxed `--verify` can gate
+   the same way it gates injections.
+2. **Cross-file refactor tasks.** Goals of the form "rename/split/invert
+   this dependency and keep the suite green" where the edit necessarily
+   touches 3+ files (e.g. threading a new parameter through click's
+   parser→core→decorators chain). The oracle stays the project suite plus a
+   small task-specific test the builder writes *before* the model runs
+   (red-with-old-shape, green-with-new). This measures multi-file edit
+   coordination, which no current tier exercises.
+3. Both need one harness observation first: per-case event transcripts are
+   discarded after each eval case, so failure forensics currently require a
+   replay script. Persisting the envelope stream per case (JSONL next to the
+   progress file) would make failed-run archaeology a read instead of a
+   re-run — worth doing before a tier whose failures are expected to be
+   model-caused rather than harness-caused.
+
 Reproduce:
 
 ```bash
-uv run python evals/real/build.py            # rebuild fixtures + cases
+uv run python evals/real/build.py --verify   # rebuild + prove red/green (sandboxed)
 export DEEPSEEK_API_KEY=...
 export HAVEN_API_KEY_ENV=DEEPSEEK_API_KEY HAVEN_BASE_URL=https://api.deepseek.com/v1
 export HAVEN_MODEL=deepseek-v4-flash
 uv run haven eval --live --yes --category real --cases evals/real/cases --out evals/real/report
+# tier 3 only (build.py emits the subset run-dir):
+uv run haven eval --live --yes --category real --cases evals/real/tier3/cases --out evals/real/report-tier3
 ```
+
+The clones under `evals/real/repos/` are regenerated from the pinned SHAs in
+`repos.lock`; the tier-3 suites need the `real-evals` dependency group
+(installed by default with `uv sync`).
 
 ## Setup (earlier eight-fixture existence proof)
 

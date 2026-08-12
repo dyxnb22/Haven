@@ -35,9 +35,16 @@ decision, respectively.
   `discover: true` cases score 5/5 — four end-to-end completions plus one
   honest stop where the repo's own pytest config is broken. A second tier —
   six green-field implement-the-missing-function tasks and three multi-file
-  double bugs — scores 9/9. Written up in `docs/EVAL_LIVE.md`. This difficulty
-  class is saturated; the remaining escalation is scale: larger repositories
-  and vaguer, issue-style goals.
+  double bugs — scores 9/9. A third tier — twenty issue-style tasks (user-voice
+  symptom reports naming no file or function) on four 10k–128k-line
+  repositories (click, jinja, rich, pygments) — scored 15/20 as found, all
+  five failures one root cause on the harness side (click's suite is red
+  inside the check sandbox, so its oracle was unsatisfiable; the verify gate
+  now proves red/green through the real sandbox), then **20/20** with the
+  oracle fixed. Written up in `docs/EVAL_LIVE.md`. This difficulty class is
+  saturated as well; the recorded next escalations are a real-issue
+  reproduction set and cross-file refactor tasks (design drafted in
+  `EVAL_LIVE.md`, deliberately not started).
 - **Phase 5 — extension boundary: decided (ADR 0016).** Guardrails documented;
   MCP, LSP, plugins, and multi-agent stay deferred with unlock conditions,
   consistent with the thesis.
