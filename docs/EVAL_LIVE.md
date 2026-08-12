@@ -340,6 +340,36 @@ papered over. The one harness gap it found (answer-without-fixing) became the
 hidden grader. This is the escalation the tier-3 conclusion asked for, and it
 is not saturated.
 
+### Soak: exercising the v2 mechanisms live (2026-08-13)
+
+Roadmap v3's first job was to give the hours-old v2 mechanisms real mileage
+before claiming parity. What was soaked and what it found:
+
+- **`apply_patch` through the real TUI approval flow.** A Pilot journey drives
+  a two-file patch (edit + create) end to end: one approval card for the whole
+  change, both files land on approve. Pinned in `tests/tui/test_tui_journey.py`.
+- **Steering routed through the TUI.** Input typed while a run is active is
+  routed to the steer queue (delivered next turn), not refused and not started
+  as a new run — the ADR 0020 path, exercised through the actual submit
+  handler.
+- **The real live stack on multi-file refactors.** The two cross-file
+  refactor cases ran live with a 40-step / 80-tool budget: **2/2, 0
+  out-of-scope, 0 security violations**, 9 and 14 steps. No over-budget
+  assertion fired and no invariant broke under the raised budget. (The
+  refactors read too few files to trigger compaction; forcing compaction
+  under live pressure is a Phase 2 long-horizon task, not this soak.)
+- **Headless `--write` auto-fix, live for the first time.** `haven run
+  --write --approval-policy all --jsonl` on a fresh clone with an accepted
+  `.haven.toml`: the model located and fixed the injected `starts_with` bug
+  and the registered check passed — `succeeded / evidence_satisfied` in 6
+  steps, the fix in scope. The Phase-6 mechanism confirmed against a real
+  provider, not just unit-tested.
+
+No new defects fell out of the soak — an honest empty list this time, which
+the earlier tiers' fix logs make believable rather than suspicious. The
+mechanisms are now exercised end to end against a real model, not only pinned
+by offline tests.
+
 ### Context precision (2026-08-12)
 
 Three changes tighten how the request is assembled, all under the same rule

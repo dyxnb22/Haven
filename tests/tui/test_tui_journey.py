@@ -193,6 +193,77 @@ async def test_reject_journey_leaves_file_untouched(tmp_path: Path) -> None:
 
 
 @pytest.mark.timeout(30)
+async def test_apply_patch_journey_through_the_approval_flow(tmp_path: Path) -> None:
+    """A multi-file patch is one approval in the TUI (ADR 0019). Soak journey:
+    the whole change is one card, and both files land on approve."""
+    repo = make_repo(tmp_path)
+    turns = [
+        [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
+        [
+            tool(
+                "c2",
+                "repo.apply_patch",
+                operations=[
+                    {
+                        "kind": "edit",
+                        "path": "src/calc.py",
+                        "old_string": "return a - b  # BUG: should be +",
+                        "new_string": "return a + b",
+                    },
+                    {"kind": "create", "path": "src/helper.py", "content": "H = 1\n"},
+                ],
+                summary="fix add and add a helper",
+            ),
+            finish("tool_calls"),
+        ],
+        [tool("c3", "repo.diff"), finish("tool_calls")],
+        [tool("c4", "repo.check", recipe_id="verify-calc"), finish("tool_calls")],
+        [text("Patched both files."), finish()],
+    ]
+    app = HavenApp(workspace=repo, services_builder=make_builder(repo, turns))
+
+    async with app.run_test() as pilot:
+        await _wait_ready(app, pilot)
+        await _submit(app, pilot, "Fix add and add a helper module")
+        # Exactly two approvals: the patch (one card for both files) then check.
+        await _approve_pending(app, pilot, "a", count=2)
+        await _settle(pilot, 60)
+        assert app._state.status == "succeeded"  # noqa: SLF001
+
+    assert "return a + b" in (repo / "src" / "calc.py").read_text()
+    assert (repo / "src" / "helper.py").read_text() == "H = 1\n"
+
+
+@pytest.mark.timeout(30)
+async def test_steering_while_running_queues_instead_of_starting_a_run(tmp_path: Path) -> None:
+    """Soak journey for ADR 0020: input typed while a run is active is routed
+    to the steer queue (delivered next turn), not refused and not a new run."""
+    repo = make_repo(tmp_path)
+    steered: list[str] = []
+
+    app = HavenApp(workspace=repo, services_builder=make_builder(repo, []))
+    async with app.run_test() as pilot:
+        await _wait_ready(app, pilot)
+
+        # Force the "a run is active" branch deterministically, then confirm
+        # the submit routes to run_service.steer rather than a new run.
+        from dataclasses import replace
+
+        app._state = replace(app._state, running=True)  # noqa: SLF001
+
+        async def _fake_steer(text: str) -> bool:
+            steered.append(text)
+            return True
+
+        app._services.run_service.steer = _fake_steer  # type: ignore[assignment]  # noqa: SLF001
+        await _submit(app, pilot, "also update the README while you are at it")
+        await _settle(pilot, 20)
+
+        assert steered == ["also update the README while you are at it"]
+        assert any("queued" in entry.text.lower() for entry in app._state.timeline)  # noqa: SLF001
+
+
+@pytest.mark.timeout(30)
 async def test_help_command_writes_to_timeline(tmp_path: Path) -> None:
     repo = make_repo(tmp_path)
     app = HavenApp(workspace=repo, services_builder=make_builder(repo, []))
