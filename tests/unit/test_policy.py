@@ -54,6 +54,29 @@ class TestEffectTools:
         assert outcome.decision is PolicyDecision.ASK
         assert outcome.reason_code == "create_requires_approval"
 
+    def test_delete_requires_approval_and_is_denied_read_only(self) -> None:
+        ask = evaluate_policy(PermissionMode.INTERACTIVE, facts(tool_name="repo.delete"))
+        assert ask.decision is PolicyDecision.ASK
+        assert ask.reason_code == "delete_requires_approval"
+        deny = evaluate_policy(PermissionMode.READ_ONLY, facts(tool_name="repo.delete"))
+        assert deny.decision is PolicyDecision.DENY
+        assert deny.reason_code == "read_only_mode"
+
+    def test_move_requires_approval_and_is_denied_read_only(self) -> None:
+        ask = evaluate_policy(PermissionMode.INTERACTIVE, facts(tool_name="repo.move"))
+        assert ask.decision is PolicyDecision.ASK
+        assert ask.reason_code == "move_requires_approval"
+        deny = evaluate_policy(PermissionMode.READ_ONLY, facts(tool_name="repo.move"))
+        assert deny.decision is PolicyDecision.DENY
+
+    def test_delete_on_protected_path_denied(self) -> None:
+        outcome = evaluate_policy(
+            PermissionMode.INTERACTIVE,
+            facts(tool_name="repo.delete", touches_protected_path=True),
+        )
+        assert outcome.decision is PolicyDecision.DENY
+        assert outcome.reason_code == "protected_path"
+
     def test_create_denied_in_read_only_mode(self) -> None:
         outcome = evaluate_policy(PermissionMode.READ_ONLY, facts(tool_name="repo.create"))
         assert outcome.decision is PolicyDecision.DENY

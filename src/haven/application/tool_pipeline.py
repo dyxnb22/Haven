@@ -38,9 +38,11 @@ from haven.contracts.tools import (
     RecipeSpec,
     RepoCheckArgs,
     RepoCreateArgs,
+    RepoDeleteArgs,
     RepoEditArgs,
     RepoExecArgs,
     RepoListArgs,
+    RepoMoveArgs,
     RepoReadArgs,
     RepoSearchArgs,
     TaskPlanArgs,
@@ -323,6 +325,68 @@ class ToolPipeline:
                 preview,
             )
 
+        if isinstance(args, RepoDeleteArgs):
+            facts = self._workspace.path_facts(args.path)
+            if not facts.within_workspace or facts.is_protected:
+                return (
+                    ToolFacts(
+                        tool_name=call.tool_name,
+                        within_workspace=facts.within_workspace,
+                        touches_protected_path=facts.is_protected,
+                        path=facts.normalized,
+                    ),
+                    None,
+                )
+            # Raises not_found if the file is absent; the pipeline turns that
+            # into a structured result. The human sees the content in the
+            # preview, so a prior read is not required — the preimage is pinned.
+            preview = await self._workspace.preview_delete(args.path)
+            return (
+                ToolFacts(
+                    tool_name=call.tool_name,
+                    within_workspace=True,
+                    touches_protected_path=False,
+                    preimage_digest=preview.preimage_digest,
+                    path=facts.normalized,
+                ),
+                preview,
+            )
+
+        if isinstance(args, RepoMoveArgs):
+            src_facts = self._workspace.path_facts(args.src)
+            dest_facts = self._workspace.path_facts(args.dest)
+            within = src_facts.within_workspace and dest_facts.within_workspace
+            protected = src_facts.is_protected or dest_facts.is_protected
+            if not within or protected:
+                return (
+                    ToolFacts(
+                        tool_name=call.tool_name,
+                        within_workspace=within,
+                        touches_protected_path=protected,
+                        path=src_facts.normalized,
+                    ),
+                    None,
+                )
+            removal, addition = await self._workspace.preview_move(args.src, args.dest)
+            combined = EditPreview(
+                path=f"{removal.path} -> {addition.path}",
+                diff=removal.diff + addition.diff,
+                preimage_digest=removal.preimage_digest,
+                postimage_digest=addition.postimage_digest,
+                insertions=addition.insertions,
+                deletions=removal.deletions,
+            )
+            return (
+                ToolFacts(
+                    tool_name=call.tool_name,
+                    within_workspace=True,
+                    touches_protected_path=False,
+                    preimage_digest=removal.preimage_digest,
+                    path=src_facts.normalized,
+                ),
+                combined,
+            )
+
         if isinstance(args, RepoExecArgs):
             facts = self._workspace.path_facts(args.cwd)
             return (
@@ -381,6 +445,14 @@ class ToolPipeline:
             preview_text = _clip(preview.diff, PREVIEW_CHARS)
             intent = f": {args.summary}" if args.summary else ""
             summary = f"create {preview.path} ({preview.insertions} new line(s)){intent}"
+        elif isinstance(args, RepoDeleteArgs) and preview is not None:
+            preview_text = _clip(preview.diff, PREVIEW_CHARS)
+            intent = f": {args.summary}" if args.summary else ""
+            summary = f"delete {preview.path} ({preview.deletions} line(s)){intent}"
+        elif isinstance(args, RepoMoveArgs) and preview is not None:
+            preview_text = _clip(preview.diff, PREVIEW_CHARS)
+            intent = f": {args.summary}" if args.summary else ""
+            summary = f"move {preview.path}{intent}"
         elif isinstance(args, RepoExecArgs):
             lines = [f"$ {shlex.join(args.argv)}", self._describe_sandbox()]
             if classify_argv(args.argv) is ExecClass.SHELL_PASSTHROUGH:
@@ -511,6 +583,12 @@ class ToolPipeline:
 
         if isinstance(args, RepoEditArgs | RepoCreateArgs):
             return await self._execute_write(ctx, call, args, ticket_digest, preview)
+
+        if isinstance(args, RepoDeleteArgs):
+            return await self._execute_delete(ctx, call, args, ticket_digest)
+
+        if isinstance(args, RepoMoveArgs):
+            return await self._execute_move(ctx, call, args, ticket_digest)
 
         if isinstance(args, RepoExecArgs):
             return await self._execute_exec(ctx, call, args, ticket_digest)
@@ -655,6 +733,106 @@ class ToolPipeline:
                 },
             )
         )
+
+    async def _execute_delete(
+        self, ctx: RunContext, call: ToolCallProposal, args: RepoDeleteArgs, ticket_digest: str
+    ) -> ToolExecution:
+        preimage = self._workspace.path_facts(args.path).digest or ""
+        await self._store.record_execution(
+            ExecutionRecord(
+                call_id=call.call_id,
+                run_id=ctx.run_id,
+                ticket_digest=ticket_digest,
+                tool_name=call.tool_name,
+                effect_state=EffectState.STARTED,
+                preimage_digest=preimage,
+                postimage_digest="",
+                path=args.path,
+            )
+        )
+        try:
+            outcome = await self._workspace.apply_delete(args.path, preimage)
+        except WorkspaceError as exc:
+            await self._store.update_execution_state(call.call_id, EffectState.FAILED)
+            return ToolExecution(_error(call, _map_ws_code(exc), str(exc)))
+        except BaseException:
+            await self._store.update_execution_state(call.call_id, EffectState.EFFECT_UNKNOWN)
+            raise
+
+        await self._store.update_execution_state(call.call_id, EffectState.CONFIRMED)
+        ctx.files_read.pop(outcome.path, None)
+        envelope = await self._emitter.emit(
+            ctx.run_id,
+            EvidenceRecorded(
+                run_id=ctx.run_id, evidence_kind="edit", summary=f"deleted {outcome.path}"
+            ),
+        )
+        ctx.ledger = ctx.ledger.with_edit(
+            EditEvidence(
+                seq=envelope.seq,
+                path=outcome.path,
+                preimage_digest=outcome.preimage_digest,
+                postimage_digest="",
+            )
+        )
+        return ToolExecution(_ok(call, {"path": outcome.path, "deleted": True}))
+
+    async def _execute_move(
+        self, ctx: RunContext, call: ToolCallProposal, args: RepoMoveArgs, ticket_digest: str
+    ) -> ToolExecution:
+        preimage = self._workspace.path_facts(args.src).digest or ""
+        await self._store.record_execution(
+            ExecutionRecord(
+                call_id=call.call_id,
+                run_id=ctx.run_id,
+                ticket_digest=ticket_digest,
+                tool_name=call.tool_name,
+                effect_state=EffectState.STARTED,
+                preimage_digest=preimage,
+                postimage_digest="",
+                path=args.src,
+            )
+        )
+        try:
+            removal, addition = await self._workspace.apply_move(args.src, args.dest, preimage)
+        except WorkspaceError as exc:
+            await self._store.update_execution_state(call.call_id, EffectState.FAILED)
+            return ToolExecution(_error(call, _map_ws_code(exc), str(exc)))
+        except BaseException:
+            await self._store.update_execution_state(call.call_id, EffectState.EFFECT_UNKNOWN)
+            raise
+
+        await self._store.update_execution_state(
+            call.call_id, EffectState.CONFIRMED, addition.postimage_digest
+        )
+        ctx.files_read.pop(removal.path, None)
+        # The agent now knows the destination's contents (they are the source's).
+        ctx.files_read[addition.path] = addition.postimage_digest
+        envelope = await self._emitter.emit(
+            ctx.run_id,
+            EvidenceRecorded(
+                run_id=ctx.run_id,
+                evidence_kind="edit",
+                summary=f"moved {removal.path} -> {addition.path}",
+            ),
+        )
+        # Both halves are the run's changes: the removal and the addition.
+        ctx.ledger = ctx.ledger.with_edit(
+            EditEvidence(
+                seq=envelope.seq,
+                path=removal.path,
+                preimage_digest=removal.preimage_digest,
+                postimage_digest="",
+            )
+        ).with_edit(
+            EditEvidence(
+                seq=envelope.seq,
+                path=addition.path,
+                preimage_digest="",
+                postimage_digest=addition.postimage_digest,
+            )
+        )
+        return ToolExecution(_ok(call, {"src": removal.path, "dest": addition.path, "moved": True}))
 
     def _sandbox_spec(self) -> SandboxSpec:
         return SandboxSpec(

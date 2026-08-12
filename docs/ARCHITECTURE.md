@@ -103,7 +103,7 @@ reconstructs the same screen (Trace drives the same presenter reducer).
 
 ## Tool surface
 
-Nine tools, deliberately: enough to complete a real repository task, small
+Eleven tools, deliberately: enough to complete a real repository task, small
 enough that every one has an explicit policy classification. A unit test asserts
 that the registry and the policy's tool sets stay in sync and that no
 side-effecting tool is ever auto-allowed, so adding a tool cannot create an
@@ -118,6 +118,8 @@ that exactly one class enjoys that exception.
 | `repo.read` | allow / allow | regular UTF-8 files, line and byte caps; records the digest that later binds an edit |
 | `repo.edit` | ask / deny | existing files only, preimage-bound, unique match unless `occurrence` or `replace_all` is set |
 | `repo.create` | ask / deny | new paths only — fails on anything that exists, so it can never blank an unread file |
+| `repo.delete` | ask / deny | existing files only, content pinned at approval so a concurrent change fails closed |
+| `repo.move` | ask / deny | rename/move; fails if the destination exists, so it never silently overwrites |
 | `repo.diff` | allow / allow | shows only what *this run* changed, including created files |
 | `repo.exec` | allow if classified read-only, else ask / deny | argv array only (no shell string), OS sandbox, no network, `$HOME` unreadable; output is never evidence |
 | `repo.check` | ask / deny | registered recipe ids only, fixed argv, scrubbed env, timeout, bounded output, same sandbox |

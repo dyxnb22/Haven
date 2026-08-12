@@ -16,7 +16,7 @@ from haven.contracts.base import StrictModel
 from haven.contracts.model import ToolSchema
 from haven.domain.enums import ToolErrorCode, ToolStatus
 
-TOOL_VERSION = "2"
+TOOL_VERSION = "3"
 
 
 class RepoListArgs(StrictModel):
@@ -74,6 +74,23 @@ class RepoCreateArgs(StrictModel):
     summary: str = Field(default="", max_length=300, description="One-line intent of this change.")
 
 
+class RepoDeleteArgs(StrictModel):
+    """Delete an existing file. Requires approval; the file's content is pinned
+    at approval time so a concurrent change fails closed."""
+
+    path: str = Field(description="File path relative to the workspace root.")
+    summary: str = Field(default="", max_length=300, description="One-line intent of this change.")
+
+
+class RepoMoveArgs(StrictModel):
+    """Move or rename a file. Fails if the destination already exists, so a move
+    can never silently overwrite."""
+
+    src: str = Field(description="Existing file path relative to the workspace root.")
+    dest: str = Field(description="New path relative to the workspace root.")
+    summary: str = Field(default="", max_length=300, description="One-line intent of this change.")
+
+
 class RepoExecArgs(StrictModel):
     """Run one program inside an OS sandbox."""
 
@@ -127,6 +144,8 @@ ToolArgs = (
     | RepoReadArgs
     | RepoEditArgs
     | RepoCreateArgs
+    | RepoDeleteArgs
+    | RepoMoveArgs
     | RepoExecArgs
     | RepoDiffArgs
     | RepoCheckArgs
@@ -139,6 +158,8 @@ ARGS_MODELS: dict[str, type[ToolArgs]] = {
     "repo.read": RepoReadArgs,
     "repo.edit": RepoEditArgs,
     "repo.create": RepoCreateArgs,
+    "repo.delete": RepoDeleteArgs,
+    "repo.move": RepoMoveArgs,
     "repo.exec": RepoExecArgs,
     "repo.diff": RepoDiffArgs,
     "repo.check": RepoCheckArgs,
@@ -163,6 +184,16 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "Create a NEW file with the given contents. Requires user approval. Fails if the "
         "path already exists — use repo.edit for existing files. Parent directories are "
         "created as needed."
+    ),
+    "repo.delete": (
+        "Delete an EXISTING file. Requires user approval. The file's content is "
+        "pinned when you propose the deletion, so if it changes before you are "
+        "approved the delete is refused and you must look again."
+    ),
+    "repo.move": (
+        "Move or rename an existing file to a new path. Requires user approval. "
+        "Fails if the destination already exists — delete or edit it first — so a "
+        "move never silently overwrites."
     ),
     "repo.exec": (
         "Run a program inside an OS sandbox: no network, writes confined to the "

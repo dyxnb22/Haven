@@ -16,7 +16,7 @@ from haven.domain.exec_policy import ExecClass
 READ_ONLY_TOOLS = frozenset({"repo.list", "repo.search", "repo.read", "repo.diff"})
 
 #: Tools with side effects on files or processes.
-EFFECT_TOOLS = frozenset({"repo.edit", "repo.create", "repo.check"})
+EFFECT_TOOLS = frozenset({"repo.edit", "repo.create", "repo.delete", "repo.move", "repo.check"})
 
 #: Tools that only mutate the run's own in-memory state. They touch nothing on
 #: disk and nothing outside the run, so they are allowed even in read_only mode.
@@ -98,6 +98,12 @@ def evaluate_policy(mode: PermissionMode, facts: ToolFacts) -> PolicyOutcome:
 
     if facts.tool_name == "repo.create":
         return PolicyOutcome(PolicyDecision.ASK, "create_requires_approval", RiskLevel.MEDIUM)
+
+    if facts.tool_name == "repo.delete":
+        return PolicyOutcome(PolicyDecision.ASK, "delete_requires_approval", RiskLevel.MEDIUM)
+
+    if facts.tool_name == "repo.move":
+        return PolicyOutcome(PolicyDecision.ASK, "move_requires_approval", RiskLevel.MEDIUM)
 
     # repo.edit
     return PolicyOutcome(PolicyDecision.ASK, "write_requires_approval", RiskLevel.MEDIUM)

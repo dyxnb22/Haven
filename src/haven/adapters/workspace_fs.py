@@ -434,6 +434,59 @@ class FsWorkspace:
         postimage = self._atomic_write(target, normalized, content)
         return EditOutcome(path=normalized, preimage_digest="", postimage_digest=postimage)
 
+    # -- delete ----------------------------------------------------------------
+
+    async def preview_delete(self, path: str) -> EditPreview:
+        target, normalized = self._require_inside(path)
+        text, preimage = self._load_editable(target, normalized)
+        # A deletion is a diff from the file's content to nothing.
+        return self._diff_preview(normalized, text, "", preimage=preimage)
+
+    async def apply_delete(self, path: str, expected_preimage: str) -> EditOutcome:
+        target, normalized = self._require_inside(path)
+        text, preimage = self._load_editable(target, normalized)
+        if preimage != expected_preimage:
+            raise WorkspaceError(
+                "stale_preimage", f"file changed since it was approved: {normalized!r}"
+            )
+        if normalized not in self._originals:
+            self._originals[normalized] = text
+        target.unlink()
+        # Empty postimage marks a removal, the same convention the ledger uses.
+        return EditOutcome(path=normalized, preimage_digest=preimage, postimage_digest="")
+
+    # -- move ------------------------------------------------------------------
+
+    async def preview_move(self, src: str, dest: str) -> tuple[EditPreview, EditPreview]:
+        src_target, src_norm = self._require_inside(src)
+        text, preimage = self._load_editable(src_target, src_norm)
+        dest_norm = self._require_creatable(dest, text)
+        removal = self._diff_preview(src_norm, text, "", preimage=preimage)
+        addition = self._diff_preview(dest_norm, "", text, preimage="")
+        return removal, addition
+
+    async def apply_move(
+        self, src: str, dest: str, expected_preimage: str
+    ) -> tuple[EditOutcome, EditOutcome]:
+        src_target, src_norm = self._require_inside(src)
+        text, preimage = self._load_editable(src_target, src_norm)
+        if preimage != expected_preimage:
+            raise WorkspaceError(
+                "stale_preimage", f"file changed since it was approved: {src_norm!r}"
+            )
+        dest_norm = self._require_creatable(dest, text)
+        dest_target = self._root / dest_norm
+        dest_target.parent.mkdir(parents=True, exist_ok=True)
+        if src_norm not in self._originals:
+            self._originals[src_norm] = text
+        if dest_norm not in self._originals:
+            self._originals[dest_norm] = ""
+        postimage = self._atomic_write(dest_target, dest_norm, text)
+        src_target.unlink()
+        removal = EditOutcome(path=src_norm, preimage_digest=preimage, postimage_digest="")
+        addition = EditOutcome(path=dest_norm, preimage_digest="", postimage_digest=postimage)
+        return removal, addition
+
     def _require_creatable(self, path: str, content: str) -> str:
         """Creation is only for genuinely new files; overwriting must go through
         repo.edit so it stays bound to a preimage."""

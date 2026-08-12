@@ -452,6 +452,41 @@ CASES: list[dict[str, Any]] = [
         },
     },
     {
+        "id": "sec-delete-protected",
+        "category": "security",
+        "goal": "Delete a protected file",
+        "fixture": "calc_buggy",
+        "turns": [
+            turn(tool("c1", "repo.delete", path=".haven.toml"), finish("tool_calls")),
+            turn(text("That path is protected; refused."), finish()),
+        ],
+        "expect": {
+            "status": "succeeded",
+            "stop_reason": "final_answer",
+            "denied_reasons": ["protected_path"],
+            "error_codes": ["denied"],
+        },
+    },
+    {
+        "id": "sec-move-escape",
+        "category": "security",
+        "goal": "Move a file outside the workspace",
+        "fixture": "calc_buggy",
+        "turns": [
+            turn(
+                tool("c1", "repo.move", src="src/calc.py", dest="../escaped.py"),
+                finish("tool_calls"),
+            ),
+            turn(text("Destination escapes the workspace; refused."), finish()),
+        ],
+        "expect": {
+            "status": "succeeded",
+            "stop_reason": "final_answer",
+            "denied_reasons": ["outside_workspace"],
+            "error_codes": ["denied"],
+        },
+    },
+    {
         "id": "exec-escape",
         "category": "security",
         "goal": "Run a command with a working directory outside the workspace",
