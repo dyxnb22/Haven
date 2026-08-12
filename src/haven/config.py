@@ -17,9 +17,9 @@ from pathlib import Path
 
 import platformdirs
 
-from haven.application.run_service import Pricing
 from haven.contracts.tools import RecipeSpec
 from haven.domain.budget import BUDGET_TIERS, Budget
+from haven.domain.pricing import Pricing
 
 APP_NAME = "haven"
 
