@@ -60,10 +60,11 @@ channel (exfiltration into the model's context).
 ```python
 class RepoExecArgs(StrictModel):
     """Run one program inside an OS sandbox."""
-    argv: tuple[str, ...]        # min 1, max 64 items, each ≤ 4096 chars
-    cwd: str = "."               # workspace-relative
+
+    argv: tuple[str, ...]  # min 1, max 64 items, each ≤ 4096 chars
+    cwd: str = "."  # workspace-relative
     timeout_seconds: float = 60.0  # ge 1, le 300
-    summary: str = ""            # ≤ 300 chars, one-line intent
+    summary: str = ""  # ≤ 300 chars, one-line intent
 ```
 
 Registered as `repo.exec`; `TOOL_VERSION` bumps `"1"` → `"2"` (tickets and
@@ -77,9 +78,10 @@ off; writes are confined to the workspace; output is truncated; use
 
 ```python
 class ExecClass(StrEnum):
-    SAFE_READ = "safe_read"                # allow; read-only sandbox
+    SAFE_READ = "safe_read"  # allow; read-only sandbox
     SHELL_PASSTHROUGH = "shell_passthrough"  # ask (HIGH risk); write sandbox
-    OTHER = "other"                        # ask (MEDIUM risk); write sandbox
+    OTHER = "other"  # ask (MEDIUM risk); write sandbox
+
 
 def classify_argv(argv: tuple[str, ...]) -> ExecClass: ...
 ```
@@ -123,9 +125,9 @@ New port `ports/sandbox.py`:
 @dataclass(frozen=True, slots=True)
 class SandboxSpec:
     workspace_root: Path
-    scratch_dir: Path              # per-run writable temp dir
-    writable: bool                 # False → workspace is read-only too
-    allow_network: bool = False    # exec: always False; recipes may opt in
+    scratch_dir: Path  # per-run writable temp dir
+    writable: bool  # False → workspace is read-only too
+    allow_network: bool = False  # exec: always False; recipes may opt in
     #: Never readable. Bootstrap passes the user's home; the workspace and
     #: scratch grants below re-open the parts the run legitimately needs.
     private_roots: tuple[Path, ...] = ()
@@ -134,9 +136,10 @@ class SandboxSpec:
     extra_readable_roots: tuple[Path, ...] = ()
     protected_subpaths: tuple[str, ...] = (".git", ".haven.toml")
 
+
 class SandboxLauncher(Protocol):
     @property
-    def backend(self) -> str: ...          # "seatbelt" | "landlock"
+    def backend(self) -> str: ...  # "seatbelt" | "landlock"
     def available(self) -> bool: ...
     def wrap(self, argv: tuple[str, ...], spec: SandboxSpec) -> tuple[str, ...]: ...
     def describe(self, spec: SandboxSpec) -> str: ...  # for the approval card
@@ -195,16 +198,21 @@ Backend selection in bootstrap: darwin → Seatbelt (available iff
 ```python
 @dataclass(frozen=True, slots=True)
 class ExecSpec:
-    argv: tuple[str, ...]   # the program the model proposed, unwrapped
+    argv: tuple[str, ...]  # the program the model proposed, unwrapped
     cwd: Path
     timeout_seconds: float
     sandbox: SandboxSpec
 
+
 @dataclass(frozen=True, slots=True)
 class ExecOutcome:
-    exit_code: int; duration_ms: int
-    stdout_tail: str; stderr_tail: str
-    truncated: bool; timed_out: bool
+    exit_code: int
+    duration_ms: int
+    stdout_tail: str
+    stderr_tail: str
+    truncated: bool
+    timed_out: bool
+
 
 class ExecutorPort(Protocol):
     async def run_recipe(self, recipe: RecipeSpec, workspace_root: Path) -> CheckOutcome: ...

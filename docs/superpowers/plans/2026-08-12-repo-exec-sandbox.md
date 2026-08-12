@@ -323,9 +323,7 @@ class TestExecTool:
         assert outcome.risk is RiskLevel.HIGH
 
     def test_denied_in_read_only_mode_even_when_safe(self) -> None:
-        outcome = evaluate_policy(
-            PermissionMode.READ_ONLY, self.exec_facts(exec_class="safe_read")
-        )
+        outcome = evaluate_policy(PermissionMode.READ_ONLY, self.exec_facts(exec_class="safe_read"))
         assert outcome.decision is PolicyDecision.DENY
         assert outcome.reason_code == "read_only_mode"
 
@@ -346,9 +344,18 @@ class TestExecTool:
         assert outcome.reason_code == "protected_path"
 ```
 
-Replace the two existing completeness tests with these three:
+In the existing `TestPolicyCompleteness` class, keep
+`test_every_registered_tool_has_a_policy` and replace the other two methods so
+the class reads:
 
 ```python
+class TestPolicyCompleteness:
+    def test_every_registered_tool_has_a_policy(self) -> None:
+        """A new tool must be classified, not silently fall through to ASK."""
+        from haven.contracts.tools import ARGS_MODELS
+
+        assert set(ARGS_MODELS) == KNOWN_TOOLS
+
     def test_tool_categories_are_disjoint(self) -> None:
         groups = (READ_ONLY_TOOLS, EFFECT_TOOLS, STATE_TOOLS, EXEC_TOOLS)
         for index, left in enumerate(groups):
@@ -368,9 +375,7 @@ Replace the two existing completeness tests with these three:
             for exec_class in ("safe_read", "shell_passthrough", "other")
             if evaluate_policy(
                 PermissionMode.INTERACTIVE,
-                ToolFacts(
-                    tool_name="repo.exec", exec_class=exec_class, sandbox_available=True
-                ),
+                ToolFacts(tool_name="repo.exec", exec_class=exec_class, sandbox_available=True),
             ).decision
             is PolicyDecision.ALLOW
         ]
@@ -850,9 +855,7 @@ def build_profile(spec: SandboxSpec) -> str:
         for root in (spec.workspace_root, spec.scratch_dir):
             lines.append(f"(allow file-write* (subpath {_literal(root)}))")
         for subpath in spec.protected_subpaths:
-            lines.append(
-                f"(deny file-write* (subpath {_literal(spec.workspace_root / subpath)}))"
-            )
+            lines.append(f"(deny file-write* (subpath {_literal(spec.workspace_root / subpath)}))")
     for device in _WRITABLE_DEVICES:
         lines.append(f"(allow file-write-data (literal {_literal(Path(device))}))")
 
@@ -959,9 +962,7 @@ class TestEncoding:
 
     def test_workspace_is_readable_even_inside_a_private_root(self) -> None:
         payload = json.loads(
-            encode_spec(
-                spec(workspace_root=Path("/home/me/ws"), private_roots=(Path("/home/me"),))
-            )
+            encode_spec(spec(workspace_root=Path("/home/me/ws"), private_roots=(Path("/home/me"),)))
         )
         assert str(Path("/home/me/ws")) in payload["readable"]
 
@@ -1650,8 +1651,8 @@ Expected: FAIL, `ToolPipeline.__init__() got an unexpected keyword argument 'lau
 In `src/haven/application/tool_pipeline.py`, add to the constructor signature and body:
 
 ```python
-        launcher: SandboxLauncher | None = None,
-        scratch_dir: Path | None = None,
+launcher: SandboxLauncher | None = (None,)
+scratch_dir: Path | None = (None,)
 ```
 
 ```python
@@ -1699,9 +1700,11 @@ Add the dispatch in `_run_ticketed`, before the `RepoCheckArgs` branch:
             return await self._execute_exec(ctx, call, args, ticket_digest)
 ```
 
-Add the helpers:
+Add these three methods to the existing `ToolPipeline` class, next to
+`_execute_check`:
 
 ```python
+class ToolPipeline:  # existing class; these are new methods on it
     def _sandbox_spec(self) -> SandboxSpec:
         return SandboxSpec(
             workspace_root=self._workspace.root,
@@ -1770,13 +1773,10 @@ Add the helpers:
 
 Deliberately absent: any `ctx.ledger.with_check(...)` call. Exec produces no evidence, and that omission is the feature.
 
-Pass the backend into `ExecutionStarted` where the event is emitted:
-
-```python
-                sandbox_backend=self._launcher.backend if self._launcher is not None else "",
-```
-
-(The field itself is added in Task 9; if you are executing tasks in order, add this line there instead.)
+Where `ExecutionStarted` is emitted, add a `sandbox_backend` keyword argument
+whose value is `self._launcher.backend` when a launcher is configured and `""`
+otherwise. The field itself is added in Task 9; if you are executing tasks in
+order, add the argument there instead.
 
 Add the imports this module now needs: `shlex`, `tempfile`, `from pathlib import Path`, `RepoExecArgs`, `ExecClass`, `classify_argv`, `ExecSpec`, `SandboxSpec`, `SandboxLauncher`, `default_private_roots`, `default_readable_roots`.
 
@@ -2179,9 +2179,7 @@ class TestResourceBounds:
                 argv=(sys.executable, "-c", "import time; time.sleep(60)"),
                 cwd=workspace,
                 timeout_seconds=2.0,
-                sandbox=SandboxSpec(
-                    workspace_root=workspace, scratch_dir=scratch, writable=True
-                ),
+                sandbox=SandboxSpec(workspace_root=workspace, scratch_dir=scratch, writable=True),
             )
         )
         assert outcome.timed_out is True
