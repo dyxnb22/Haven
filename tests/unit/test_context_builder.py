@@ -85,6 +85,16 @@ class TestProvenance:
         assert segments[-1].trust == "trusted"
 
 
+class TestReasoningEffort:
+    def test_absent_by_default(self) -> None:
+        request, _ = builder().build([], BudgetUsage())
+        assert request.reasoning_effort is None
+
+    def test_carried_onto_the_request_when_set(self) -> None:
+        request, _ = builder(reasoning_effort="high").build([], BudgetUsage())
+        assert request.reasoning_effort == "high"
+
+
 class TestExecRule:
     def test_rule_states_the_confinement_and_the_evidence_limit(self) -> None:
         request, _ = builder(sandbox_backend="seatbelt").build([], BudgetUsage())

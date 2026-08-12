@@ -98,6 +98,7 @@ class ContextBuilder:
         max_output_tokens: int = 4096,
         sandbox_backend: str = "",
         max_context_chars: int = MAX_CONTEXT_CHARS,
+        reasoning_effort: str | None = None,
     ) -> None:
         self._goal = goal
         self._tools = tools
@@ -107,6 +108,7 @@ class ContextBuilder:
         self._max_output_tokens = max_output_tokens
         self._sandbox_backend = sandbox_backend
         self._max_context_chars = max_context_chars
+        self._reasoning_effort = reasoning_effort
 
     def system_prompt(self) -> str:
         """Fixed operating rules only.
@@ -251,6 +253,7 @@ class ContextBuilder:
             tools=self._tools,
             max_output_tokens=self._max_output_tokens,
             temperature=0.0,
+            reasoning_effort=self._reasoning_effort,
         )
         segments = tuple(
             ContextSegment(

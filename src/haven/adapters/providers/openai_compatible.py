@@ -166,6 +166,8 @@ class OpenAICompatibleModel:
         }
         if request.max_output_tokens is not None:
             payload["max_tokens"] = request.max_output_tokens
+        if request.reasoning_effort is not None:
+            payload["reasoning_effort"] = request.reasoning_effort
         if request.tools:
             payload["tools"] = [
                 {

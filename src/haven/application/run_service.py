@@ -209,6 +209,7 @@ class RunService:
             project_guidance=self._project_guidance,
             sandbox_backend=self._launcher.backend if self._launcher is not None else "",
             max_context_chars=self._profile.max_context_chars,
+            reasoning_effort=self._profile.reasoning_effort,
         )
         stuck = StuckLoopDetector()
         started = time.monotonic()

@@ -54,6 +54,10 @@ class ModelRequest(StrictModel):
     tools: tuple[ToolSchema, ...] = ()
     max_output_tokens: int | None = None
     temperature: float = 0.0
+    #: Provider reasoning budget (e.g. "low"/"medium"/"high"). Sent only when
+    #: set, so leaving it None means "whatever the provider defaults to" rather
+    #: than a value Haven chose. Carried from the model profile.
+    reasoning_effort: str | None = None
 
 
 # --- streaming events -------------------------------------------------------

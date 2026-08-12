@@ -144,6 +144,30 @@ async def test_tool_call_delta_assembly() -> None:
     assert finished.finish_reason == "tool_calls"
 
 
+async def _send(req: ModelRequest) -> dict[str, Any]:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, content=chunk({}, finish="stop") + b"data: [DONE]\n\n")
+
+    model = make_model(handler)
+    try:
+        async for _ in model.generate_stream(req):
+            pass
+    finally:
+        await model.aclose()
+    return captured
+
+
+async def test_reasoning_effort_is_sent_only_when_set() -> None:
+    with_effort = await _send(request().model_copy(update={"reasoning_effort": "high"}))
+    assert with_effort["reasoning_effort"] == "high"
+
+    without = await _send(request())
+    assert "reasoning_effort" not in without
+
+
 async def test_interleaved_tool_calls_are_assembled_separately() -> None:
     """A model may emit several calls in one turn, and their argument deltas
     arrive interleaved. Each index must accumulate into its own call."""
