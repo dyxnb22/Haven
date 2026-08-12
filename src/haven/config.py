@@ -186,13 +186,17 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
                 raise ConfigError(f"[pricing] in {user_path} must be a table")
             input_price = pricing_raw.get("input_per_1m_usd", 0.0)
             output_price = pricing_raw.get("output_per_1m_usd", 0.0)
+            cached_price = pricing_raw.get("cached_input_per_1m_usd")
             if not isinstance(input_price, int | float) or not isinstance(
                 output_price, int | float
             ):
                 raise ConfigError(f"[pricing] values in {user_path} must be numbers")
+            if cached_price is not None and not isinstance(cached_price, int | float):
+                raise ConfigError(f"[pricing] values in {user_path} must be numbers")
             pricing = Pricing(
                 input_per_1m_usd=float(input_price),
                 output_per_1m_usd=float(output_price),
+                cached_input_per_1m_usd=(float(cached_price) if cached_price is not None else None),
             )
             sources["pricing"] = "user"
         if recipes_raw := raw.get("recipes"):

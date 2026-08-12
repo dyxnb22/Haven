@@ -18,6 +18,7 @@ from typing import Literal
 from haven.application.approvals import ApprovalResponder
 from haven.application.context_builder import ContextBuilder
 from haven.application.emitter import EventEmitter
+from haven.application.profiles import profile_for
 from haven.application.registry import ToolRegistry
 from haven.application.state import RunContext
 from haven.application.tool_pipeline import ToolPipeline
@@ -56,6 +57,7 @@ from haven.domain.digest import digest_of
 from haven.domain.enums import PermissionMode, RunStatus, StopReason
 from haven.domain.evidence import evaluate_evidence_gate
 from haven.domain.ids import RunId, new_run_id
+from haven.domain.pricing import Pricing
 from haven.domain.stuck import StuckLoopDetector
 from haven.ports.executor import ExecutorPort
 from haven.ports.model import ModelPort, ProviderError
@@ -77,17 +79,6 @@ class _StreamProgress:
     """Whether a stream produced anything before failing; gates retry safety."""
 
     started: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class Pricing:
-    input_per_1m_usd: float = 0.0
-    output_per_1m_usd: float = 0.0
-
-    def cost(self, input_tokens: int, output_tokens: int) -> float:
-        return (
-            input_tokens * self.input_per_1m_usd + output_tokens * self.output_per_1m_usd
-        ) / 1_000_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +129,9 @@ class RunService:
         self._recipes = recipes
         self._registry = ToolRegistry()
         self._launcher = launcher
+        # Per-model defaults; an unknown model inherits Haven's historical
+        # behavior rather than numbers guessed from a similar name.
+        self._profile = profile_for(model.model_name)
         # One scratch directory per service, removed when a run finishes. It
         # exists so sandboxed tools that must write somewhere do not need write
         # access outside the workspace.
@@ -210,6 +204,7 @@ class RunService:
             recipe_ids=tuple(self._recipes),
             project_guidance=self._project_guidance,
             sandbox_backend=self._launcher.backend if self._launcher is not None else "",
+            max_context_chars=self._profile.max_context_chars,
         )
         stuck = StuckLoopDetector()
         started = time.monotonic()
@@ -504,7 +499,7 @@ class RunService:
             estimated = True
             input_tokens = sum(len(m.content) for m in request.messages) // 4
             output_tokens = max(1, len(result.text) // 4)
-        cost = self._pricing.cost(input_tokens, output_tokens)
+        cost = self._pricing.cost(input_tokens, output_tokens, usage.cached_input_tokens)
         ctx.usage = ctx.usage.charge_tokens(
             input_tokens,
             output_tokens,

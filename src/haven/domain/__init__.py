@@ -42,6 +42,7 @@ from haven.domain.policy import (
     ToolFacts,
     evaluate_policy,
 )
+from haven.domain.pricing import Pricing
 from haven.domain.review import ReviewFinding, review_diff
 from haven.domain.stuck import StuckLoopDetector, call_fingerprint
 from haven.domain.ticket import ExecutionTicket, mint_ticket
@@ -72,6 +73,7 @@ __all__ = [
     "PermissionMode",
     "PolicyDecision",
     "PolicyOutcome",
+    "Pricing",
     "ReviewFinding",
     "RiskLevel",
     "RunId",
