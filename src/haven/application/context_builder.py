@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from haven.application.compaction import summarize_dropped
+from haven.application.compaction import enforce_hard_limit, summarize_dropped
 from haven.contracts.events import ContextSegment
 from haven.contracts.model import ModelMessage, ModelRequest, ToolSchema
 from haven.contracts.tools import PlanStep
@@ -109,6 +109,39 @@ class ContextBuilder:
         self._sandbox_backend = sandbox_backend
         self._max_context_chars = max_context_chars
         self._reasoning_effort = reasoning_effort
+
+    def _build_tail(self, plan: tuple[PlanStep, ...], usage: BudgetUsage) -> list[_Selected]:
+        """The volatile tail: the plan (if any) and the live run-status line,
+        both kept last so they never shift the cacheable prefix (ADR 0008)."""
+        tail: list[_Selected] = []
+        if plan:
+            # Rendered fresh from State every turn rather than left in the
+            # transcript, so budget truncation can never drop the agent's plan.
+            tail.append(
+                _Selected(
+                    message=ModelMessage(role="user", content=_render_plan(plan)),
+                    source="task_plan",
+                    # Model-authored text: untrusted, like any other model output.
+                    trust="untrusted",
+                    reason="the agent's own plan, restated from run state (kept near the tail)",
+                )
+            )
+        tail.append(
+            _Selected(
+                message=ModelMessage(
+                    role="user",
+                    content=(
+                        f"(run status: step {usage.steps}/{self._budget.max_steps}, "
+                        f"tool calls {usage.tool_calls}/{self._budget.max_tool_calls})"
+                    ),
+                ),
+                source="run_status",
+                # Program-generated fact, not model output.
+                trust="trusted",
+                reason="live budget counters, kept last so the prefix stays cacheable",
+            )
+        )
+        return tail
 
     def system_prompt(self) -> str:
         """Fixed operating rules only.
@@ -203,10 +236,18 @@ class ContextBuilder:
                 reason="the task being solved",
             )
         )
+        # The volatile tail (plan + run status) is built first so its size can
+        # be reserved: it is always appended after the transcript, so the
+        # transcript's budget must leave room for it or the total would exceed
+        # the ceiling.
+        tail = self._build_tail(plan, usage)
         # --- stable prefix ends; append-only transcript continues it ---
-        kept, digest, position = summarize_dropped(
-            transcript, self._max_context_chars - _head_size(selected)
-        )
+        # `max_context_chars` is the budget for selected messages and sits well
+        # below the model's real token window (the profile leaves headroom for
+        # the tool schemas and the reserved output, which also travel on the
+        # wire); the assertion at the end of build() proves that headroom holds.
+        history_limit = max(0, self._max_context_chars - _head_size(selected) - _head_size(tail))
+        kept, digest, position = summarize_dropped(transcript, history_limit)
         history = [_classify(message) for message in kept]
         if digest:
             history.insert(
@@ -221,39 +262,27 @@ class ContextBuilder:
                     reason="facts condensed from tool outputs dropped to fit the budget",
                 ),
             )
+        # Hard backstop: summarize_dropped only removes droppable tool units,
+        # so a history of user/narrative turns (gate feedback) plus the digest
+        # can still overflow the same limit. Force it under, truncating as a
+        # last resort, so a request is never sent over budget (Phase 5). In the
+        # common case summarize_dropped already fit, so this is a no-op.
+        history = _fit_history(history, history_limit)
         selected.extend(history)
 
         # --- volatile tail: everything that changes turn to turn goes last, so
         # it never shifts the cacheable prefix (ADR 0008) ---
-        if plan:
-            # Rendered fresh from State every turn rather than left in the
-            # transcript, so budget truncation can never drop the agent's plan.
-            selected.append(
-                _Selected(
-                    message=ModelMessage(role="user", content=_render_plan(plan)),
-                    source="task_plan",
-                    # Model-authored text: untrusted, like any other model output.
-                    trust="untrusted",
-                    reason="the agent's own plan, restated from run state (kept near the tail)",
-                )
-            )
-        selected.append(
-            _Selected(
-                message=ModelMessage(
-                    role="user",
-                    content=(
-                        f"(run status: step {usage.steps}/{self._budget.max_steps}, "
-                        f"tool calls {usage.tool_calls}/{self._budget.max_tool_calls})"
-                    ),
-                ),
-                source="run_status",
-                # Program-generated fact, not model output.
-                trust="trusted",
-                reason="live budget counters, kept last so the prefix stays cacheable",
-            )
-        )
+        selected.extend(tail)
 
         fitted = selected
+        # The hard budget is real: assembled messages must never exceed the
+        # message budget. The backstop above guarantees the transcript's share;
+        # the head is fixed and small. This assertion turns any future regression
+        # (a new always-present segment that overflows) into a loud failure
+        # rather than a silent over-budget request.
+        assert sum(len(item.message.content) for item in fitted) <= self._max_context_chars, (
+            "context builder produced an over-budget request"
+        )
         request = ModelRequest(
             messages=tuple(item.message for item in fitted),
             tools=self._tools,
@@ -277,3 +306,38 @@ def _head_size(selected: list[_Selected]) -> int:
     """Characters already spent on the stable head, so the transcript's share
     of the budget accounts for the system rules and guidance above it."""
     return sum(len(item.message.content) for item in selected)
+
+
+def _fit_history(history: list[_Selected], limit: int) -> list[_Selected]:
+    """Force the kept transcript under `limit` as a hard backstop.
+
+    Reuses the same message-level clamp compaction uses, then re-wraps the
+    surviving (possibly truncated) messages back into `_Selected` so the
+    segment view stays honest. Dropped-oldest-first; the newest message is
+    truncated rather than removed, so history is never empty when it had
+    content.
+    """
+    original = [item.message for item in history]
+    fitted = enforce_hard_limit(original, limit)
+    if fitted == original:
+        return history
+    # Map surviving messages back to their selection metadata by identity;
+    # a truncated tail message is a fresh object, so fall back to the last
+    # item's metadata for it.
+    by_id = {id(item.message): item for item in history}
+    out: list[_Selected] = []
+    for message in fitted:
+        source = by_id.get(id(message))
+        if source is not None:
+            out.append(source)
+        else:
+            template = history[-1]
+            out.append(
+                _Selected(
+                    message=message,
+                    source=template.source,
+                    trust=template.trust,
+                    reason="truncated to fit the context budget",
+                )
+            )
+    return out

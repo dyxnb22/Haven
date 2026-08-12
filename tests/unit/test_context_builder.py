@@ -202,6 +202,41 @@ class TestPlanReinjection:
         assert any(s.source == "run_digest" for s in segments)
 
 
+class TestHardBudgetClamp:
+    """summarize_dropped only removes droppable tool units; the hard clamp is
+    the backstop that guarantees a request never exceeds the message budget,
+    whatever the transcript is made of (Phase 5)."""
+
+    def test_undroppable_user_turns_are_forced_under_budget(self) -> None:
+        # User turns (gate feedback) are never droppable by compaction, so a
+        # pile of them alone can overflow — the clamp must still fit them.
+        big_user_turns = [
+            ModelMessage(role="user", content=f"gate feedback {i}: " + "y" * 30_000)
+            for i in range(6)
+        ]
+        request, _ = builder().build(big_user_turns, BudgetUsage())
+        total = sum(len(m.content) for m in request.messages)
+        assert total <= MAX_CONTEXT_CHARS
+        # The stable head is always present and never dropped.
+        assert "You are Haven" in request.messages[0].content
+        assert "Task: fix the bug" in request.messages[1].content
+
+    def test_a_single_oversized_message_is_truncated_not_dropped(self) -> None:
+        request, _ = builder().build(
+            [ModelMessage(role="user", content="z" * 200_000)], BudgetUsage()
+        )
+        total = sum(len(m.content) for m in request.messages)
+        assert total <= MAX_CONTEXT_CHARS
+        assert any("truncated to fit the context budget" in m.content for m in request.messages)
+
+    def test_the_request_is_never_left_empty(self) -> None:
+        request, _ = builder().build(
+            [ModelMessage(role="user", content="q" * 500_000)], BudgetUsage()
+        )
+        # System + goal + the (truncated) turn + run status all survive.
+        assert len(request.messages) >= 3
+
+
 class TestDeterministicCompaction:
     def test_small_context_is_untouched(self) -> None:
         transcript = [tool_message("small output")]

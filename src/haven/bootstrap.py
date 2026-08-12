@@ -185,14 +185,68 @@ async def build_services(
     )
 
 
+#: Instruction filenames Haven honors, in the order they are concatenated.
+#: AGENTS.md is the standard; CLAUDE.md is read for cross-tool compatibility.
+_GUIDANCE_FILENAMES = ("AGENTS.md", "CLAUDE.md")
+#: How many workspace subdirectories may contribute a scoped AGENTS.md. Bounded
+#: so a large monorepo cannot blow up the context, and so guidance stays a
+#: small, auditable set rather than an unbounded crawl.
+_MAX_SCOPED_GUIDANCE = 6
+
+
 async def _read_guidance(workspace: FsWorkspace) -> str:
-    """AGENTS.md is untrusted guidance; it is included in context but can
-    never change permissions."""
+    """Merge scoped instruction files, root first, all untrusted.
+
+    Codex and opencode both layer a project's root guidance with more specific
+    files nearer the code; Haven now does the same, bounded: the root
+    AGENTS.md/CLAUDE.md, then a small number of subdirectory AGENTS.md files,
+    each under its own header so the model can tell scope apart. It stays
+    untrusted data that cannot change permissions, and the whole merge is
+    capped at MAX_GUIDANCE_CHARS.
+    """
+    sections: list[str] = []
+    for name in _GUIDANCE_FILENAMES:
+        text = await _read_one_guidance(workspace, name)
+        if text:
+            sections.append(f"# {name} (repository root)\n{text}")
+
+    scoped = 0
+    for rel in _scoped_guidance_paths(workspace.root):
+        if scoped >= _MAX_SCOPED_GUIDANCE:
+            break
+        text = await _read_one_guidance(workspace, rel)
+        if text:
+            sections.append(f"# {rel} (scoped to {rel.rsplit('/', 1)[0]}/)\n{text}")
+            scoped += 1
+
+    return "\n\n".join(sections)[:MAX_GUIDANCE_CHARS]
+
+
+async def _read_one_guidance(workspace: FsWorkspace, rel: str) -> str:
     try:
-        result = await workspace.read_file("AGENTS.md", 1, 200)
+        result = await workspace.read_file(rel, 1, 200)
     except WorkspaceError:
         return ""
-    return result.content[:MAX_GUIDANCE_CHARS]
+    # Each file is individually bounded so one large file cannot crowd out the
+    # others before the overall cap applies.
+    return result.content[: MAX_GUIDANCE_CHARS // 2].strip()
+
+
+def _scoped_guidance_paths(root: Path) -> list[str]:
+    """Subdirectory AGENTS.md paths, nearest-root first, skipping the noise
+    directories a run never wants guidance from."""
+    skip = {".git", ".haven", "node_modules", ".venv", "venv", "__pycache__", ".tox", "dist"}
+    found: list[str] = []
+    for path in sorted(root.rglob("AGENTS.md")):
+        rel = path.relative_to(root)
+        if rel.as_posix() == "AGENTS.md":
+            continue  # root already read
+        if any(part in skip for part in rel.parts):
+            continue
+        found.append(rel.as_posix())
+    # Nearest the root first (fewest path segments), stable within a depth.
+    found.sort(key=lambda p: (p.count("/"), p))
+    return found
 
 
 async def open_store(store_path: Path | None = None) -> SqliteSessionStore:

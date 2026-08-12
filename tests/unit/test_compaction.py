@@ -5,7 +5,12 @@ state, so it stays byte-identical between compaction events and cannot move the
 cacheable prefix (ADR 0008).
 """
 
-from haven.application.compaction import build_run_digest, message_chars, summarize_dropped
+from haven.application.compaction import (
+    build_run_digest,
+    enforce_hard_limit,
+    message_chars,
+    summarize_dropped,
+)
 from haven.contracts.model import ModelMessage, ToolCallProposal
 
 
@@ -244,3 +249,74 @@ class TestSizing:
         # content is small, but reasoning pushes it over a tiny budget
         kept, digest, _ = summarize_dropped(messages, limit=1500)
         assert digest
+
+
+class TestHardLimit:
+    """The backstop that guarantees a fit when summarize_dropped cannot (the
+    remaining content is all undroppable or the digest itself is large)."""
+
+    def test_a_fitting_history_is_returned_unchanged(self) -> None:
+        messages = [ModelMessage(role="user", content="small")]
+        assert enforce_hard_limit(messages, 1000) is messages
+
+    def test_oldest_messages_are_dropped_until_it_fits(self) -> None:
+        messages = [ModelMessage(role="user", content=f"m{i}: " + "x" * 400) for i in range(5)]
+        fitted = enforce_hard_limit(messages, 900)
+        assert sum(message_chars(m) for m in fitted) <= 900
+        # Newest survive, oldest go.
+        assert fitted[-1].content.startswith("m4:")
+        assert not any(m.content.startswith("m0:") for m in fitted)
+
+    def test_a_single_oversized_message_is_truncated_in_place(self) -> None:
+        messages = [ModelMessage(role="user", content="z" * 5000)]
+        fitted = enforce_hard_limit(messages, 1000)
+        assert len(fitted) == 1
+        assert len(fitted[0].content) <= 1000
+        assert "truncated to fit" in fitted[0].content
+
+    def test_never_returns_empty(self) -> None:
+        messages = [ModelMessage(role="user", content="z" * 5000)]
+        assert enforce_hard_limit(messages, 10)
+
+
+class TestComprehensionPreservation:
+    """A deterministic proxy for the compaction A/B benchmark: every
+    load-bearing fact the model needs to keep working (which files it read and
+    their digests, what it edited, which checks ran and their exit codes) must
+    survive into the digest. The live task-performance A/B stays the honest
+    open measurement (documented in EVAL_LIVE.md); this pins that the digest
+    does not silently lose the facts that benchmark would test.
+    """
+
+    def test_digest_preserves_reads_edits_and_checks(self) -> None:
+        dropped = [
+            tool_message("repo.read", read_result("src/a.py", "aaaa1111", content="x" * 50_000)),
+            tool_message(
+                "repo.edit",
+                '{"status":"ok","result":{"path":"src/a.py","postimage_digest":"bbbb2222"}}',
+            ),
+            tool_message(
+                "repo.check",
+                '{"status":"ok","result":{"recipe_id":"pytest","exit_code":1}}',
+            ),
+        ]
+        digest = build_run_digest(dropped)
+        # The facts a resuming agent needs, all present.
+        assert "src/a.py" in digest
+        assert "aaaa1111"[:8] in digest  # read digest prefix
+        assert "bbbb2222"[:8] in digest  # postimage prefix
+        assert "pytest exit 1" in digest
+        # The bytes it must NOT keep (that is what makes the digest trusted).
+        assert "xxxx" not in digest
+
+    def test_a_read_then_edit_of_one_file_keeps_both_facts(self) -> None:
+        dropped = [
+            tool_message("repo.read", read_result("m.py", "r0r0r0r0")),
+            tool_message(
+                "repo.edit",
+                '{"status":"ok","result":{"path":"m.py","postimage_digest":"e1e1e1e1"}}',
+            ),
+        ]
+        digest = build_run_digest(dropped)
+        assert "read" in digest and "edited" in digest
+        assert "m.py" in digest

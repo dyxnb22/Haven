@@ -340,6 +340,36 @@ papered over. The one harness gap it found (answer-without-fixing) became the
 hidden grader. This is the escalation the tier-3 conclusion asked for, and it
 is not saturated.
 
+### Context precision (2026-08-12)
+
+Three changes tighten how the request is assembled, all under the same rule
+(the model never summarizes; the program does, deterministically):
+
+- **The hard budget is now actually hard.** Compaction only removes
+  *droppable* tool units, so a transcript dominated by user turns (gate
+  feedback), narrative assistant turns, or the digest itself could still
+  overrun the window — the clamp was soft. A backstop now forces the kept
+  history under budget, dropping whole messages oldest-first and truncating
+  the most recent as a last resort, and an assertion in the builder makes any
+  future over-budget assembly a loud failure rather than a silent 400. The
+  volatile tail (plan + run status) is sized and reserved before the
+  transcript is fitted, so it can never tip the total over.
+- **Scoped project guidance.** Guidance was the root `AGENTS.md`, first 200
+  lines. It now merges the root `AGENTS.md` and `CLAUDE.md` with a bounded set
+  of subdirectory `AGENTS.md` files, each under a header naming its scope,
+  still untrusted and still capped — the layering Codex and opencode do,
+  without an unbounded crawl.
+- **Compaction comprehension.** The honest open question is whether the
+  structural digest preserves enough for the model to keep working after
+  compaction. The live task-performance A/B (same trajectory, before vs after
+  a forced compaction) remains the measurement that would settle it and is
+  **not yet run**. What is pinned now is the deterministic proxy: a test that
+  every load-bearing fact — files read and their digests, edits and their
+  postimages, checks and their exit codes — survives into the digest, and
+  that repository bytes never do. A semantic (model-written) digest is still
+  deliberately not built, because that A/B has not shown the structural one
+  losing task state.
+
 ### One same-version rerun of everything (2026-08-12)
 
 The tier results above accumulated across separate runs (as found, then after

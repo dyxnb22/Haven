@@ -190,6 +190,41 @@ def summarize_dropped(
     return kept, digest, position
 
 
+def enforce_hard_limit(messages: list[ModelMessage], limit: int) -> list[ModelMessage]:
+    """Guarantee the assembled history fits `limit`, whatever it contains.
+
+    `summarize_dropped` only removes *droppable* tool units, so a transcript
+    dominated by user turns (gate feedback), narrative assistant turns, or a
+    digest can still exceed the budget — the clamp was soft. This is the
+    backstop: it drops whole messages oldest-first until the total fits, and
+    if even the single most recent message is over budget it hard-truncates
+    that message's content. It never drops the final message wholesale, so a
+    request is never empty.
+
+    Ordinarily a no-op — `summarize_dropped` already fit the common case; this
+    fires only when non-droppable content alone overflows, which must fail
+    safe (a truncated request) rather than be sent over-budget and 400.
+    """
+    total = sum(message_chars(m) for m in messages)
+    if total <= limit or not messages:
+        return messages
+    kept = list(messages)
+    # Drop oldest-first while more than one message remains and we are over.
+    while len(kept) > 1 and total > limit:
+        total -= message_chars(kept[0])
+        kept.pop(0)
+    if total > limit and kept:
+        # One message still over budget: truncate its content in place.
+        only = kept[-1]
+        overflow = total - limit
+        content = only.content
+        if len(content) > overflow:
+            marker = "\n...[truncated to fit the context budget]"
+            cut = max(0, len(content) - overflow - len(marker))
+            kept[-1] = only.model_copy(update={"content": content[:cut] + marker})
+    return kept
+
+
 def _droppable_units(messages: list[ModelMessage]) -> list[list[int]]:
     """Group each assistant-with-tool-calls with its following tool results.
 
