@@ -37,7 +37,7 @@ Open a local Git repo
 uv sync --locked
 
 # Run the deterministic eval suite (ScriptedModel; no network, no key)
-uv run haven eval --offline          # 27/27 cases, 0 security violations
+uv run haven eval --offline          # 31/31 cases, 0 security violations
 uv run python evals/generate_cases.py  # regenerate case JSON if you edit them
 
 # Inspect a stored run / replay its timeline
@@ -121,7 +121,7 @@ See `docs/ARCHITECTURE.md` for the layering and state-machine diagrams, and
   ambiguous one.
 - Streaming, cancellation, budgets (steps/tools/time/tokens/cost), and
   stuck-loop detection.
-- A **reproducible offline eval suite** (27 cases across task, robustness,
+- A **reproducible offline eval suite** (31 cases across task, robustness,
   security, injection, budget, and recovery) with JSON + Markdown reports and a
   hard security gate.
 - **Benefit gates before features**: two capabilities common in comparable
@@ -178,9 +178,9 @@ All reproducible from a clean checkout with no API key:
 
 | Metric | Value |
 |---|---|
-| Automated tests | **335** passing, **88%** line coverage on `src/` |
-| Offline eval | **27/27 cases**, **0 security violations**, ~1 s |
-| Eval categories | task 8 · security 7 · robustness 5 · injection 3 · budget 2 · recovery 2 |
+| Automated tests | **434** passing, **87%** line coverage on `src/` |
+| Offline eval | **31/31 cases**, **0 security violations**, ~1 s |
+| Eval categories | security 11 · task 8 · robustness 5 · injection 3 · budget 2 · recovery 2 |
 | Live eval (DeepSeek `deepseek-v4-flash`) | **7/8 task cases**, **0 security violations**, **89% prompt-cache hit** ([report](docs/EVAL_LIVE.md)) |
 | Static gates | `ruff`, `mypy --strict` (54 modules), `import-linter` (3 layering contracts) |
 | Determinism | golden trace stable across runs; TUI and headless emit identical traces |
@@ -222,9 +222,12 @@ source. See `docs/adr/` for the decisions and trade-offs, and
 
 ## Known limitations
 
-- Argv allowlist, environment scrubbing, and timeouts are **not** an OS sandbox;
-  Haven assumes a locally trusted repository and does not claim to safely run
-  untrusted/malicious repository code. Container/Seatbelt isolation is future work.
+- Child processes run under an OS sandbox (Seatbelt on macOS, Landlock on Linux)
+  that blocks writes outside the workspace, reads of `$HOME`, and the network —
+  but it is **not** a container or a VM. IPC is open, the Linux network rules
+  cover TCP only, and secrets outside `$HOME` stay readable. Haven assumes a
+  locally trusted repository and does not claim to safely run
+  untrusted/malicious repository code. See [ADR 0009](docs/adr/0009-os-sandbox-and-general-exec.md).
 - Token/cost accounting is exact when the provider returns usage and clearly
   marked `estimated` otherwise.
 - Single repository, single provider, fixed verification recipes, no automatic Git

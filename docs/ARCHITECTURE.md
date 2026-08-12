@@ -103,11 +103,13 @@ reconstructs the same screen (Trace drives the same presenter reducer).
 
 ## Tool surface
 
-Eight tools, deliberately: enough to complete a real repository task, small
+Nine tools, deliberately: enough to complete a real repository task, small
 enough that every one has an explicit policy classification. A unit test asserts
 that the registry and the policy's tool sets stay in sync and that no
 side-effecting tool is ever auto-allowed, so adding a tool cannot create an
-unclassified path.
+unclassified path. `repo.exec` is the single, explicitly pinned exception: a
+command classified as obviously read-only is auto-allowed, and a test asserts
+that exactly one class enjoys that exception.
 
 | Tool | Policy (interactive / read-only) | Key constraints |
 |---|---|---|
@@ -117,7 +119,8 @@ unclassified path.
 | `repo.edit` | ask / deny | existing files only, preimage-bound, unique match unless `occurrence` or `replace_all` is set |
 | `repo.create` | ask / deny | new paths only — fails on anything that exists, so it can never blank an unread file |
 | `repo.diff` | allow / allow | shows only what *this run* changed, including created files |
-| `repo.check` | ask / deny | registered recipe ids only, fixed argv, scrubbed env, timeout, bounded output |
+| `repo.exec` | allow if classified read-only, else ask / deny | argv array only (no shell string), OS sandbox, no network, `$HOME` unreadable; output is never evidence |
+| `repo.check` | ask / deny | registered recipe ids only, fixed argv, scrubbed env, timeout, bounded output, same sandbox |
 | `task.plan` | allow / allow | touches only run state; no path, no external effect (`STATE_TOOLS`) |
 
 ### Why the plan is a tool and not a message
@@ -153,7 +156,8 @@ flowchart TD
     APR -->|approve| TOC{"Re-verify preimage<br/>TOCTOU guard"}
     TOC -->|file drifted| E5["error: stale_preimage"]
     TOC -->|unchanged| TICKET["<b>ExecutionTicket</b><br/>raw model JSON stops here"]
-    TICKET --> EXE["<b>Executor</b><br/>atomic write + re-read postimage<br/>or registered recipe (fixed argv)"]
+    TICKET --> SBX["<b>OS sandbox</b><br/>Seatbelt / Landlock<br/><i>every child process, one wrapping site</i>"]
+    SBX --> EXE["<b>Executor</b><br/>atomic write + re-read postimage<br/>or a sandboxed process (fixed argv)"]
     EXE --> OUT["<b>ToolResult + Evidence + Trace</b>"]
     E1 --> OUT
     E2 --> OUT
@@ -166,6 +170,9 @@ flowchart TD
 Invariants:
 
 - The executor accepts only a program-minted `ExecutionTicket`, never model JSON.
+- Every child process is confined by the OS. Where no backend exists, `repo.exec`
+  is denied rather than run unconfined, and no configuration can override that
+  (ADR 0009).
 - Approvals bind workspace + tool + canonical args + preimage + preview digests;
   any drift invalidates them, and each is consumed at most once (a conditional
   SQL `UPDATE`).

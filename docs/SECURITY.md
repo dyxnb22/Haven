@@ -80,10 +80,62 @@ the injection and every attempt is denied.
 
 ### 6. Arbitrary command execution
 
-There is no shell tool. `repo.check` runs only recipes registered in trusted
-config, by id; the model never supplies a command string. Recipes run with a
-fixed argv (never `shell=True`), a scrubbed environment allowlist, a hard timeout
-(terminate → grace → kill), bounded stdout/stderr, and cancellation propagation.
+There is no shell tool. `repo.exec` takes an **argv array**, never a command
+string, so pipes, globs, and redirection are not interpreted. A model that wants
+shell semantics must name the interpreter (`["bash","-c",…]`), which is
+classified as shell passthrough: it always requires approval and the approval
+card warns that the visible argv no longer describes what will happen.
+
+`repo.check` still runs only recipes registered in trusted config, by id; the
+model never supplies a command string. Every process — exec and recipe alike —
+runs with a fixed argv (never `shell=True`), a scrubbed environment allowlist, a
+hard timeout (terminate → grace → kill), bounded stdout/stderr, cancellation
+propagation, **and an OS sandbox** (see below).
+
+Only commands on a small longest-prefix table of obviously read-only programs
+(`ls`, `cat`, `git status`, `find` without `-delete`/`-exec`) skip the approval
+prompt. That table controls approval friction, not capability: a
+misclassification costs a skipped prompt, because the sandbox bounds what the
+process can do either way.
+
+`repo.exec` output is never verification evidence. A run that edits files still
+cannot be reported as succeeded without `repo.diff` and a passing registered
+recipe, so a model cannot satisfy the Evidence Gate by running `echo ok`.
+
+### 6a. The OS sandbox
+
+Every child process is wrapped by the platform's native sandbox in exactly one
+place (`ProcessExecutor`), so no caller can introduce an unconfined path. Where
+no backend exists, `repo.exec` is denied outright (`sandbox_unavailable`) — an
+absent capability fact fails closed just like a negative one, and **no config
+key, CLI flag, or environment variable can turn the sandbox off**.
+
+| | macOS | Linux |
+|---|---|---|
+| Mechanism | Seatbelt (`sandbox-exec`, generated SBPL) | Landlock (ABI ≥ 4) |
+| Writes | workspace + scratch only | workspace + scratch only |
+| Reads | everything except `$HOME` | enumerated system roots + workspace |
+| Network | all denied | TCP bind/connect denied |
+| `.git` writes | denied by the kernel | denied by Haven's tool layer only |
+
+Read confinement matters because `repo.exec` validates `cwd`, not the paths
+inside `argv`: without it, `["cat", "~/.ssh/id_rsa"]` would succeed and quietly
+undo the boundary `repo.read` enforces.
+
+**What this does not stop**, stated plainly:
+
+- Secrets stored outside `$HOME` (under `/opt`, say) remain readable. The
+  confinement is coarse; it defeats the obvious credential paths, not a
+  determined search.
+- IPC. The macOS profile allows `mach-lookup` and POSIX shared memory so
+  ordinary interpreters run; process isolation is not a goal here.
+- UDP and DNS on Linux: Landlock ABI 4 governs TCP only.
+- `.git` writes on Linux at the kernel layer: Landlock's subtree grants cannot
+  express "the workspace except `.git`", so that line is held by the tool layer,
+  as it was before this sandbox existed.
+
+Enforcement is asserted by running real commands, not by inspecting profile
+text (`tests/security/test_sandbox_enforcement.py`), on both platforms in CI.
 
 `repo.search` may shell out to `ripgrep`, but the argv is fixed by the program
 and only the validated pattern and a workspace-confined path come from the model.
@@ -137,11 +189,13 @@ Covered by `tests/recovery/` and the two recovery eval cases.
 
 ## Known limitations (stated plainly)
 
-- The argv allowlist, environment scrubbing, and timeouts are process controls,
-  **not** an OS sandbox. Haven assumes a locally trusted repository and does
-  **not** claim it is safe to run untrusted or malicious repository code. Adding
-  container/Seatbelt isolation is future work and a precondition for any such
-  claim.
+- Child processes are confined by an OS sandbox (Seatbelt on macOS, Landlock on
+  Linux) that blocks writes outside the workspace, reads of `$HOME`, and the
+  network — but this is **not** a container or a VM. IPC is open, the Linux
+  network rules cover TCP only, and secrets stored outside `$HOME` stay
+  readable. Haven still assumes a locally trusted repository and does **not**
+  claim it is safe to run untrusted or malicious repository code; container or
+  VM isolation remains a precondition for any such claim.
 - WAL gives local crash consistency, not distributed durability.
 - Guarantees cover the code paths that are actually implemented and tested; the
   eval suite's security cases are the executable statement of those guarantees.

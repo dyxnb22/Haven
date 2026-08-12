@@ -135,8 +135,8 @@ class RecoveryService:
                 "unknown",
                 "file matches neither preimage nor postimage",
             )
-        # Processes (repo.check) may or may not have run; there is no digest to
-        # prove it either way.
+        # Processes (repo.check, repo.exec) may or may not have run; there is no
+        # digest to prove it either way, so they stay unknown and block resume.
         return EffectFinding(
             call_id,
             tool_name,

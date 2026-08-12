@@ -17,7 +17,10 @@ from a command in this repository; nothing is estimated.
 
 1. **Single execution channel.** Registry → strict schema → program-collected
    workspace facts → deterministic policy → exact approval → `ExecutionTicket` →
-   executor. The executor accepts only a program-minted ticket, never model JSON.
+   OS sandbox → executor. The executor accepts only a program-minted ticket,
+   never model JSON, and every child process is confined by Seatbelt (macOS) or
+   Landlock (Linux) at one wrapping site. Where no backend exists, `repo.exec`
+   is denied rather than run unconfined, and no config can override that.
 2. **Digest-bound, single-use approval.** An approval pins workspace + tool +
    canonical args + preimage + preview. Any drift invalidates it; consumption is
    a conditional SQL `UPDATE`, so it can never be replayed. The preimage is
@@ -31,9 +34,10 @@ from a command in this repository; nothing is estimated.
    append-only event journal + execution journal. An interrupted effect is
    classified against preimage/postimage digests; anything unprovable is
    `EFFECT_UNKNOWN`, blocks resume, and is **never** auto-replayed.
-5. **Reproducible offline eval as a security gate.** 27 scripted cases run the
+5. **Reproducible offline eval as a security gate.** 31 scripted cases run the
    real stack with only the model faked; unauthorized file changes and transcript
-   leaks fail the build.
+   leaks fail the build. Sandbox confinement is proven separately by running
+   real commands and asserting the OS refused them, on both platforms in CI.
 
 ## Measured results
 
@@ -42,14 +46,15 @@ Reproduce with `uv run pytest -q`, `uv run haven eval --offline`, and
 
 | Metric | Value |
 |---|---|
-| Automated tests | **335** passing |
-| Line coverage (`src/`) | **88%** (domain + contracts ~100%) |
-| Offline eval cases | **27/27 passed**, **0 security violations**, ~1 s wall clock |
+| Automated tests | **434** passing |
+| Line coverage (`src/`) | **87%** (domain + contracts ~100%) |
+| Offline eval cases | **31/31 passed**, **0 security violations**, ~1 s wall clock |
 | Live eval (DeepSeek `deepseek-v4-flash`) | **7/8 task cases**, **0 security violations**, **89% prompt-cache hit** (up from 71%) |
-| Eval categories | task 8 · security 7 · robustness 5 · injection 3 · budget 2 · recovery 2 |
-| Dedicated security tests | 13 path-escape / protected-path, plus 7 security and 3 injection eval cases |
+| Eval categories | security 11 · task 8 · robustness 5 · injection 3 · budget 2 · recovery 2 |
+| Dedicated security tests | 13 path-escape / protected-path, 8 sandbox-enforcement, plus 11 security and 3 injection eval cases |
+| Sandbox enforcement | writes outside the workspace, reads of `$HOME`, and TCP all refused by the OS — asserted by running real commands on macOS and Linux |
 | Recovery tests | 8, covering not-run / confirmed / ambiguous / abandoned / identity-mismatch |
-| Static gates | `ruff`, `mypy --strict` (54 modules), `import-linter` (3 layering contracts) |
+| Static gates | `ruff`, `mypy --strict` (62 modules), `import-linter` (3 layering contracts) |
 | Trace determinism | golden trace stable across runs; TUI and headless produce identical traces |
 | Source / test size | ~7.9k / ~4.2k lines |
 
@@ -77,11 +82,14 @@ measured cost of the last context change.
 
 ## Known limitations (stated up front)
 
-- Argv allowlist + env scrubbing + timeouts are process controls, **not** an OS
-  sandbox. Haven assumes a locally trusted repo and does not claim it is safe to
-  run malicious repository code; container/Seatbelt isolation is future work.
-- Single repository, single provider, fixed recipes, no automatic Git history
-  changes, no multi-agent, no RAG, no MCP.
+- Child processes are confined by an OS sandbox that blocks writes outside the
+  workspace, reads of `$HOME`, and the network — but it is not a container or a
+  VM. IPC is open, the Linux network rules cover TCP only, `.git` write
+  protection is kernel-enforced on macOS but tool-layer only on Linux, and
+  secrets stored outside `$HOME` stay readable. Haven assumes a locally trusted
+  repo and does not claim it is safe to run malicious repository code.
+- Single repository, single provider, no background processes, no automatic Git
+  history changes, no multi-agent, no RAG, no MCP.
 - Token/cost accounting is exact when the provider reports usage and explicitly
   flagged `estimated` otherwise.
 
