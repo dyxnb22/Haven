@@ -85,13 +85,16 @@ class OpenAICompatibleModel:
         bounded retry still covers genuinely transient failures).
         """
         force_reasoning = self._requires_tool_call_reasoning
+        yielded_any = False
         try:
             async for event in self._stream(request, replay_reasoning=force_reasoning):
+                yielded_any = True
                 yield event
             return
         except ProviderError as exc:
             retryable_reasoning = (
-                not force_reasoning
+                not yielded_any  # a mid-stream retry would double-emit deltas
+                and not force_reasoning
                 and exc.code == "protocol"
                 and "reasoning" in str(exc).lower()
                 and any(m.role == "assistant" and m.tool_calls for m in request.messages)

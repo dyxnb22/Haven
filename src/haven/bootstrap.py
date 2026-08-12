@@ -6,6 +6,7 @@ adapters directly. Tests swap in ScriptedModel and MemorySessionStore instead.
 
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -234,16 +235,19 @@ async def _read_one_guidance(workspace: FsWorkspace, rel: str) -> str:
 
 def _scoped_guidance_paths(root: Path) -> list[str]:
     """Subdirectory AGENTS.md paths, nearest-root first, skipping the noise
-    directories a run never wants guidance from."""
+    directories a run never wants guidance from.
+
+    Prunes skipped directories during the walk (rather than filtering results)
+    so a large node_modules or .venv is never descended into at all.
+    """
     skip = {".git", ".haven", "node_modules", ".venv", "venv", "__pycache__", ".tox", "dist"}
     found: list[str] = []
-    for path in sorted(root.rglob("AGENTS.md")):
-        rel = path.relative_to(root)
-        if rel.as_posix() == "AGENTS.md":
-            continue  # root already read
-        if any(part in skip for part in rel.parts):
-            continue
-        found.append(rel.as_posix())
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in skip)
+        if "AGENTS.md" in filenames:
+            rel = Path(dirpath).relative_to(root) / "AGENTS.md"
+            if rel.as_posix() != "AGENTS.md":  # root already read
+                found.append(rel.as_posix())
     # Nearest the root first (fewest path segments), stable within a depth.
     found.sort(key=lambda p: (p.count("/"), p))
     return found

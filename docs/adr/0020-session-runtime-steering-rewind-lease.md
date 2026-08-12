@@ -60,8 +60,10 @@ distributed lock.
   rewound wholesale; per-file partial rewind is deliberately not offered
   (partial undo of one logical change is a new inconsistent state).
 - A crashed process leaves a lease that the next process breaks after the
-  pid check — no manual cleanup — but a genuinely hung process holds the
-  lease until its heartbeat staleness passes.
+  pid check — no manual cleanup. A hung-but-alive process on the same host
+  holds the lease until it exits (a live probed pid is authoritative; the
+  15-minute heartbeat staleness applies only to holders that cannot be
+  probed, i.e. another host or another user's pid).
 - Regression coverage: `tests/integration/test_session_runtime.py`
   (steering boundaries, leakage, rewind both ways, fork), and
   `tests/unit/test_workspace_lease.py` (contention, staleness, takeover,

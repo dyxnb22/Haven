@@ -173,7 +173,9 @@ def run(
         "--approval-policy",
         help="Headless approval when --write is set: reject | trusted-recipe | all.",
     ),
-    json_output: bool = typer.Option(False, "--json/--jsonl", help="Print the outcome as JSON."),
+    json_output: bool = typer.Option(
+        False, "--json", "--jsonl", help="Print the final outcome as one JSON object."
+    ),
     events_path: Path | None = typer.Option(
         None,
         "--events",

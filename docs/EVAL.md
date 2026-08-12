@@ -110,23 +110,25 @@ the agent's judgement.
 
 Measuring whether Haven actually completes real work needs a **live** suite of
 tasks drawn from real repositories, scored on patch correctness, out-of-scope
-changes, tokens, wall clock, and approval count. That suite now exists in
-`evals/real/`: 60 tasks across nine pinned third-party projects, each
-project's own test suite as the oracle (a run succeeds only when the Evidence
-Gate sees a green check). `build.py --verify` proves every task is
-red-with-bug and green-when-reverted — since Tier 3, through the same OS
-sandbox and scrubbed environment the live check uses, because one suite
-(click's) turned out green raw but red sandboxed. Three tiers of difficulty
-are measured on `deepseek-v4-flash`, all written up with failure
-distributions in `docs/EVAL_LIVE.md`: 31 named-symptom injection tasks on
-small libraries (27/31 as found → 31/31 after fixing the exposed harness
-bugs), nine green-field / multi-file tasks (9/9), five zero-config
-`discover: true` cases (5/5), and twenty issue-style tasks on 10k–128k-line
-repositories where the goal is a user-voice symptom report naming no file or
-function (15/20 as found — all five failures one unsatisfiable-oracle task
-bug — → 20/20 with the oracle fixed). It costs money and needs a key, so it
-is not part of CI. The offline suite still claims only "boundaries hold on
-scripted cases"; the real-task numbers live in the live report.
+changes, tokens, wall clock, and approval count. That suite exists in
+`evals/real/`: tasks across nine pinned third-party projects, each project's
+own test suite as the oracle (a run succeeds only when the Evidence Gate sees a
+green check). `build.py --verify` proves every task is red-with-bug and
+green-when-reverted — since Tier 3, through the same OS sandbox and scrubbed
+environment the live check uses, because one suite (click's) turned out green
+raw but red sandboxed. Five tiers of escalating difficulty are measured on
+`deepseek-v4-flash`, all written up with failure distributions and the exact,
+generated counts in `docs/EVAL_LIVE.md`: named-symptom injections on small
+libraries, green-field / multi-file tasks, zero-config `discover: true` cases,
+issue-style symptom reports on 10k–128k-line repositories, and real historical
+bugs + cross-file refactors + no-solution "honesty" tasks (the first
+non-saturated tier, whose failures are model capability, not harness bugs).
+A **head-to-head** harness (`evals/headtohead/`) runs the same tasks, same
+model, through a peer agent (opencode) and a neutral grader. It costs money
+and needs a key, so it is not part of CI. The offline suite still claims only
+"boundaries hold on scripted cases"; the real-task numbers live in the live
+report, and the single generated summary in `README`/`PROJECT_CARD` carries
+the current pass totals so no number here can drift.
 
 ## Running
 

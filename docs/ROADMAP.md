@@ -3,8 +3,10 @@
 Written 2026-08-12, after three external gap analyses (against Reasonix, Codex
 CLI, and opencode) and a verification pass over their claims.
 
-> **This plan has been executed** (see Progress below). The current plan,
-> written after the second round of audits, is `docs/ROADMAP2.md`.
+> **This plan has been executed** (see Progress below). It was followed by
+> `docs/ROADMAP2.md` and then `docs/ROADMAP3.md` (both also executed); the
+> current state of the project is summarized in `docs/PROJECT_CARD.md` and
+> the architecture verdict in ADR 0023.
 
 ## Progress (2026-08-12)
 

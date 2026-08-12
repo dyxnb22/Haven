@@ -49,9 +49,9 @@ class WorkspaceLease:
     pid: int
 
     def refresh(self) -> None:
-        if not self._is_mine():
+        payload = _read(self.path)
+        if payload is None or not self._is_mine():
             return
-        payload = json.loads(self.path.read_text(encoding="utf-8"))
         payload["heartbeat_at"] = _now()
         _write_atomic(self.path, payload)
 
@@ -133,7 +133,11 @@ def _is_live(payload: dict[str, object]) -> bool:
     except PermissionError:
         # The pid exists but belongs to another user; fall back to heartbeat.
         return _heartbeat_age(payload) < STALE_AFTER_SECONDS
-    return _heartbeat_age(payload) < STALE_AFTER_SECONDS
+    # Same host and the pid answers the probe: the holder is alive, full stop.
+    # The heartbeat must NOT overrule a live probe — holders do not refresh on
+    # a timer, so a long interactive session would otherwise look "stale" and
+    # have its lease stolen mid-run, which is exactly what the lease prevents.
+    return True
 
 
 def _heartbeat_age(payload: dict[str, object]) -> float:

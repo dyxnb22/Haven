@@ -333,13 +333,13 @@ class HavenApp(App[None]):
         if self._services is None:
             self._log_line("system", "still starting up, try again in a moment")
             return
+        text = self._expand_mentions(text)
         if self._state.running:
             # Steering: queue the input for the active run instead of refusing
             # it. Delivery happens at the next turn boundary, so nothing
             # in-flight is interrupted (ROADMAP2 phase 3).
             self._queue_steering(text)
             return
-        text = self._expand_mentions(text)
         # An explicit /fork target branches a new session from that run instead
         # of continuing the current one (ROADMAP3 phase 4).
         fork_target = self._fork_run_id

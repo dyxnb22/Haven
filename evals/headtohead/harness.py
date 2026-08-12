@@ -10,12 +10,13 @@ and does not know which agent produced the tree, so it cannot favour the home
 team.
 
     uv run python evals/headtohead/harness.py export --subset default
-    uv run python evals/headtohead/harness.py run --tool haven --subset default
-    uv run python evals/headtohead/harness.py run --tool codex --subset default
-    uv run python evals/headtohead/harness.py grade --subset default
+    uv run python evals/headtohead/drivers.py --tool haven --subset default
+    uv run python evals/headtohead/drivers.py --tool opencode --subset default
+    uv run python evals/headtohead/harness.py grade --subset default --tool haven
 
-Results land in evals/headtohead/runs/<tool>/<case>/ (gitignored). The scored
-summary is printed and written to results-<tool>.json.
+Checkouts and results land under $TMPDIR/haven-h2h-runs/<tool>/<subset>/
+(override with HAVEN_H2H_RUNS); the scored summary is printed and written to
+results.json in the same directory.
 """
 
 from __future__ import annotations
@@ -37,9 +38,8 @@ REAL = HERE.parent / "real"
 # hit pytest's rootdir/config discovery walking up to Haven's own
 # pyproject.toml, which the sandbox denies — an artifact that penalizes only
 # the tool that actually verifies. Overridable with HAVEN_H2H_RUNS.
-RUNS = Path(os.environ.get("HAVEN_H2H_RUNS", "")) or (
-    Path(tempfile.gettempdir()) / "haven-h2h-runs"
-)
+_RUNS_ENV = os.environ.get("HAVEN_H2H_RUNS", "")
+RUNS = Path(_RUNS_ENV) if _RUNS_ENV else Path(tempfile.gettempdir()) / "haven-h2h-runs"
 
 sys.path.insert(0, str(REAL))
 from tasks import REFACTORS, REPOS, TASKS, RefactorTask, Task  # noqa: E402
@@ -198,16 +198,23 @@ def _run_sandboxed_verify(spec: CaseSpec, repo: Path) -> tuple[int, str]:
             )
         env = {k: os.environ[k] for k in ENV_ALLOWLIST if k in os.environ}
         env["TMPDIR"] = str(scratch)
-        proc = subprocess.run(
-            argv, cwd=graded, capture_output=True, text=True, timeout=spec.timeout, env=env
-        )
+        try:
+            proc = subprocess.run(
+                argv, cwd=graded, capture_output=True, text=True, timeout=spec.timeout, env=env
+            )
+        except subprocess.TimeoutExpired:
+            # A hung verify (e.g. an edit that introduced an infinite loop) is
+            # a red result for this case, not a crash of the whole grade run.
+            return 124, f"verify timed out after {spec.timeout:.0f}s"
     tail = (proc.stdout + proc.stderr).strip().splitlines()
     return proc.returncode, (tail[-1] if tail else "")
 
 
 def _changed_files(repo: Path) -> list[str]:
+    # -uall lists every untracked *file*: without it a new directory collapses
+    # to one "dir/" entry and its contents would evade the scope check.
     proc = subprocess.run(
-        ["git", "-c", "core.quotepath=false", "status", "--porcelain"],
+        ["git", "-c", "core.quotepath=false", "status", "--porcelain", "-uall"],
         cwd=repo,
         capture_output=True,
         text=True,

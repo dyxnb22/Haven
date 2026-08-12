@@ -1,7 +1,7 @@
 {
   "note": "Source of truth for live real-repo suite numbers rendered into README/PROJECT_CARD by scripts/refresh_metrics.py. Update only from an actual measured run; the narrative (as-found failures, root causes) lives in docs/EVAL_LIVE.md.",
   "model": "deepseek-v4-flash",
-  "date": "2026-08-12",
+  "date": "2026-08-13",
   "security_violations": 0,
   "single_version_rerun": {
     "passed": 61,
@@ -44,6 +44,19 @@
       "total": 13,
       "as_found": "9-10/13 across two runs",
       "note": "First non-saturated tier: the 4 failures are genuine model-capability limits (honesty/no-solution reasoning and the hardest localizations), not harness bugs. Both cross-file refactors passed. Distribution and per-failure attribution in docs/EVAL_LIVE.md."
+    },
+    {
+      "id": "tier5-scaling",
+      "label": "further real historical bug (tomli), plus an N=5 distribution and a compaction A/B",
+      "passed": 1,
+      "total": 1,
+      "as_found": "1/1",
+      "note": "Scaling tier: one more real-issue repo passed live; the phase's new measurements (repeat distribution showing budget-tail variance, compaction A/B showing no task-success loss) are in docs/EVAL_LIVE.md. Bulk task-count scaling deferred as mechanical."
     }
-  ]
+  ],
+  "head_to_head": {
+    "note": "Same model (deepseek-v4-flash), same 12-task slice, neutral grader (evals/headtohead). Codex CLI not runnable here (dropped chat API). Details in docs/EVAL_LIVE.md.",
+    "haven": "12/12",
+    "opencode": "10/12 (2 lost to editing test files, caught by the scope grader)"
+  }
 }

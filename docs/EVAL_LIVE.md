@@ -555,8 +555,13 @@ export DEEPSEEK_API_KEY=...
 export HAVEN_API_KEY_ENV=DEEPSEEK_API_KEY HAVEN_BASE_URL=https://api.deepseek.com/v1
 export HAVEN_MODEL=deepseek-v4-flash
 uv run haven eval --live --yes --category real --cases evals/real/cases --out evals/real/report
-# tier 3 only (build.py emits the subset run-dir):
+# tier 3 / tier 4 only (build.py emits the subset run-dirs):
 uv run haven eval --live --yes --category real --cases evals/real/tier3/cases --out evals/real/report-tier3
+uv run haven eval --live --yes --category real --cases evals/real/tier4/cases --out evals/real/report-tier4
+# head-to-head (export cases, drive a tool, grade neutrally):
+uv run python evals/headtohead/harness.py export --subset default
+uv run python evals/headtohead/drivers.py --tool haven --subset default
+uv run python evals/headtohead/harness.py grade --subset default --tool haven
 ```
 
 The clones under `evals/real/repos/` are regenerated from the pinned SHAs in

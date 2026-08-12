@@ -299,7 +299,7 @@ class RunService:
         )
         return True
 
-    def _drain_steering(self, ctx: RunContext) -> list[str]:
+    def _drain_steering(self) -> list[str]:
         drained: list[str] = []
         while self._steer_queue:
             drained.append(self._steer_queue.popleft())
@@ -347,7 +347,7 @@ class RunService:
                 # Turn boundary: queued steering becomes ordinary user
                 # messages before the next model request — never mid-stream,
                 # never mid-tool-call.
-                for steered in self._drain_steering(ctx):
+                for steered in self._drain_steering():
                     ctx.transcript.append(
                         ModelMessage(role="user", content=f"User update: {steered}")
                     )
