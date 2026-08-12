@@ -26,6 +26,7 @@ from haven.contracts.model import (
 from haven.contracts.tools import RecipeSpec
 from haven.domain.budget import Budget
 from haven.domain.enums import PermissionMode
+from haven.domain.pricing import Pricing
 from haven.ports.sandbox import SandboxLauncher
 from tests.integration.fakes import RecordingLauncher
 
@@ -119,12 +120,14 @@ class Harness:
         repeat_last: bool = False,
         launcher: SandboxLauncher | None = _UNSET_LAUNCHER,
         recipes: dict[str, RecipeSpec] | None = None,
+        model_name: str = "scripted",
+        pricing: Pricing | None = None,
     ) -> None:
         self.workspace = FsWorkspace(repo)
         self.store = MemorySessionStore()
         self.sink = CollectingSink()
         self.emitter = EventEmitter(self.store, [self.sink])
-        self.model = ScriptedModel(turns, repeat_last=repeat_last)
+        self.model = ScriptedModel(turns, repeat_last=repeat_last, name=model_name)
         self.approver = approver if approver is not None else AutoApprover("approve_all")
         # A recording launcher by default, so exec behaves identically on every
         # platform here; real confinement is asserted in tests/security.
@@ -142,4 +145,5 @@ class Harness:
             mode=mode,
             budget=budget if budget is not None else Budget(),
             launcher=resolved,
+            pricing=pricing,
         )

@@ -122,16 +122,20 @@ class RunService:
         self._emitter = emitter
         self._mode = mode
         self._budget = budget
-        self._pricing = pricing if pricing is not None else Pricing()
+        # Per-model defaults; an unknown model inherits Haven's historical
+        # behavior rather than numbers guessed from a similar name.
+        self._profile = profile_for(model.model_name)
+        # Configured rates win; otherwise fall back to the model's published
+        # rate card. Reporting a documented price for the model actually in use
+        # beats reporting $0.00, but it is a published figure and not an
+        # invoice — see the dated comment on the profile.
+        self._pricing = pricing if pricing is not None else self._profile.pricing
         self._git_branch = git_branch
         self._git_commit = git_commit
         self._project_guidance = project_guidance
         self._recipes = recipes
         self._registry = ToolRegistry()
         self._launcher = launcher
-        # Per-model defaults; an unknown model inherits Haven's historical
-        # behavior rather than numbers guessed from a similar name.
-        self._profile = profile_for(model.model_name)
         # One scratch directory per service, removed when a run finishes. It
         # exists so sandboxed tools that must write somewhere do not need write
         # access outside the workspace.
