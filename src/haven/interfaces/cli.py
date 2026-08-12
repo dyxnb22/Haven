@@ -495,6 +495,45 @@ def export(
     raise typer.Exit(asyncio.run(_export()))
 
 
+@app.command()
+def discover(
+    workspace: Path = typer.Option(Path("."), "--workspace", "-w"),
+) -> None:
+    """Suggest verification recipes from the project's files.
+
+    Reads pyproject.toml, package.json, Makefile, Cargo.toml, and go.mod and
+    prints the `[recipes]` block each implies, so a fresh repo can get a check
+    the Evidence Gate will accept. Runs nothing and writes nothing: review the
+    output and paste what you trust into `.haven.toml`.
+    """
+    from haven.domain.discovery import discover_recipes
+
+    ws = workspace.resolve()
+    known = ("pyproject.toml", "package.json", "Makefile", "Cargo.toml", "go.mod")
+    files: dict[str, str] = {}
+    for name in known:
+        candidate = ws / name
+        if candidate.is_file():
+            try:
+                files[name] = candidate.read_text(encoding="utf-8", errors="replace")[:65536]
+            except OSError:
+                continue
+
+    recipes = discover_recipes(files)
+    if not recipes:
+        typer.echo(
+            "no verification commands detected; add a [recipes] block to .haven.toml by hand"
+        )
+        raise typer.Exit(EXIT_OK)
+
+    typer.echo("# Suggested recipes for .haven.toml — review, then paste what you trust:\n")
+    for recipe in recipes:
+        argv = ", ".join(f'"{item}"' for item in recipe.argv)
+        typer.echo(f"[recipes.{recipe.id}]  # {recipe.rationale}")
+        typer.echo(f"argv = [{argv}]\n")
+    raise typer.Exit(EXIT_OK)
+
+
 @app.command("config")
 def config_explain(
     workspace: Path = typer.Option(Path("."), "--workspace", "-w"),

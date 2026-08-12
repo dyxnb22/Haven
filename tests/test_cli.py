@@ -84,6 +84,20 @@ def test_replay_missing_run() -> None:
     assert result.exit_code == 2
 
 
+def test_discover_suggests_pytest_for_a_python_project(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\ntestpaths = ['tests']\n")
+    result = runner.invoke(app, ["discover", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "[recipes.pytest]" in result.stdout
+    assert '"pytest"' in result.stdout
+
+
+def test_discover_says_nothing_for_a_bare_directory(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["discover", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "no verification commands detected" in result.stdout
+
+
 def test_continue_missing_run_is_usage_error(tmp_path: Path) -> None:
     result = runner.invoke(
         app, ["continue", "run-nope", "a follow up", "--workspace", str(tmp_path)]
