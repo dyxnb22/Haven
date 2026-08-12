@@ -10,13 +10,13 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from haven.contracts.base import StrictModel
 from haven.contracts.model import ToolSchema
 from haven.domain.enums import ToolErrorCode, ToolStatus
 
-TOOL_VERSION = "1"
+TOOL_VERSION = "2"
 
 
 class RepoListArgs(StrictModel):
@@ -74,6 +74,30 @@ class RepoCreateArgs(StrictModel):
     summary: str = Field(default="", max_length=300, description="One-line intent of this change.")
 
 
+class RepoExecArgs(StrictModel):
+    """Run one program inside an OS sandbox."""
+
+    argv: tuple[str, ...] = Field(
+        min_length=1,
+        max_length=64,
+        description=(
+            'Program and arguments as separate items, e.g. ["pytest", "-q"]. This '
+            "is not a shell line: pipes, globs, and redirection are not interpreted."
+        ),
+    )
+    cwd: str = Field(default=".", description="Working directory relative to the workspace root.")
+    timeout_seconds: float = Field(default=60.0, ge=1.0, le=300.0)
+    summary: str = Field(default="", max_length=300, description="One-line intent of this run.")
+
+    @field_validator("argv")
+    @classmethod
+    def _bound_item_length(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        # Field(max_length=...) bounds the tuple, not the strings inside it.
+        if any(len(item) > 4096 for item in value):
+            raise ValueError("each argv item must be at most 4096 characters")
+        return value
+
+
 class PlanStep(StrictModel):
     title: str = Field(min_length=1, max_length=120)
     status: Literal["pending", "in_progress", "done"] = "pending"
@@ -103,6 +127,7 @@ ToolArgs = (
     | RepoReadArgs
     | RepoEditArgs
     | RepoCreateArgs
+    | RepoExecArgs
     | RepoDiffArgs
     | RepoCheckArgs
     | TaskPlanArgs
@@ -114,6 +139,7 @@ ARGS_MODELS: dict[str, type[ToolArgs]] = {
     "repo.read": RepoReadArgs,
     "repo.edit": RepoEditArgs,
     "repo.create": RepoCreateArgs,
+    "repo.exec": RepoExecArgs,
     "repo.diff": RepoDiffArgs,
     "repo.check": RepoCheckArgs,
     "task.plan": TaskPlanArgs,
@@ -137,6 +163,14 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "Create a NEW file with the given contents. Requires user approval. Fails if the "
         "path already exists — use repo.edit for existing files. Parent directories are "
         "created as needed."
+    ),
+    "repo.exec": (
+        "Run a program inside an OS sandbox: no network, writes confined to the "
+        "workspace, your home directory unreadable. Requires user approval unless "
+        "the command is a well-known read-only one. Pass argv as separate items; "
+        "shell syntax is NOT interpreted, so name an interpreter explicitly if you "
+        "need it. Output is an observation only — it is never verification "
+        "evidence, so run repo.check when you need to prove a change works."
     ),
     "repo.diff": "Show the accumulated diff of the changes made in this run.",
     "repo.check": (
