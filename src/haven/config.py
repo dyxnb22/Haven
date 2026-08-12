@@ -142,7 +142,10 @@ def _parse_recipes(raw: object, origin: str) -> dict[str, RecipeSpec]:
             raise ConfigError(f"recipe {recipe_id!r} argv must be a non-empty list of strings")
         timeout = float(spec.get("timeout_seconds", 120.0))
         recipes[str(recipe_id)] = RecipeSpec(
-            id=str(recipe_id), argv=tuple(argv), timeout_seconds=timeout
+            id=str(recipe_id),
+            argv=tuple(argv),
+            timeout_seconds=timeout,
+            allow_network=bool(spec.get("allow_network", False)),
         )
     return recipes
 
@@ -245,7 +248,7 @@ def load_config(workspace: Path | None = None) -> ResolvedConfig:
     )
 
 
-def explain(config: ResolvedConfig) -> list[tuple[str, str, str]]:
+def explain(config: ResolvedConfig, sandbox_backend: str = "unknown") -> list[tuple[str, str, str]]:
     """(key, value, source) rows for `haven config explain`. Secrets are shown
     as present/missing, never their value."""
     key_state = "present" if config.provider.api_key() else "missing"
@@ -271,8 +274,10 @@ def explain(config: ResolvedConfig) -> list[tuple[str, str, str]]:
             config.sources["pricing"],
         ),
     ]
+    rows.append(("sandbox.backend", sandbox_backend, "platform"))
     for recipe_id, spec in sorted(config.recipes.items()):
-        rows.append((f"recipes.{recipe_id}", " ".join(spec.argv), "config"))
+        network = " [network allowed]" if spec.allow_network else ""
+        rows.append((f"recipes.{recipe_id}", " ".join(spec.argv) + network, "config"))
     rows.append(("storage.db", str(db_path()), "platformdirs"))
     rows.append(("storage.artifacts", str(artifacts_dir()), "platformdirs"))
     return rows

@@ -27,13 +27,14 @@ from typing import Any
 from pydantic import Field, TypeAdapter
 
 from haven.adapters.memory_session import MemorySessionStore
-from haven.adapters.process_executor import ProcessExecutor
+from haven.adapters.process_executor import RECIPE_SCRATCH_DIRNAME, ProcessExecutor
 from haven.adapters.providers.scripted import ScriptedModel
 from haven.adapters.workspace_fs import PROTECTED_COMPONENTS, FsWorkspace
 from haven.application.approvals import AutoApprover
 from haven.application.emitter import EventEmitter
 from haven.application.recovery_service import RecoveryService
 from haven.application.run_service import RunService
+from haven.bootstrap import select_launcher
 from haven.contracts.base import StrictModel
 from haven.contracts.checkpoint import (
     BudgetSnapshot,
@@ -259,6 +260,9 @@ def _snapshot(root: Path) -> dict[str, str]:
     for path in sorted(root.rglob("*")):
         if "__pycache__" in path.parts or path.suffix == ".pyc":
             continue
+        # Sandbox scratch, not a source mutation.
+        if RECIPE_SCRATCH_DIRNAME in path.parts:
+            continue
         if path.is_file() and not path.is_symlink():
             digests[path.relative_to(root).as_posix()] = sha256_bytes(path.read_bytes())
     return digests
@@ -382,16 +386,21 @@ async def _run_agent_case(
             ),
             max_cost_usd=float(case.budget.get("max_cost_usd", budget.max_cost_usd)),
         )
+    # The real backend, so eval cases exercise the same confinement a real run
+    # gets. Every exec case asserts a policy-level outcome, which is identical
+    # whether or not this platform has a backend.
+    launcher = select_launcher()
     service = RunService(
         model=model,
         workspace=workspace,
-        executor=ProcessExecutor(),
+        executor=ProcessExecutor(launcher=launcher),
         store=store,
         emitter=EventEmitter(store, [Sink()]),
         approvals=approver,
         recipes=_materialize_recipes(case.recipes),
         mode=PermissionMode(case.mode),
         budget=budget,
+        launcher=launcher,
     )
     try:
         outcome = await service.run(case.goal)

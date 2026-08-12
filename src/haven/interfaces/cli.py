@@ -430,6 +430,8 @@ def config_explain(
     action: str = typer.Argument("explain", help="Only 'explain' is supported."),
 ) -> None:
     """Show every resolved config value and where it came from."""
+    from haven.bootstrap import sandbox_backend_name, select_launcher
+
     if action != "explain":
         typer.echo("error: only `haven config explain` is supported")
         raise typer.Exit(EXIT_USAGE)
@@ -438,7 +440,7 @@ def config_explain(
     except ConfigError as exc:
         typer.echo(f"error: {exc}")
         raise typer.Exit(EXIT_USAGE) from None
-    for key, value, source in explain(config):
+    for key, value, source in explain(config, sandbox_backend_name(select_launcher())):
         typer.echo(f"{key:<32} {value:<48} [{source}]")
 
 

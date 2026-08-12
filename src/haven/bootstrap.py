@@ -6,12 +6,15 @@ adapters directly. Tests swap in ScriptedModel and MemorySessionStore instead.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from haven.adapters.git_baseline import capture_git_baseline
 from haven.adapters.process_executor import ProcessExecutor
 from haven.adapters.providers.openai_compatible import OpenAICompatibleModel
+from haven.adapters.sandbox.landlock import LandlockLauncher
+from haven.adapters.sandbox.seatbelt import SeatbeltLauncher
 from haven.adapters.sqlite_session import SqliteSessionStore
 from haven.adapters.workspace_fs import FsWorkspace
 from haven.application.approvals import ApprovalResponder
@@ -28,6 +31,7 @@ from haven.domain.budget import BudgetUsage
 from haven.domain.enums import PermissionMode
 from haven.ports.event_sink import EventSinkPort
 from haven.ports.model import ModelPort
+from haven.ports.sandbox import SandboxLauncher
 from haven.ports.workspace import WorkspaceError
 
 MAX_GUIDANCE_CHARS = 4_000
@@ -49,9 +53,28 @@ class AppServices:
     git_branch: str
     git_commit: str
     model_name: str
+    sandbox_backend: str = "none"
 
     async def close(self) -> None:
         await self.store.close()
+
+
+def select_launcher(platform: str | None = None) -> SandboxLauncher | None:
+    """Pick the OS sandbox backend, or None when the platform has none.
+
+    None is not a degraded mode: the policy denies repo.exec outright, because
+    an unconfined general exec is the one capability this project will not add.
+    """
+    target = platform if platform is not None else sys.platform
+    if target == "darwin":
+        return SeatbeltLauncher()
+    if target.startswith("linux"):
+        return LandlockLauncher()
+    return None
+
+
+def sandbox_backend_name(launcher: SandboxLauncher | None) -> str:
+    return launcher.backend if launcher is not None and launcher.available() else "none"
 
 
 def resolve_workspace(path: Path | None) -> Path:
@@ -93,11 +116,12 @@ async def build_services(
 
     baseline = await capture_git_baseline(workspace_root)
     guidance = await _read_guidance(workspace)
+    launcher = select_launcher()
 
     run_service = RunService(
         model=model,
         workspace=workspace,
-        executor=ProcessExecutor(),
+        executor=ProcessExecutor(launcher=launcher),
         store=store,
         emitter=emitter,
         approvals=approvals,
@@ -108,6 +132,7 @@ async def build_services(
         git_branch=baseline.branch,
         git_commit=baseline.commit,
         project_guidance=guidance,
+        launcher=launcher,
     )
     return AppServices(
         config=config,
@@ -120,6 +145,7 @@ async def build_services(
         git_branch=baseline.branch,
         git_commit=baseline.commit,
         model_name=model.model_name,
+        sandbox_backend=sandbox_backend_name(launcher),
     )
 
 

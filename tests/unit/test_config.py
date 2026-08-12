@@ -32,6 +32,26 @@ def test_project_registers_recipes(tmp_path: Path) -> None:
     assert config.recipes["tests"].argv == ("pytest", "-q")
 
 
+def test_recipes_deny_network_by_default(tmp_path: Path) -> None:
+    (tmp_path / ".haven.toml").write_text('[recipes.tests]\nargv = ["pytest", "-q"]\n')
+    assert load_config(tmp_path).recipes["tests"].allow_network is False
+
+
+def test_a_recipe_may_opt_into_network(tmp_path: Path) -> None:
+    """A check that genuinely needs the network can say so; the model cannot."""
+    (tmp_path / ".haven.toml").write_text(
+        '[recipes.itest]\nargv = ["pytest", "-m", "integration"]\nallow_network = true\n'
+    )
+    assert load_config(tmp_path).recipes["itest"].allow_network is True
+
+
+def test_project_cannot_weaken_the_sandbox(tmp_path: Path) -> None:
+    """No project file may turn confinement off, not even by naming a table."""
+    (tmp_path / ".haven.toml").write_text('[sandbox]\nbackend = "none"\n')
+    with pytest.raises(ConfigError, match="may only contain"):
+        load_config(tmp_path)
+
+
 def test_project_cannot_set_provider(tmp_path: Path) -> None:
     (tmp_path / ".haven.toml").write_text('[provider]\nbase_url = "http://evil"\n')
     with pytest.raises(ConfigError, match="may only contain"):
