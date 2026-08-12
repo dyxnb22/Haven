@@ -205,6 +205,7 @@ def doctor(
     workspace: Path = typer.Option(Path("."), "--workspace", "-w"),
 ) -> None:
     """Check the local environment without side effects or paid calls."""
+    import os
     import shutil
     import sys
 
@@ -253,11 +254,19 @@ def doctor(
 
     from haven.config import data_dir
 
-    try:
-        data_dir().mkdir(parents=True, exist_ok=True)
-        check("data dir", True, str(data_dir()))
-    except OSError as exc:
-        check("data dir", False, str(exc))
+    # Probe writability without creating anything: doctor must have no side
+    # effects, so it inspects the nearest existing ancestor rather than running
+    # mkdir. The directory is created for real on the first actual run.
+    target = data_dir()
+    ancestor = target
+    while not ancestor.exists() and ancestor != ancestor.parent:
+        ancestor = ancestor.parent
+    writable = ancestor.is_dir() and os.access(ancestor, os.W_OK)
+    check(
+        "data dir",
+        writable,
+        f"{target} ({'writable' if writable else 'not writable'}, created on first run)",
+    )
 
     raise typer.Exit(EXIT_USAGE if failures else EXIT_OK)
 

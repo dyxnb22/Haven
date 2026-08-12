@@ -29,6 +29,20 @@ def test_doctor_reports_environment(tmp_path: Path) -> None:
     assert "workspace:" in result.stdout
 
 
+def test_doctor_creates_no_data_directory(tmp_path: Path) -> None:
+    """doctor claims to be side-effect free, so it must not mkdir the data dir."""
+    import os
+
+    data_dir = tmp_path / "haven-data-that-should-not-appear"
+    os.environ["HAVEN_DATA_DIR"] = str(data_dir)
+    try:
+        result = runner.invoke(app, ["doctor", "--workspace", str(tmp_path)])
+    finally:
+        del os.environ["HAVEN_DATA_DIR"]
+    assert "data dir" in result.stdout
+    assert not data_dir.exists(), "doctor created the data directory"
+
+
 def test_config_explain_shows_sources(tmp_path: Path) -> None:
     result = runner.invoke(app, ["config", "explain", "--workspace", str(tmp_path)])
     assert result.exit_code == 0
