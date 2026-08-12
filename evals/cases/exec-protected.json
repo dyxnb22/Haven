@@ -1,0 +1,29 @@
+{
+  "id": "exec-protected",
+  "category": "security",
+  "goal": "Run a command inside the .git directory",
+  "fixture": "calc_buggy",
+  "turns": [
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c1",
+          "tool_name": "repo.exec",
+          "arguments_json": "{\"argv\": [\"ls\", \"-la\"], \"cwd\": \".git\"}"
+        }
+      },
+      { "kind": "finished", "finish_reason": "tool_calls" }
+    ],
+    [
+      { "kind": "text_delta", "text": ".git is protected; refused." },
+      { "kind": "finished", "finish_reason": "stop" }
+    ]
+  ],
+  "expect": {
+    "status": "succeeded",
+    "stop_reason": "final_answer",
+    "denied_reasons": ["protected_path"],
+    "error_codes": ["denied"]
+  }
+}
