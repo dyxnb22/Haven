@@ -36,7 +36,12 @@ from haven.contracts.events import (
 )
 from haven.contracts.model import ToolCallProposal
 from haven.contracts.tools import (
+    PatchCreateOp,
+    PatchDeleteOp,
+    PatchEditOp,
+    PatchMoveOp,
     RecipeSpec,
+    RepoApplyPatchArgs,
     RepoCheckArgs,
     RepoCreateArgs,
     RepoDeleteArgs,
@@ -76,10 +81,17 @@ from haven.ports.sandbox import (
 from haven.ports.session import ExecutionRecord, SessionStorePort
 from haven.ports.workspace import (
     EditPreview,
+    PatchOpSpec,
+    PatchPreview,
+    PatchRollbackError,
     WorkspaceError,
     WorkspacePort,
     WorkspaceSnapshot,
 )
+
+#: What one tool proposal previews as: a single-file diff, a whole patch, or
+#: nothing (read-only tools).
+ToolPreview = EditPreview | PatchPreview | None
 
 MODEL_PAYLOAD_CHARS = 8_000
 PREVIEW_CHARS = 4_000
@@ -193,8 +205,9 @@ class ToolPipeline:
                 )
             # Re-verify the preimage after the human decision (TOCTOU guard).
             # Every tool that pins a file's content at approval — edit, delete,
-            # and the source of a move — is re-checked against what is on disk
-            # now, so a change between approval and execution fails closed.
+            # the source of a move, and every file of a patch — is re-checked
+            # against what is on disk now, so a change between approval and
+            # execution fails closed.
             guarded_path: str | None = None
             if isinstance(validated, RepoEditArgs | RepoDeleteArgs):
                 guarded_path = validated.path
@@ -210,6 +223,29 @@ class ToolPipeline:
                             call,
                             ToolErrorCode.STALE_PREIMAGE,
                             "file changed between approval and execution",
+                        ),
+                        started,
+                    )
+            if isinstance(preview, PatchPreview):
+                stale = [
+                    path
+                    for path, digest in preview.preimages.items()
+                    if self._workspace.path_facts(path).digest != digest
+                ] + [
+                    effect.path
+                    for effect in preview.effects
+                    if effect.tool_shape == "repo.create"
+                    and self._workspace.path_facts(effect.path).exists
+                ]
+                if stale:
+                    return await self._finish(
+                        ctx,
+                        call,
+                        _error(
+                            call,
+                            ToolErrorCode.STALE_PREIMAGE,
+                            "file(s) changed between approval and execution: "
+                            + ", ".join(sorted(stale)),
                         ),
                         started,
                     )
@@ -252,7 +288,7 @@ class ToolPipeline:
 
     async def _collect_facts(
         self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
-    ) -> tuple[ToolFacts, EditPreview | None]:
+    ) -> tuple[ToolFacts, ToolPreview]:
         preview: EditPreview | None = None
 
         if isinstance(args, RepoListArgs | RepoSearchArgs | RepoReadArgs):
@@ -396,6 +432,45 @@ class ToolPipeline:
                 combined,
             )
 
+        if isinstance(args, RepoApplyPatchArgs):
+            # Hard facts first: every path of every operation must be inside
+            # the workspace and unprotected, or policy hard-denies before any
+            # preview work happens.
+            op_paths: list[str] = []
+            for op in args.operations:
+                if op.kind == "move":
+                    op_paths += [op.src, op.dest]
+                else:
+                    op_paths.append(op.path)
+            all_facts = [self._workspace.path_facts(p) for p in op_paths]
+            within = all(f.within_workspace for f in all_facts)
+            protected = any(f.is_protected for f in all_facts)
+            if not within or protected:
+                return (
+                    ToolFacts(
+                        tool_name=call.tool_name,
+                        within_workspace=within,
+                        touches_protected_path=protected,
+                    ),
+                    None,
+                )
+            plan = await self._workspace.preview_patch(
+                tuple(_to_patch_spec(op) for op in args.operations), ctx.files_read
+            )
+            # The approval binds the aggregate of every touched file's pin:
+            # one digest over the canonical {path: preimage} map, so any file
+            # drifting invalidates the whole approval.
+            aggregate = sha256_text(canonical_json(dict(sorted(plan.preimages.items()))))
+            return (
+                ToolFacts(
+                    tool_name=call.tool_name,
+                    within_workspace=True,
+                    touches_protected_path=False,
+                    preimage_digest=aggregate,
+                ),
+                plan,
+            )
+
         if isinstance(args, RepoExecArgs):
             facts = self._workspace.path_facts(args.cwd)
             return (
@@ -434,12 +509,20 @@ class ToolPipeline:
         call: ToolCallProposal,
         args: ToolArgs,
         canonical_args: str,
-        preview: EditPreview | None,
+        preview: ToolPreview,
         facts: ToolFacts,
     ) -> tuple[bool, str | None, str]:
         preview_text = ""
         summary = ""
-        if isinstance(args, RepoEditArgs) and preview is not None:
+        if isinstance(args, RepoApplyPatchArgs) and isinstance(preview, PatchPreview):
+            preview_text = _clip(preview.diff, PREVIEW_CHARS)
+            intent = f": {args.summary}" if args.summary else ""
+            summary = (
+                f"apply patch: {len(args.operations)} operation(s) across "
+                f"{len(preview.effects)} file(s) "
+                f"(+{preview.insertions} -{preview.deletions}){intent}"
+            )
+        elif isinstance(args, RepoEditArgs) and isinstance(preview, EditPreview):
             preview_text = _clip(preview.diff, PREVIEW_CHARS)
             intent = f": {args.summary}" if args.summary else ""
             scope = ""
@@ -450,15 +533,15 @@ class ToolPipeline:
             summary = (
                 f"edit {preview.path} (+{preview.insertions} -{preview.deletions}){scope}{intent}"
             )
-        elif isinstance(args, RepoCreateArgs) and preview is not None:
+        elif isinstance(args, RepoCreateArgs) and isinstance(preview, EditPreview):
             preview_text = _clip(preview.diff, PREVIEW_CHARS)
             intent = f": {args.summary}" if args.summary else ""
             summary = f"create {preview.path} ({preview.insertions} new line(s)){intent}"
-        elif isinstance(args, RepoDeleteArgs) and preview is not None:
+        elif isinstance(args, RepoDeleteArgs) and isinstance(preview, EditPreview):
             preview_text = _clip(preview.diff, PREVIEW_CHARS)
             intent = f": {args.summary}" if args.summary else ""
             summary = f"delete {preview.path} ({preview.deletions} line(s)){intent}"
-        elif isinstance(args, RepoMoveArgs) and preview is not None:
+        elif isinstance(args, RepoMoveArgs) and isinstance(preview, EditPreview):
             preview_text = _clip(preview.diff, PREVIEW_CHARS)
             intent = f": {args.summary}" if args.summary else ""
             summary = f"move {preview.path}{intent}"
@@ -539,7 +622,7 @@ class ToolPipeline:
         call: ToolCallProposal,
         args: ToolArgs,
         ticket_digest: str,
-        preview: EditPreview | None,
+        preview: ToolPreview,
     ) -> ToolExecution:
         if isinstance(args, RepoListArgs):
             listing = await self._workspace.list_dir(args.path, args.max_entries)
@@ -591,13 +674,20 @@ class ToolPipeline:
             )
 
         if isinstance(args, RepoEditArgs | RepoCreateArgs):
+            assert not isinstance(preview, PatchPreview)
             return await self._execute_write(ctx, call, args, ticket_digest, preview)
 
         if isinstance(args, RepoDeleteArgs):
+            assert not isinstance(preview, PatchPreview)
             return await self._execute_delete(ctx, call, args, ticket_digest, preview)
 
         if isinstance(args, RepoMoveArgs):
+            assert not isinstance(preview, PatchPreview)
             return await self._execute_move(ctx, call, args, ticket_digest, preview)
+
+        if isinstance(args, RepoApplyPatchArgs):
+            assert isinstance(preview, PatchPreview)  # facts collection built it
+            return await self._execute_patch(ctx, call, ticket_digest, preview)
 
         if isinstance(args, RepoExecArgs):
             return await self._execute_exec(ctx, call, args, ticket_digest)
@@ -865,6 +955,98 @@ class ToolPipeline:
             )
         )
         return ToolExecution(_ok(call, {"src": removal.path, "dest": addition.path, "moved": True}))
+
+    async def _execute_patch(
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        ticket_digest: str,
+        plan: PatchPreview,
+    ) -> ToolExecution:
+        # The patch is journaled as its constituent file effects — each shaped
+        # like a single-op tool with its expected postimage — so an interrupted
+        # patch is classifiable file-by-file by the existing recovery rules.
+        for index, effect in enumerate(plan.effects):
+            await self._store.record_execution(
+                ExecutionRecord(
+                    call_id=f"{call.call_id}#{index}",
+                    run_id=ctx.run_id,
+                    ticket_digest=ticket_digest,
+                    tool_name=effect.tool_shape,
+                    effect_state=EffectState.STARTED,
+                    preimage_digest=effect.preimage_digest,
+                    postimage_digest=effect.expected_postimage,
+                    path=effect.path,
+                )
+            )
+
+        async def mark_all(state: EffectState) -> None:
+            for index in range(len(plan.effects)):
+                await self._store.update_execution_state(f"{call.call_id}#{index}", state)
+
+        try:
+            outcomes = await self._workspace.apply_patch(plan)
+        except WorkspaceError as exc:
+            # Includes "failed and rolled back cleanly": the tree is unchanged,
+            # so the effect is a plain failure, not an unknown.
+            await mark_all(EffectState.FAILED)
+            return ToolExecution(_error(call, _map_ws_code(exc), str(exc)))
+        except PatchRollbackError as exc:
+            # Partial state that deterministic code could not undo: surface as
+            # an unknown effect so the run stops and recovery blocks resume
+            # until a human reconciles each journaled sub-effect.
+            await mark_all(EffectState.EFFECT_UNKNOWN)
+            return ToolExecution(
+                _error(call, ToolErrorCode.INTERNAL, str(exc)), effect_unknown=True
+            )
+        except BaseException:
+            await mark_all(EffectState.EFFECT_UNKNOWN)
+            raise
+
+        by_path = {outcome.path: outcome for outcome in outcomes}
+        for index, effect in enumerate(plan.effects):
+            await self._store.update_execution_state(
+                f"{call.call_id}#{index}",
+                EffectState.CONFIRMED,
+                by_path[effect.path].postimage_digest,
+            )
+
+        envelope = await self._emitter.emit(
+            ctx.run_id,
+            EvidenceRecorded(
+                run_id=ctx.run_id,
+                evidence_kind="edit",
+                summary=(f"patch: {len(outcomes)} file(s), +{plan.insertions} -{plan.deletions}"),
+            ),
+        )
+        for outcome in outcomes:
+            ctx.ledger = ctx.ledger.with_edit(
+                EditEvidence(
+                    seq=envelope.seq,
+                    path=outcome.path,
+                    preimage_digest=outcome.preimage_digest,
+                    postimage_digest=outcome.postimage_digest,
+                )
+            )
+            if outcome.postimage_digest:
+                # The agent knows this file's exact content now.
+                ctx.files_read[outcome.path] = outcome.postimage_digest
+            else:
+                ctx.files_read.pop(outcome.path, None)
+
+        return ToolExecution(
+            _ok(
+                call,
+                {
+                    "applied": True,
+                    "files_changed": len(outcomes),
+                    "insertions": plan.insertions,
+                    "deletions": plan.deletions,
+                    "files": [outcome.path for outcome in outcomes],
+                    "diff": _clip(plan.diff, MODEL_PAYLOAD_CHARS),
+                },
+            )
+        )
 
     def _sandbox_spec(self) -> SandboxSpec:
         # Model-proposed exec is read-only on the workspace: only the scratch
@@ -1152,6 +1334,27 @@ def _detect_changes(before: WorkspaceSnapshot, after: WorkspaceSnapshot) -> list
         )
         for path in changed
     ]
+
+
+def _to_patch_spec(
+    op: PatchEditOp | PatchCreateOp | PatchDeleteOp | PatchMoveOp,
+) -> PatchOpSpec:
+    """Contract operation -> port-neutral spec (the workspace never sees
+    pydantic models)."""
+    if isinstance(op, PatchEditOp):
+        return PatchOpSpec(
+            kind="edit",
+            path=op.path,
+            old=op.old_string,
+            new=op.new_string,
+            occurrence=op.occurrence,
+            replace_all=op.replace_all,
+        )
+    if isinstance(op, PatchCreateOp):
+        return PatchOpSpec(kind="create", path=op.path, content=op.content)
+    if isinstance(op, PatchDeleteOp):
+        return PatchOpSpec(kind="delete", path=op.path)
+    return PatchOpSpec(kind="move", src=op.src, dest=op.dest)
 
 
 def _ok(call: ToolCallProposal, payload: dict[str, object], truncated: bool = False) -> ToolResult:

@@ -1,0 +1,94 @@
+{
+  "id": "task-apply-patch",
+  "category": "task",
+  "goal": "Fix add() and add a regression test, as one reviewed patch",
+  "fixture": "calc_buggy",
+  "recipes": {
+    "verify-calc": {
+      "argv": [
+        "{python}",
+        "verify_calc.py"
+      ]
+    }
+  },
+  "turns": [
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c1",
+          "tool_name": "repo.read",
+          "arguments_json": "{\"path\": \"src/calc.py\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c2",
+          "tool_name": "repo.apply_patch",
+          "arguments_json": "{\"operations\": [{\"kind\": \"edit\", \"path\": \"src/calc.py\", \"old_string\": \"return a - b  # BUG: should be +\", \"new_string\": \"return a + b\"}, {\"kind\": \"create\", \"path\": \"tests/test_add.py\", \"content\": \"import sys\\n\\nsys.path.insert(0, \\\"src\\\")\\nfrom calc import add\\n\\n\\ndef test_add() -> None:\\n    assert add(2, 3) == 5\\n\"}], \"summary\": \"fix add() and pin it with a test\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c3",
+          "tool_name": "repo.diff",
+          "arguments_json": "{}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c4",
+          "tool_name": "repo.check",
+          "arguments_json": "{\"recipe_id\": \"verify-calc\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "text_delta",
+        "text": "Patched both files in one approval; verify-calc passes."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
+    ]
+  ],
+  "expect": {
+    "status": "succeeded",
+    "stop_reason": "evidence_satisfied",
+    "allowed_changed_files": [
+      "src/calc.py",
+      "tests/*"
+    ],
+    "file_contains": {
+      "src/calc.py": "return a + b",
+      "tests/test_add.py": "assert add(2, 3) == 5"
+    }
+  }
+}

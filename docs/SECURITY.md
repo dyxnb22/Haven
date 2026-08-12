@@ -45,8 +45,8 @@ workspace entirely.
 ### 3. Unauthorized writes / privilege escalation
 
 The side-effecting tools — `repo.edit`, `repo.create`, `repo.delete`,
-`repo.move`, and `repo.check` — are `ask` in interactive mode and `deny` in
-read-only mode. Policy is a pure function of `(mode, program-collected facts)`;
+`repo.move`, `repo.apply_patch`, and `repo.check` — are `ask` in interactive
+mode and `deny` in read-only mode. Policy is a pure function of `(mode, program-collected facts)`;
 the model cannot influence facts. Approval is bound to a canonical digest of
 workspace + tool + args + preimage + preview and is single-use (a conditional
 SQL `UPDATE`), so it cannot be replayed or reused for a different action. Every
@@ -61,6 +61,14 @@ fails with `invalid_arguments` on an existing file or directory. Overwriting is
 only reachable through `repo.edit`, which is bound to a preimage the agent has
 actually read — so "create" can never be used to blank a file the agent never
 looked at.
+
+`repo.apply_patch` (ADR 0019) bundles several such operations into one
+transaction: a single approval bound to an aggregate digest of every touched
+file's preimage, the whole diff as the preview, all-or-nothing application
+with a journaled rollback, and per-file journal entries so recovery can prove
+each effect independently. A protected path anywhere in the patch denies the
+entire patch; every per-file rule above (read-before-edit, create-only-new,
+move-never-overwrites) applies inside the patch exactly as it does outside.
 
 ### 4. TOCTOU / stale writes
 

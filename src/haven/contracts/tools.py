@@ -8,7 +8,7 @@ never drift apart.
 from __future__ import annotations
 
 import json
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field, field_validator
 
@@ -16,7 +16,7 @@ from haven.contracts.base import StrictModel
 from haven.contracts.model import ToolSchema
 from haven.domain.enums import ToolErrorCode, ToolStatus
 
-TOOL_VERSION = "3"
+TOOL_VERSION = "4"
 
 
 class RepoListArgs(StrictModel):
@@ -91,6 +91,60 @@ class RepoMoveArgs(StrictModel):
     summary: str = Field(default="", max_length=300, description="One-line intent of this change.")
 
 
+class PatchEditOp(StrictModel):
+    """Replace text in a file that exists (on disk or earlier in this patch)."""
+
+    kind: Literal["edit"] = "edit"
+    path: str = Field(description="File path relative to the workspace root.")
+    old_string: str = Field(min_length=1, max_length=65536)
+    new_string: str = Field(max_length=65536)
+    occurrence: int | None = Field(default=None, ge=1)
+    replace_all: bool = False
+
+
+class PatchCreateOp(StrictModel):
+    """Create a genuinely new file."""
+
+    kind: Literal["create"] = "create"
+    path: str = Field(description="New file path relative to the workspace root.")
+    content: str = Field(max_length=262144)
+
+
+class PatchDeleteOp(StrictModel):
+    """Delete an existing file."""
+
+    kind: Literal["delete"] = "delete"
+    path: str = Field(description="File path relative to the workspace root.")
+
+
+class PatchMoveOp(StrictModel):
+    """Move or rename a file; the destination must not exist."""
+
+    kind: Literal["move"] = "move"
+    src: str = Field(description="Existing file path relative to the workspace root.")
+    dest: str = Field(description="New path relative to the workspace root.")
+
+
+PatchOp = Annotated[
+    PatchEditOp | PatchCreateOp | PatchDeleteOp | PatchMoveOp, Field(discriminator="kind")
+]
+
+
+class RepoApplyPatchArgs(StrictModel):
+    """Apply one multi-file patch: several operations, one approval, one
+    atomic commit with rollback on failure."""
+
+    operations: tuple[PatchOp, ...] = Field(
+        min_length=1,
+        max_length=32,
+        description=(
+            "Ordered operations applied as one transaction. Later operations "
+            "see the effects of earlier ones."
+        ),
+    )
+    summary: str = Field(default="", max_length=300, description="One-line intent of this patch.")
+
+
 class RepoExecArgs(StrictModel):
     """Run one program inside an OS sandbox."""
 
@@ -146,6 +200,7 @@ ToolArgs = (
     | RepoCreateArgs
     | RepoDeleteArgs
     | RepoMoveArgs
+    | RepoApplyPatchArgs
     | RepoExecArgs
     | RepoDiffArgs
     | RepoCheckArgs
@@ -160,6 +215,7 @@ ARGS_MODELS: dict[str, type[ToolArgs]] = {
     "repo.create": RepoCreateArgs,
     "repo.delete": RepoDeleteArgs,
     "repo.move": RepoMoveArgs,
+    "repo.apply_patch": RepoApplyPatchArgs,
     "repo.exec": RepoExecArgs,
     "repo.diff": RepoDiffArgs,
     "repo.check": RepoCheckArgs,
@@ -194,6 +250,16 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "Move or rename an existing file to a new path. Requires user approval. "
         "Fails if the destination already exists — delete or edit it first — so a "
         "move never silently overwrites."
+    ),
+    "repo.apply_patch": (
+        "Apply ONE patch spanning several files: an ordered list of edit / "
+        "create / delete / move operations approved together as a single "
+        "reviewable diff and committed atomically — on any failure the whole "
+        "patch is rolled back. Prefer this over a chain of repo.edit calls "
+        "whenever a change touches more than one file (refactors, renames with "
+        "import updates). The same rules as the single-file tools apply: edit "
+        "an existing file only after reading it, create only genuinely new "
+        "paths, later operations see the effects of earlier ones."
     ),
     "repo.exec": (
         "Run a program inside an OS sandbox: no network, the workspace is "

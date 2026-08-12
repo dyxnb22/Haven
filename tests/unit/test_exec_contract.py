@@ -13,8 +13,8 @@ class TestRegistration:
 
     def test_tool_version_reflects_the_changed_tool_set(self) -> None:
         # Bumped as the tool set grew: "1" pre-exec, "2" added repo.exec,
-        # "3" added repo.delete and repo.move.
-        assert TOOL_VERSION == "3"
+        # "3" added repo.delete and repo.move, "4" added repo.apply_patch.
+        assert TOOL_VERSION == "4"
 
     def test_schema_is_published_to_the_model(self) -> None:
         assert "repo.exec" in {schema.name for schema in tool_schemas()}

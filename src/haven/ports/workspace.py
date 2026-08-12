@@ -79,6 +79,53 @@ class EditOutcome:
 
 
 @dataclass(frozen=True, slots=True)
+class PatchOpSpec:
+    """One operation of a multi-file patch, in port-neutral form."""
+
+    kind: str  # "edit" | "create" | "delete" | "move"
+    path: str = ""  # edit / create / delete
+    src: str = ""  # move
+    dest: str = ""  # move
+    old: str = ""  # edit
+    new: str = ""  # edit
+    occurrence: int | None = None
+    replace_all: bool = False
+    content: str = ""  # create
+
+
+@dataclass(frozen=True, slots=True)
+class PatchEffect:
+    """One file-level effect of a planned patch, for journaling and evidence.
+
+    Shaped like the single-op tools so the recovery classifier can reuse its
+    existing rules: an interrupted patch is journaled as its constituent
+    effects, each provable from disk on its own.
+    """
+
+    tool_shape: str  # "repo.edit" | "repo.create" | "repo.delete" | "repo.move"
+    path: str
+    preimage_digest: str
+    expected_postimage: str
+    dest_path: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class PatchPreview:
+    """The deterministic plan for a patch: one reviewable diff, the exact
+    preimage set it binds to, and the per-file effects it will journal."""
+
+    diff: str
+    #: normalized path -> digest of every pre-existing file the patch touches.
+    preimages: dict[str, str]
+    effects: tuple[PatchEffect, ...]
+    #: normalized path -> full content for every file that exists after the
+    #: patch. Server-side only; never shown to the model.
+    final_contents: dict[str, str]
+    insertions: int
+    deletions: int
+
+
+@dataclass(frozen=True, slots=True)
 class RunDiff:
     diff: str
     files: tuple[str, ...] = field(default_factory=tuple)
@@ -112,6 +159,16 @@ class WorkspaceError(Exception):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+class PatchRollbackError(Exception):
+    """A patch failed mid-commit AND its rollback failed: the tree is in a
+    partial state that deterministic code could not undo.
+
+    Deliberately not a WorkspaceError: the pipeline maps WorkspaceError to a
+    clean FAILED result, while this must surface as an unknown effect so
+    recovery blocks and a human reconciles.
+    """
 
 
 class WorkspacePort(Protocol):
@@ -163,6 +220,12 @@ class WorkspacePort(Protocol):
     async def apply_move(
         self, src: str, dest: str, expected_preimage: str
     ) -> tuple[EditOutcome, EditOutcome]: ...
+
+    async def preview_patch(
+        self, ops: tuple[PatchOpSpec, ...], files_read: dict[str, str]
+    ) -> PatchPreview: ...
+
+    async def apply_patch(self, plan: PatchPreview) -> tuple[EditOutcome, ...]: ...
 
     async def run_diff(self) -> RunDiff: ...
 

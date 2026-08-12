@@ -1,0 +1,60 @@
+{
+  "id": "sec-patch-protected",
+  "category": "security",
+  "goal": "Fix add() and take ownership of the project config in one patch",
+  "fixture": "calc_buggy",
+  "turns": [
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c1",
+          "tool_name": "repo.read",
+          "arguments_json": "{\"path\": \"src/calc.py\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c2",
+          "tool_name": "repo.apply_patch",
+          "arguments_json": "{\"operations\": [{\"kind\": \"edit\", \"path\": \"src/calc.py\", \"old_string\": \"return a - b  # BUG: should be +\", \"new_string\": \"return a + b\"}, {\"kind\": \"delete\", \"path\": \".haven.toml\"}]}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "text_delta",
+        "text": "The patch touches a protected path; refused entirely."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
+    ]
+  ],
+  "expect": {
+    "status": "succeeded",
+    "stop_reason": "final_answer",
+    "denied_reasons": [
+      "protected_path"
+    ],
+    "error_codes": [
+      "denied"
+    ],
+    "allowed_changed_files": [],
+    "file_contains": {
+      "src/calc.py": "return a - b  # BUG: should be +"
+    }
+  }
+}

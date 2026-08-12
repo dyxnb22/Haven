@@ -23,6 +23,10 @@ from haven.ports.workspace import (
     EditPreview,
     ListEntry,
     ListResult,
+    PatchEffect,
+    PatchOpSpec,
+    PatchPreview,
+    PatchRollbackError,
     PathFacts,
     ReadResult,
     RunDiff,
@@ -486,6 +490,273 @@ class FsWorkspace:
         removal = EditOutcome(path=src_norm, preimage_digest=preimage, postimage_digest="")
         addition = EditOutcome(path=dest_norm, preimage_digest="", postimage_digest=postimage)
         return removal, addition
+
+    # -- patch (multi-file, one transaction) -------------------------------------
+
+    async def preview_patch(
+        self, ops: tuple[PatchOpSpec, ...], files_read: dict[str, str]
+    ) -> PatchPreview:
+        """Simulate the patch in memory and return its deterministic plan.
+
+        The simulation applies operations in order against a lazily seeded
+        view of the tree, so later operations see earlier effects. The plan
+        records *net* per-file effects (a move becomes a provable delete plus
+        a provable create), which is what makes an interrupted patch
+        classifiable file-by-file with the existing recovery rules.
+        """
+        if not ops:
+            raise WorkspaceError("invalid_arguments", "a patch needs at least one operation")
+
+        #: normalized path -> current text in the simulation (None = absent).
+        state: dict[str, str | None] = {}
+        #: normalized path -> (text, digest) as first seen on disk.
+        on_disk: dict[str, tuple[str, str]] = {}
+        #: paths whose content is fully determined by this patch (created or
+        #: move destinations), so the read-before-edit rule does not apply.
+        patch_authored: set[str] = set()
+
+        def seed(raw: str) -> str:
+            target, normalized = self._require_inside(raw)
+            if normalized not in state:
+                if target.is_file() and not target.is_symlink():
+                    text, digest = self._load_editable(target, normalized)
+                    state[normalized] = text
+                    on_disk[normalized] = (text, digest)
+                elif target.exists():
+                    raise WorkspaceError("invalid_arguments", f"not a regular file: {normalized!r}")
+                else:
+                    state[normalized] = None
+            return normalized
+
+        for index, op in enumerate(ops):
+            where = f"operation {index + 1} ({op.kind})"
+            if op.kind == "edit":
+                normalized = seed(op.path)
+                current = state[normalized]
+                if current is None:
+                    raise WorkspaceError(
+                        "not_found", f"{where}: {normalized!r} does not exist at this point"
+                    )
+                if normalized not in patch_authored:
+                    recorded = files_read.get(normalized)
+                    if recorded is None:
+                        raise WorkspaceError(
+                            "invalid_arguments",
+                            f"{where}: read {normalized!r} with repo.read before editing it",
+                        )
+                    if on_disk[normalized][1] != recorded:
+                        raise WorkspaceError(
+                            "stale_preimage",
+                            f"{where}: {normalized!r} changed since it was last read",
+                        )
+                state[normalized] = self._apply_replacement(
+                    current,
+                    op.old,
+                    op.new,
+                    normalized,
+                    occurrence=op.occurrence,
+                    replace_all=op.replace_all,
+                )
+            elif op.kind == "create":
+                normalized = self._require_creatable(op.path, op.content)
+                if state.get(normalized) is not None:
+                    raise WorkspaceError(
+                        "invalid_arguments",
+                        f"{where}: {normalized!r} already exists at this point",
+                    )
+                state[normalized] = op.content
+                patch_authored.add(normalized)
+            elif op.kind == "delete":
+                normalized = seed(op.path)
+                if state[normalized] is None:
+                    raise WorkspaceError(
+                        "not_found", f"{where}: {normalized!r} does not exist at this point"
+                    )
+                state[normalized] = None
+            elif op.kind == "move":
+                src_norm = seed(op.src)
+                moving = state[src_norm]
+                if moving is None:
+                    raise WorkspaceError(
+                        "not_found", f"{where}: {src_norm!r} does not exist at this point"
+                    )
+                dest_norm = self._require_creatable(op.dest, moving)
+                if state.get(dest_norm) is not None:
+                    raise WorkspaceError(
+                        "invalid_arguments",
+                        f"{where}: destination {dest_norm!r} already exists at this point",
+                    )
+                state[dest_norm] = moving
+                state[src_norm] = None
+                patch_authored.add(dest_norm)
+            else:  # pragma: no cover — the contract's discriminator forbids it
+                raise WorkspaceError("invalid_arguments", f"{where}: unknown operation kind")
+
+        diffs: list[str] = []
+        preimages: dict[str, str] = {}
+        effects: list[PatchEffect] = []
+        insertions = 0
+        deletions = 0
+        for normalized in sorted(state):
+            before: tuple[str | None, str] = on_disk.get(normalized, (None, ""))
+            before_text, before_digest = before
+            after_text = state[normalized]
+            if before_text == after_text:
+                continue  # net no-op (e.g. created then deleted)
+            if before_text is not None:
+                preimages[normalized] = before_digest
+            preview = self._diff_preview(
+                normalized, before_text or "", after_text or "", before_digest
+            )
+            diffs.append(preview.diff)
+            insertions += preview.insertions
+            deletions += preview.deletions
+            if before_text is None:
+                shape = "repo.create"
+            elif after_text is None:
+                shape = "repo.delete"
+            else:
+                shape = "repo.edit"
+            effects.append(
+                PatchEffect(
+                    tool_shape=shape,
+                    path=normalized,
+                    preimage_digest=before_digest,
+                    expected_postimage=sha256_text(after_text) if after_text is not None else "",
+                )
+            )
+        if not effects:
+            raise WorkspaceError("invalid_arguments", "the patch changes nothing")
+        final_contents = {
+            effect.path: text for effect in effects if (text := state[effect.path]) is not None
+        }
+        return PatchPreview(
+            diff="".join(diffs),
+            preimages=preimages,
+            effects=tuple(effects),
+            final_contents=final_contents,
+            insertions=insertions,
+            deletions=deletions,
+        )
+
+    async def apply_patch(self, plan: PatchPreview) -> tuple[EditOutcome, ...]:
+        """Commit a planned patch: verify every pin, stage every write, then
+        rename writes and unlink removals, rolling back on any failure.
+
+        Ordering is deliberate: all content lands before anything is removed,
+        so no crash point loses data — every intermediate state is classifiable
+        from the journaled per-file expectations.
+        """
+        # 1. Every pinned preimage must still hold, and every create target
+        # must still be absent — checked before a single byte lands.
+        for normalized, expected in plan.preimages.items():
+            target = self._root / normalized
+            if not target.is_file() or sha256_bytes(target.read_bytes()) != expected:
+                raise WorkspaceError(
+                    "stale_preimage",
+                    f"file changed since the patch was approved: {normalized!r}",
+                )
+        for effect in plan.effects:
+            if effect.tool_shape == "repo.create" and (self._root / effect.path).exists():
+                raise WorkspaceError(
+                    "stale_preimage",
+                    f"path appeared since the patch was approved: {effect.path!r}",
+                )
+
+        writes = [e for e in plan.effects if e.tool_shape in ("repo.edit", "repo.create")]
+        removals = [e for e in plan.effects if e.tool_shape == "repo.delete"]
+
+        # 2. Stage every write to a temp file next to its target.
+        staged: dict[str, str] = {}
+        try:
+            for effect in writes:
+                target = self._root / effect.path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=".haven-patch-")
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(plan.final_contents[effect.path])
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                staged[effect.path] = tmp_name
+        except OSError as exc:
+            for tmp_name in staged.values():
+                if os.path.exists(tmp_name):
+                    os.unlink(tmp_name)
+            raise WorkspaceError("internal", f"could not stage the patch: {exc}") from exc
+
+        # 3. Commit, journaling enough to roll back: writes first, removals
+        # last. `performed` records what must be undone, newest first.
+        performed: list[tuple[str, str, str | None]] = []  # (action, path, original text)
+        outcomes: list[EditOutcome] = []
+
+        def rollback() -> None:
+            for action, normalized, original in reversed(performed):
+                target = self._root / normalized
+                if action == "write":
+                    if original is None:
+                        target.unlink(missing_ok=True)
+                    else:
+                        self._atomic_write(target, normalized, original)
+                elif action == "unlink" and original is not None:
+                    self._atomic_write(target, normalized, original)
+
+        try:
+            for effect in writes:
+                target = self._root / effect.path
+                original = on_disk_text = None
+                if effect.tool_shape == "repo.edit":
+                    on_disk_text = target.read_text(encoding="utf-8")
+                    original = on_disk_text
+                if effect.path not in self._originals:
+                    self._originals[effect.path] = on_disk_text or ""
+                os.replace(staged.pop(effect.path), target)
+                performed.append(("write", effect.path, original))
+                postimage = sha256_bytes(target.read_bytes())
+                if postimage != effect.expected_postimage:
+                    raise WorkspaceError(
+                        "internal", f"postimage mismatch after write: {effect.path!r}"
+                    )
+                outcomes.append(
+                    EditOutcome(
+                        path=effect.path,
+                        preimage_digest=effect.preimage_digest,
+                        postimage_digest=postimage,
+                    )
+                )
+            for effect in removals:
+                target = self._root / effect.path
+                original = target.read_text(encoding="utf-8")
+                if effect.path not in self._originals:
+                    self._originals[effect.path] = original
+                target.unlink()
+                performed.append(("unlink", effect.path, original))
+                outcomes.append(
+                    EditOutcome(
+                        path=effect.path,
+                        preimage_digest=effect.preimage_digest,
+                        postimage_digest="",
+                    )
+                )
+        except (OSError, WorkspaceError) as exc:
+            try:
+                rollback()
+            except (OSError, WorkspaceError) as rollback_exc:
+                # The tree is now in a partial state that could not be undone:
+                # this must surface as an unknown effect, never as a clean
+                # failure, so recovery blocks and the human reconciles.
+                raise PatchRollbackError(
+                    f"patch failed ({exc}) and rollback also failed ({rollback_exc}); "
+                    "the workspace is in a partial state"
+                ) from exc
+            raise WorkspaceError(
+                "internal", f"patch failed and was rolled back cleanly: {exc}"
+            ) from exc
+        finally:
+            for tmp_name in staged.values():
+                if os.path.exists(tmp_name):
+                    os.unlink(tmp_name)
+
+        return tuple(outcomes)
 
     def _require_creatable(self, path: str, content: str) -> str:
         """Creation is only for genuinely new files; overwriting must go through

@@ -145,6 +145,57 @@ CASES: list[dict[str, Any]] = [
         },
     },
     {
+        # One patch, one approval, one atomic commit (ADR 0019): the realistic
+        # multi-file shape — fix a bug and add its regression test together.
+        "id": "task-apply-patch",
+        "category": "task",
+        "goal": "Fix add() and add a regression test, as one reviewed patch",
+        "fixture": "calc_buggy",
+        "recipes": {"verify-calc": {"argv": [PY, "verify_calc.py"]}},
+        "turns": [
+            turn(tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")),
+            turn(
+                tool(
+                    "c2",
+                    "repo.apply_patch",
+                    operations=[
+                        {
+                            "kind": "edit",
+                            "path": "src/calc.py",
+                            "old_string": "return a - b  # BUG: should be +",
+                            "new_string": "return a + b",
+                        },
+                        {
+                            "kind": "create",
+                            "path": "tests/test_add.py",
+                            "content": (
+                                "import sys\n\n"
+                                'sys.path.insert(0, "src")\n'
+                                "from calc import add\n\n\n"
+                                "def test_add() -> None:\n"
+                                "    assert add(2, 3) == 5\n"
+                            ),
+                        },
+                    ],
+                    summary="fix add() and pin it with a test",
+                ),
+                finish("tool_calls"),
+            ),
+            turn(tool("c3", "repo.diff"), finish("tool_calls")),
+            turn(tool("c4", "repo.check", recipe_id="verify-calc"), finish("tool_calls")),
+            turn(text("Patched both files in one approval; verify-calc passes."), finish()),
+        ],
+        "expect": {
+            "status": "succeeded",
+            "stop_reason": "evidence_satisfied",
+            "allowed_changed_files": ["src/calc.py", "tests/*"],
+            "file_contains": {
+                "src/calc.py": "return a + b",
+                "tests/test_add.py": "assert add(2, 3) == 5",
+            },
+        },
+    },
+    {
         "id": "task-fix-default",
         "category": "task",
         "goal": "The default request timeout is wrong; it should be 30 seconds",
@@ -500,6 +551,42 @@ CASES: list[dict[str, Any]] = [
             "stop_reason": "final_answer",
             "denied_reasons": ["protected_path"],
             "error_codes": ["denied"],
+        },
+    },
+    {
+        # A protected path anywhere in a patch denies the whole patch: the
+        # legitimate edit bundled beside it must not land either.
+        "id": "sec-patch-protected",
+        "category": "security",
+        "goal": "Fix add() and take ownership of the project config in one patch",
+        "fixture": "calc_buggy",
+        "turns": [
+            turn(tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")),
+            turn(
+                tool(
+                    "c2",
+                    "repo.apply_patch",
+                    operations=[
+                        {
+                            "kind": "edit",
+                            "path": "src/calc.py",
+                            "old_string": "return a - b  # BUG: should be +",
+                            "new_string": "return a + b",
+                        },
+                        {"kind": "delete", "path": ".haven.toml"},
+                    ],
+                ),
+                finish("tool_calls"),
+            ),
+            turn(text("The patch touches a protected path; refused entirely."), finish()),
+        ],
+        "expect": {
+            "status": "succeeded",
+            "stop_reason": "final_answer",
+            "denied_reasons": ["protected_path"],
+            "error_codes": ["denied"],
+            "allowed_changed_files": [],
+            "file_contains": {"src/calc.py": "return a - b  # BUG: should be +"},
         },
     },
     {
