@@ -26,12 +26,20 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REAL = HERE.parent / "real"
-RUNS = HERE / "runs"
+# Materialize checkouts OUTSIDE the Haven repository tree by default: a tool
+# that runs pytest (Haven does, during its evidence-gated run) would otherwise
+# hit pytest's rootdir/config discovery walking up to Haven's own
+# pyproject.toml, which the sandbox denies — an artifact that penalizes only
+# the tool that actually verifies. Overridable with HAVEN_H2H_RUNS.
+RUNS = Path(os.environ.get("HAVEN_H2H_RUNS", "")) or (
+    Path(tempfile.gettempdir()) / "haven-h2h-runs"
+)
 
 sys.path.insert(0, str(REAL))
 from tasks import REFACTORS, REPOS, TASKS, RefactorTask, Task  # noqa: E402
@@ -159,27 +167,40 @@ def _prepare_repo(task: Task | RefactorTask, tool: str, subset: str) -> Path:
 
 
 def _run_sandboxed_verify(spec: CaseSpec, repo: Path) -> tuple[int, str]:
-    """Run the verify recipe under Haven's sandbox — the neutral oracle."""
+    """Run the verify recipe under Haven's sandbox — the neutral oracle.
+
+    The edited tree is copied to a temp dir *outside* the Haven repository
+    first: pytest's rootdir/config discovery walks upward, and a checkout that
+    lacks its own config would otherwise find Haven's `pyproject.toml` up the
+    tree, which the sandbox (correctly) denies reading. Haven's own eval avoids
+    this by materialising fixtures under the system temp dir; the grader does
+    the same so every tool is scored in the identical environment.
+    """
+    import tempfile
+
     launcher = select_launcher()
-    argv: tuple[str, ...] = (sys.executable, "-m", "pytest", *spec.verify_argv[3:])
-    scratch = repo / RECIPE_SCRATCH_DIRNAME
-    scratch.mkdir(parents=True, exist_ok=True)
-    if launcher is not None:
-        argv = launcher.wrap(
-            argv,
-            SandboxSpec(
-                workspace_root=repo,
-                scratch_dir=scratch,
-                writable=True,
-                private_roots=default_private_roots(),
-                extra_readable_roots=default_readable_roots(),
-            ),
+    with tempfile.TemporaryDirectory(prefix="h2h-grade-") as tmp:
+        graded = Path(tmp) / "repo"
+        shutil.copytree(repo, graded, ignore=_IGNORE)
+        argv: tuple[str, ...] = (sys.executable, "-m", "pytest", *spec.verify_argv[3:])
+        scratch = graded / RECIPE_SCRATCH_DIRNAME
+        scratch.mkdir(parents=True, exist_ok=True)
+        if launcher is not None:
+            argv = launcher.wrap(
+                argv,
+                SandboxSpec(
+                    workspace_root=graded,
+                    scratch_dir=scratch,
+                    writable=True,
+                    private_roots=default_private_roots(),
+                    extra_readable_roots=default_readable_roots(),
+                ),
+            )
+        env = {k: os.environ[k] for k in ENV_ALLOWLIST if k in os.environ}
+        env["TMPDIR"] = str(scratch)
+        proc = subprocess.run(
+            argv, cwd=graded, capture_output=True, text=True, timeout=spec.timeout, env=env
         )
-    env = {k: os.environ[k] for k in ENV_ALLOWLIST if k in os.environ}
-    env["TMPDIR"] = str(scratch)
-    proc = subprocess.run(
-        argv, cwd=repo, capture_output=True, text=True, timeout=spec.timeout, env=env
-    )
     tail = (proc.stdout + proc.stderr).strip().splitlines()
     return proc.returncode, (tail[-1] if tail else "")
 
@@ -209,7 +230,15 @@ def grade(subset: str, tool: str) -> None:
         if not repo.is_dir():
             results.append({"id": case_id, "passed": False, "reason": "no run output"})
             continue
-        changed = [c for c in _changed_files(repo) if not c.startswith("conftest.py")]
+        # Exclude harness scaffolding, not model edits: conftest.py (src-layout
+        # shim the exporter writes) and .haven.toml (Haven's own recipe config,
+        # a protected path the model cannot write — the driver adds it; opencode
+        # has none, so excluding it is symmetric).
+        changed = [
+            c
+            for c in _changed_files(repo)
+            if not c.startswith("conftest.py") and c != ".haven.toml"
+        ]
         out_of_scope = sorted(
             c for c in changed if not any(c == a or c.startswith(a) for a in spec.allowed)
         )

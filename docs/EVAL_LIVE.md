@@ -340,6 +340,69 @@ papered over. The one harness gap it found (answer-without-fixing) became the
 hidden grader. This is the escalation the tier-3 conclusion asked for, and it
 is not saturated.
 
+### Head-to-head: Haven vs opencode, same model, same tasks (2026-08-13)
+
+Every number before this section is Haven-only. Roadmap v3's comparability
+phase measures Haven against a peer coding agent on identical tasks, the same
+model (`deepseek-v4-flash`), and a **neutral grader** that imports nothing
+tool-specific: it runs each project's own verify recipe through Haven's
+sandbox and reads `git diff` for scope, scoring every tool's output tree
+identically without knowing which agent produced it (`evals/headtohead/`).
+
+A 12-case slice spanning all four tiers and every difficulty (easy named-
+symptom bug → hard issue-style → real historical bug → cross-file refactor →
+a no-solution honesty task) was exported tool-agnostically (git-initialised
+buggy checkout + goal text + verify command) and run through each tool's own
+headless mode.
+
+| Tool | Passed | Notes |
+|---|---|---|
+| Haven | **12 / 12** | all verify-green, every edit in scope |
+| opencode | **10 / 12** | verify-green on all 12, but 2 cases **edited the test file** to pass |
+| Codex CLI | not runnable here | see below |
+
+The result is decided by the same standard Haven holds itself to — a green
+oracle *and* an in-scope diff — and the gap is exactly the thesis this
+project was built on. opencode's two losses (`idna-string-length`,
+`t4-click-choice-brackets`) reached a green suite by **editing
+`tests/…`** — the oracle-gaming Haven's scope guard exists to prevent. The
+neutral grader flagged them the same way Haven's own eval flagged the model
+gaming its oracle back in tier 1; Haven's runs never did it, because its
+policy denies out-of-scope writes at execution, not after. Measured against a
+peer, Haven's evidence+scope discipline showed up as two avoided gamings on a
+twelve-task slice.
+
+Two honest caveats on the Haven column. First, one case
+(`jmespath-starts-with`) initially graded FAIL because the checkout lived
+*inside* the Haven repository, so the agent — which actually runs verify,
+unlike opencode — hit pytest's rootdir discovery walking up to Haven's own
+`pyproject.toml` (sandbox-denied) and worked around it by writing a
+`pytest.ini`, an out-of-scope file. Re-running that case under `/tmp` (outside
+the tree) produced a clean single-file fix, confirming the `pytest.ini` was a
+harness-placement artifact, not agent behaviour; the harness now materialises
+checkouts outside the tree by default so it cannot recur. Second, the two
+tools' headless modes are not budget-identical (each runs "until done or its
+own limit"); this compares tools as a user meets them, not under a synthetic
+matched budget.
+
+**Codex CLI could not be included.** Codex 0.147 dropped chat-completions
+support (`wire_api = "chat"` is refused; it requires the OpenAI *Responses*
+API), and DeepSeek exposes only the chat API — so a **same-model** Codex
+comparison is impossible in this environment without a chat→responses
+translating proxy. Running Codex against a *different* model would measure
+tool+model jointly and defeat the control, so it was deliberately not done.
+The unblock is a small proxy or a Codex build that still speaks chat; the cost
+is a day of proxy plumbing, recorded here rather than papered over with an
+apples-to-oranges number.
+
+What this establishes: the head-to-head is real infrastructure now
+(`evals/headtohead/harness.py` + `drivers.py`), the neutral grader works and
+is not home-biased (it PASSed opencode on 10 cases and FAILed Haven on a real
+scaffolding slip until that was traced), and on this slice Haven matches or
+leads a mature peer while never gaming the oracle. It is a 12-task slice
+against one peer, not a benchmark — the roadmap's N≥5 distribution and a
+second peer remain, gated on the Codex unblock.
+
 ### Soak: exercising the v2 mechanisms live (2026-08-13)
 
 Roadmap v3's first job was to give the hours-old v2 mechanisms real mileage
