@@ -8,8 +8,11 @@ requires the Evidence Gate to pass.
 from __future__ import annotations
 
 import asyncio
+import shutil
+import tempfile
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from haven.application.approvals import ApprovalResponder
@@ -56,6 +59,7 @@ from haven.domain.ids import RunId, new_run_id
 from haven.domain.stuck import StuckLoopDetector
 from haven.ports.executor import ExecutorPort
 from haven.ports.model import ModelPort, ProviderError
+from haven.ports.sandbox import SandboxLauncher
 from haven.ports.session import SessionStorePort
 from haven.ports.workspace import WorkspacePort
 
@@ -119,6 +123,7 @@ class RunService:
         git_branch: str = "",
         git_commit: str = "",
         project_guidance: str = "",
+        launcher: SandboxLauncher | None = None,
     ) -> None:
         self._model = model
         self._workspace = workspace
@@ -132,6 +137,11 @@ class RunService:
         self._project_guidance = project_guidance
         self._recipes = recipes
         self._registry = ToolRegistry()
+        self._launcher = launcher
+        # One scratch directory per service, removed when a run finishes. It
+        # exists so sandboxed tools that must write somewhere do not need write
+        # access outside the workspace.
+        self._scratch_dir = Path(tempfile.mkdtemp(prefix="haven-scratch-"))
         self._pipeline = ToolPipeline(
             workspace=workspace,
             executor=executor,
@@ -141,6 +151,8 @@ class RunService:
             registry=self._registry,
             recipes=recipes,
             mode=mode,
+            launcher=launcher,
+            scratch_dir=self._scratch_dir,
         )
 
     # -- entry points -------------------------------------------------------
@@ -337,6 +349,8 @@ class RunService:
         except asyncio.CancelledError:
             await self._finish(ctx, RunStatus.CANCELLED, StopReason.CANCELLED, final_text)
             raise
+        finally:
+            shutil.rmtree(self._scratch_dir, ignore_errors=True)
 
     async def _handle_tool_calls(
         self,

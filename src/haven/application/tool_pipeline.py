@@ -11,8 +11,11 @@ There is no other path from a model proposal to a side effect.
 from __future__ import annotations
 
 import json
+import shlex
+import tempfile
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from haven.application.approvals import ApprovalResponder
 from haven.application.emitter import EventEmitter
@@ -36,6 +39,7 @@ from haven.contracts.tools import (
     RepoCheckArgs,
     RepoCreateArgs,
     RepoEditArgs,
+    RepoExecArgs,
     RepoListArgs,
     RepoReadArgs,
     RepoSearchArgs,
@@ -55,10 +59,17 @@ from haven.domain.enums import (
     ToolStatus,
 )
 from haven.domain.evidence import CheckEvidence, DiffEvidence, EditEvidence
+from haven.domain.exec_policy import ExecClass, classify_argv
 from haven.domain.ids import ApprovalId, ToolCallId, new_approval_id
 from haven.domain.policy import ToolFacts, evaluate_policy
 from haven.domain.ticket import mint_ticket
-from haven.ports.executor import ExecutorPort
+from haven.ports.executor import ExecSpec, ExecutorPort
+from haven.ports.sandbox import (
+    SandboxLauncher,
+    SandboxSpec,
+    default_private_roots,
+    default_readable_roots,
+)
 from haven.ports.session import ExecutionRecord, SessionStorePort
 from haven.ports.workspace import EditPreview, WorkspaceError, WorkspacePort
 
@@ -94,6 +105,8 @@ class ToolPipeline:
         registry: ToolRegistry,
         recipes: dict[str, RecipeSpec],
         mode: PermissionMode,
+        launcher: SandboxLauncher | None = None,
+        scratch_dir: Path | None = None,
     ) -> None:
         self._workspace = workspace
         self._executor = executor
@@ -103,6 +116,8 @@ class ToolPipeline:
         self._registry = registry
         self._recipes = recipes
         self._mode = mode
+        self._launcher = launcher
+        self._scratch_dir = scratch_dir or Path(tempfile.gettempdir()) / "haven-scratch"
 
     async def execute(self, ctx: RunContext, step: int, call: ToolCallProposal) -> ToolExecution:
         started = time.monotonic()
@@ -302,6 +317,20 @@ class ToolPipeline:
                 preview,
             )
 
+        if isinstance(args, RepoExecArgs):
+            facts = self._workspace.path_facts(args.cwd)
+            return (
+                ToolFacts(
+                    tool_name=call.tool_name,
+                    within_workspace=facts.within_workspace,
+                    touches_protected_path=facts.is_protected,
+                    exec_class=classify_argv(args.argv).value,
+                    sandbox_available=self._launcher is not None and self._launcher.available(),
+                    path=facts.normalized,
+                ),
+                None,
+            )
+
         if isinstance(args, RepoCheckArgs):
             return (
                 ToolFacts(
@@ -346,6 +375,16 @@ class ToolPipeline:
             preview_text = _clip(preview.diff, PREVIEW_CHARS)
             intent = f": {args.summary}" if args.summary else ""
             summary = f"create {preview.path} ({preview.insertions} new line(s)){intent}"
+        elif isinstance(args, RepoExecArgs):
+            lines = [f"$ {shlex.join(args.argv)}", self._describe_sandbox()]
+            if classify_argv(args.argv) is ExecClass.SHELL_PASSTHROUGH:
+                lines.append(
+                    "WARNING: this interprets an arbitrary script, so the command "
+                    "above does not describe everything it may do."
+                )
+            preview_text = "\n".join(lines)
+            intent = f": {args.summary}" if args.summary else ""
+            summary = f"run {shlex.join(args.argv)} in {args.cwd}{intent}"
         elif isinstance(args, RepoCheckArgs):
             recipe = self._recipes[args.recipe_id]
             preview_text = "$ " + " ".join(recipe.argv)
@@ -466,6 +505,9 @@ class ToolPipeline:
 
         if isinstance(args, RepoEditArgs | RepoCreateArgs):
             return await self._execute_write(ctx, call, args, ticket_digest, preview)
+
+        if isinstance(args, RepoExecArgs):
+            return await self._execute_exec(ctx, call, args, ticket_digest)
 
         if isinstance(args, RepoCheckArgs):
             return await self._execute_check(ctx, call, args, ticket_digest)
@@ -605,6 +647,73 @@ class ToolPipeline:
                     "postimage_digest": outcome.postimage_digest,
                     "diff": _clip(preview.diff, MODEL_PAYLOAD_CHARS),
                 },
+            )
+        )
+
+    def _sandbox_spec(self) -> SandboxSpec:
+        return SandboxSpec(
+            workspace_root=self._workspace.root,
+            scratch_dir=self._scratch_dir,
+            writable=True,
+            allow_network=False,
+            private_roots=default_private_roots(),
+            extra_readable_roots=default_readable_roots(),
+        )
+
+    def _describe_sandbox(self) -> str:
+        if self._launcher is None:
+            return "sandbox: unavailable"
+        return self._launcher.describe(self._sandbox_spec())
+
+    async def _execute_exec(
+        self, ctx: RunContext, call: ToolCallProposal, args: RepoExecArgs, ticket_digest: str
+    ) -> ToolExecution:
+        assert self._launcher is not None  # policy denies exec without a launcher
+        await self._store.record_execution(
+            ExecutionRecord(
+                call_id=call.call_id,
+                run_id=ctx.run_id,
+                ticket_digest=ticket_digest,
+                tool_name=call.tool_name,
+                effect_state=EffectState.STARTED,
+                preimage_digest="",
+                postimage_digest="",
+                path=args.cwd,
+            )
+        )
+        spec = ExecSpec(
+            argv=args.argv,
+            cwd=self._workspace.root / args.cwd,
+            timeout_seconds=args.timeout_seconds,
+            sandbox=self._sandbox_spec(),
+        )
+        try:
+            outcome = await self._executor.run_exec(spec)
+        except BaseException:
+            await self._store.update_execution_state(call.call_id, EffectState.EFFECT_UNKNOWN)
+            raise
+
+        # A nonzero exit is a completed execution, not an unknown effect.
+        await self._store.update_execution_state(call.call_id, EffectState.CONFIRMED)
+        if outcome.timed_out:
+            return ToolExecution(
+                _error(
+                    call, ToolErrorCode.TIMEOUT, f"command timed out after {args.timeout_seconds}s"
+                )
+            )
+        # No evidence is recorded here on purpose: only a registered check
+        # recipe can satisfy the Evidence Gate.
+        return ToolExecution(
+            _ok(
+                call,
+                {
+                    "exit_code": outcome.exit_code,
+                    "duration_ms": outcome.duration_ms,
+                    "stdout_tail": _clip(outcome.stdout_tail, 4000),
+                    "stderr_tail": _clip(outcome.stderr_tail, 2000),
+                    "sandbox": self._launcher.backend,
+                },
+                truncated=outcome.truncated,
             )
         )
 

@@ -26,6 +26,12 @@ from haven.contracts.model import (
 from haven.contracts.tools import RecipeSpec
 from haven.domain.budget import Budget
 from haven.domain.enums import PermissionMode
+from haven.ports.sandbox import SandboxLauncher
+from tests.integration.fakes import RecordingLauncher
+
+#: Distinguishes "caller said nothing" from an explicit `launcher=None`, which
+#: is how a test asks for the no-sandbox-backend path.
+_UNSET_LAUNCHER: SandboxLauncher = RecordingLauncher()
 
 BUGGY_CALC = (
     "def add(a, b):\n    return a - b  # BUG: should be +\n\n\ndef sub(a, b):\n    return a - b\n"
@@ -111,6 +117,7 @@ class Harness:
         approver: ApprovalResponder | None = None,
         budget: Budget | None = None,
         repeat_last: bool = False,
+        launcher: SandboxLauncher | None = _UNSET_LAUNCHER,
     ) -> None:
         self.workspace = FsWorkspace(repo)
         self.store = MemorySessionStore()
@@ -118,14 +125,20 @@ class Harness:
         self.emitter = EventEmitter(self.store, [self.sink])
         self.model = ScriptedModel(turns, repeat_last=repeat_last)
         self.approver = approver if approver is not None else AutoApprover("approve_all")
+        # A recording launcher by default, so exec behaves identically on every
+        # platform here; real confinement is asserted in tests/security.
+        # Passing launcher=None exercises the no-backend path on purpose.
+        resolved = RecordingLauncher() if launcher is _UNSET_LAUNCHER else launcher
+        self.launcher = resolved
         self.service = RunService(
             model=self.model,
             workspace=self.workspace,
-            executor=ProcessExecutor(),
+            executor=ProcessExecutor(launcher=resolved),
             store=self.store,
             emitter=self.emitter,
             approvals=self.approver,
             recipes=default_recipes(),
             mode=mode,
             budget=budget if budget is not None else Budget(),
+            launcher=resolved,
         )
