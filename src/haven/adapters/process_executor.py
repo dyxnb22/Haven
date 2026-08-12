@@ -90,14 +90,27 @@ class ProcessExecutor:
         command = self._launcher.wrap(argv, sandbox) if self._launcher is not None else argv
 
         started = time.monotonic()
-        proc = await asyncio.create_subprocess_exec(
-            *command,
-            cwd=cwd,
-            env=env,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *command,
+                cwd=cwd,
+                env=env,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except OSError as exc:
+            # A program that is not installed must read as a failed command,
+            # not as an exception escaping into the agent loop. 127 is the
+            # shell's own convention for "command not found".
+            return ExecOutcome(
+                exit_code=127,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                stdout_tail="",
+                stderr_tail=f"could not start {argv[0]!r}: {exc.strerror or exc}",
+                truncated=False,
+                timed_out=False,
+            )
         timed_out = False
         try:
             async with asyncio.timeout(timeout_seconds):

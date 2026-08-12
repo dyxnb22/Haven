@@ -275,7 +275,11 @@ class FsWorkspace:
     def _search_walk(self, pattern: str, target: Path, max_results: int) -> SearchResult:
         compiled = re.compile(pattern)
         matches: list[SearchMatch] = []
-        files_scanned = 0
+        # Files that produced at least one match, which is the only count
+        # ripgrep can report. Counting files *walked* here instead would make
+        # the same field mean different things depending on whether ripgrep
+        # happens to be installed.
+        seen_files: set[str] = set()
         total_bytes = 0
         truncated = False
 
@@ -290,7 +294,6 @@ class FsWorkspace:
                 continue
             if b"\x00" in data:
                 continue  # binary
-            files_scanned += 1
             text = data.decode("utf-8", errors="replace")
             rel = file_path.relative_to(self._root).as_posix()
             for line_number, line in enumerate(text.splitlines(), start=1):
@@ -298,11 +301,12 @@ class FsWorkspace:
                     clipped = line.strip()[:MAX_SEARCH_LINE_CHARS]
                     total_bytes += len(clipped.encode("utf-8"))
                     matches.append(SearchMatch(path=rel, line_number=line_number, line=clipped))
+                    seen_files.add(rel)
                     if len(matches) >= max_results or total_bytes >= MAX_SEARCH_TOTAL_BYTES:
                         truncated = True
                         break
         return SearchResult(
-            matches=tuple(matches), files_scanned=files_scanned, truncated=truncated
+            matches=tuple(matches), files_scanned=len(seen_files), truncated=truncated
         )
 
     def _iter_files(self, target: Path) -> list[Path]:

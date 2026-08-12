@@ -120,6 +120,31 @@ class TestRunExec:
         await ProcessExecutor(launcher=launcher).run_recipe(recipe("pass"), tmp_path)
         assert launcher.calls[0][1].allow_network is False
 
+    async def test_a_missing_program_is_a_result_not_an_exception(self, tmp_path: Path) -> None:
+        """Found on Linux, where `make` is absent: create_subprocess_exec raises
+        FileNotFoundError, which would escape into the agent loop and violate
+        the invariant that a tool call always returns a structured result."""
+        executor = ProcessExecutor(launcher=RecordingLauncher())
+        outcome = await executor.run_exec(
+            ExecSpec(
+                argv=("definitely-not-a-real-program-xyz",),
+                cwd=tmp_path,
+                timeout_seconds=10.0,
+                sandbox=SandboxSpec(
+                    workspace_root=tmp_path, scratch_dir=tmp_path / "scratch", writable=True
+                ),
+            )
+        )
+        assert outcome.exit_code == 127
+        assert "definitely-not-a-real-program-xyz" in outcome.stderr_tail
+        assert outcome.timed_out is False
+
+    async def test_a_missing_recipe_program_is_also_a_result(self, tmp_path: Path) -> None:
+        executor = ProcessExecutor(launcher=RecordingLauncher())
+        missing = RecipeSpec(id="ghost", argv=("definitely-not-a-real-program-xyz",))
+        outcome = await executor.run_recipe(missing, tmp_path)
+        assert outcome.exit_code == 127
+
     async def test_scratch_dir_is_exported_as_tmpdir(self, tmp_path: Path) -> None:
         executor = ProcessExecutor(launcher=RecordingLauncher())
         outcome = await executor.run_exec(
