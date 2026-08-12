@@ -37,7 +37,7 @@ Open a local Git repo
 uv sync --locked
 
 # Run the deterministic eval suite (ScriptedModel; no network, no key)
-uv run haven eval --offline          # 32/32 cases, 0 security violations
+uv run haven eval --offline          # all cases pass, 0 security violations
 uv run python evals/generate_cases.py  # regenerate case JSON if you edit them
 
 # Inspect a stored run / replay its timeline
@@ -140,6 +140,8 @@ scope so the core guarantees can be proven rather than gestured at.
 ```text
 haven [PATH]                         # interactive TUI (default)
 haven run GOAL --workspace PATH --json   # headless, read-only (no bypass flag)
+haven continue RUN_ID FOLLOW_UP      # a follow-up turn that keeps prior context
+haven discover --workspace PATH      # suggest .haven.toml check recipes
 haven doctor --workspace PATH        # environment check, no side effects
 haven sessions list | show RUN_ID
 haven replay RUN_ID                  # pure journal projection, no model/tools
