@@ -59,3 +59,8 @@ haven-run-*.md
 .env.*
 coverage.xml
 htmlcov/
+
+evals/real/repos/
+evals/real/fixtures/
+evals/real/cases/
+evals/real/report/

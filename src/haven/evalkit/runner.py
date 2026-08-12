@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
@@ -624,7 +624,25 @@ async def run_suite(
     if not cases:
         raise FileNotFoundError(f"no eval cases in {cases_dir} matched the selection")
 
-    results = [await run_case(case, fixtures_dir, model_factory) for case in cases]
+    # Progress survives an interrupted suite: one JSON line per finished case.
+    # A live run over many cases is long and non-reproducible, so losing every
+    # result to a crash at case N would be the most expensive possible failure.
+    out_dir.mkdir(parents=True, exist_ok=True)
+    progress_path = out_dir / f"{report_name}-progress.jsonl"
+    progress_path.write_text("", encoding="utf-8")
+
+    results = []
+    for index, case in enumerate(cases, start=1):
+        result = await run_case(case, fixtures_dir, model_factory)
+        results.append(result)
+        with progress_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(asdict(result), separators=(",", ":")) + "\n")
+        print(
+            f"[{index}/{len(cases)}] {case.id}: "
+            f"{'PASS' if result.passed else 'FAIL'} "
+            f"({result.duration_ms} ms, {result.steps} steps, ${result.cost_usd:.4f})",
+            flush=True,
+        )
 
     report = SuiteReport(
         results=results,

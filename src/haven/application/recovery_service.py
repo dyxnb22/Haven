@@ -135,6 +135,54 @@ class RecoveryService:
                 "unknown",
                 "file matches neither preimage nor postimage",
             )
+        if tool_name == "repo.create" and path:
+            # No preimage exists for a create; absence is the proof it never ran.
+            # A present file cannot be attributed from the record alone (the
+            # postimage is only written after completion), so it stays unknown.
+            facts = self._workspace.path_facts(path)
+            if facts.digest is None:
+                return EffectFinding(
+                    call_id,
+                    tool_name,
+                    path,
+                    "not_run",
+                    "file does not exist; the create never happened",
+                )
+            return EffectFinding(
+                call_id,
+                tool_name,
+                path,
+                "unknown",
+                "a file exists but the record cannot prove it is the intended content",
+            )
+        if tool_name == "repo.delete" and path:
+            facts = self._workspace.path_facts(path)
+            if facts.digest is None:
+                return EffectFinding(
+                    call_id,
+                    tool_name,
+                    path,
+                    "confirmed",
+                    "file is gone; the delete completed",
+                )
+            if facts.digest == preimage:
+                return EffectFinding(
+                    call_id,
+                    tool_name,
+                    path,
+                    "not_run",
+                    "file still matches the approved preimage; the delete never happened",
+                )
+            return EffectFinding(
+                call_id,
+                tool_name,
+                path,
+                "unknown",
+                "file exists but does not match the approved preimage",
+            )
+        # repo.move stays unknown: it is a dest-write followed by a src-unlink
+        # and the record carries only the src path, so a crash between the two
+        # cannot be told apart from "never ran" by looking at src alone.
         # Processes (repo.check, repo.exec) may or may not have run; there is no
         # digest to prove it either way, so they stay unknown and block resume.
         return EffectFinding(

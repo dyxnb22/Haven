@@ -83,6 +83,112 @@ async def crash_setup(
     return run_id, RecoveryService(h.store, workspace)
 
 
+async def crash_setup_for(
+    repo: Path, h: Harness, *, tool_name: str, path: str, preimage: str
+) -> tuple[str, RecoveryService]:
+    """Like crash_setup, but for an arbitrary interrupted write tool."""
+    run_id = "run-crash02"
+    workspace = h.workspace
+    await h.store.create_run(run_id, str(repo), workspace.workspace_digest, "goal", "interactive")
+    await h.store.update_run_status(run_id, RunStatus.EXECUTING_TOOL, "")
+    checkpoint = CheckpointV1(
+        run_id=run_id,
+        workspace_digest=workspace.workspace_digest,
+        goal="goal",
+        mode="interactive",
+        status=RunStatus.EXECUTING_TOOL.value,
+        last_seq=2,
+        budget=BudgetSnapshot.from_domain(Budget()),
+        usage=UsageSnapshot.from_domain(BudgetUsage(steps=1, tool_calls=1)),
+        messages=(ModelMessage(role="assistant", content="working"),),
+        evidence=EvidenceSnapshot(),
+        files_read={},
+    )
+    await h.store.save_checkpoint(checkpoint)
+    await h.store.record_execution(
+        ExecutionRecord(
+            call_id="c9",
+            run_id=run_id,
+            ticket_digest="t-crash",
+            tool_name=tool_name,
+            effect_state=EffectState.STARTED,
+            preimage_digest=preimage,
+            postimage_digest="",
+            path=path,
+        )
+    )
+    return run_id, RecoveryService(h.store, workspace)
+
+
+class TestCreateDeleteClassification:
+    """An interrupted create or delete is classified from what is provable on
+    disk, the same standard repo.edit gets; move stays unknown because its
+    record cannot distinguish mid-move states."""
+
+    async def test_create_with_no_file_is_not_run(self, tmp_path: Path) -> None:
+        repo = make_repo(tmp_path)
+        h = Harness(repo, [])
+        run_id, recovery = await crash_setup_for(
+            repo, h, tool_name="repo.create", path="src/new_module.py", preimage=""
+        )
+        report = await recovery.inspect(run_id)
+        assert report.can_resume
+        assert report.findings[0].classification == "not_run"
+
+    async def test_create_with_a_present_file_is_unknown(self, tmp_path: Path) -> None:
+        repo = make_repo(tmp_path)
+        (repo / "src" / "new_module.py").write_text("something\n")
+        h = Harness(repo, [])
+        run_id, recovery = await crash_setup_for(
+            repo, h, tool_name="repo.create", path="src/new_module.py", preimage=""
+        )
+        report = await recovery.inspect(run_id)
+        assert not report.can_resume
+        assert report.findings[0].classification == "unknown"
+
+    async def test_delete_with_the_file_gone_is_confirmed(self, tmp_path: Path) -> None:
+        repo = make_repo(tmp_path)
+        h = Harness(repo, [])
+        run_id, recovery = await crash_setup_for(
+            repo, h, tool_name="repo.delete", path="src/missing.py", preimage="d-old"
+        )
+        report = await recovery.inspect(run_id)
+        assert report.findings[0].classification == "confirmed"
+
+    async def test_delete_with_the_preimage_intact_is_not_run(self, tmp_path: Path) -> None:
+        repo = make_repo(tmp_path)
+        h = Harness(repo, [])
+        facts = h.workspace.path_facts("src/calc.py")
+        assert facts.digest is not None
+        run_id, recovery = await crash_setup_for(
+            repo, h, tool_name="repo.delete", path="src/calc.py", preimage=facts.digest
+        )
+        report = await recovery.inspect(run_id)
+        assert report.can_resume
+        assert report.findings[0].classification == "not_run"
+
+    async def test_delete_with_a_changed_file_is_unknown(self, tmp_path: Path) -> None:
+        repo = make_repo(tmp_path)
+        h = Harness(repo, [])
+        run_id, recovery = await crash_setup_for(
+            repo, h, tool_name="repo.delete", path="src/calc.py", preimage="d-does-not-match"
+        )
+        report = await recovery.inspect(run_id)
+        assert not report.can_resume
+        assert report.findings[0].classification == "unknown"
+
+    async def test_move_stays_unknown(self, tmp_path: Path) -> None:
+        repo = make_repo(tmp_path)
+        h = Harness(repo, [])
+        facts = h.workspace.path_facts("src/calc.py")
+        assert facts.digest is not None
+        run_id, recovery = await crash_setup_for(
+            repo, h, tool_name="repo.move", path="src/calc.py", preimage=facts.digest
+        )
+        report = await recovery.inspect(run_id)
+        assert report.findings[0].classification == "unknown"
+
+
 class TestEffectClassification:
     async def test_edit_never_ran_is_safe_to_resume(self, tmp_path: Path) -> None:
         repo = make_repo(tmp_path)

@@ -1,0 +1,8 @@
+# Pinned commits for the real-repo live suite (evals/real/tasks.py).
+# Regenerate clones at these SHAs; fixtures/cases are built by build.py.
+
+jmespath.py 2812594e69d43098ef60f81f4efc404c071b0418 https://github.com/jmespath/jmespath.py
+idna b54576b13fd31e0d5b51ba9ce36d018feeeebaec https://github.com/kjd/idna
+wcwidth 551710eabf316ed2d9e3782c1fe9cf80ff0f6ed9 https://github.com/jquast/wcwidth
+tomli 5a77b12a7a9f052ce5a20c335d2825658f6aea52 https://github.com/hukkin/tomli
+tabulate 268615a5c27dc40e5c22454c07b44d5c50410da0 https://github.com/astanin/python-tabulate

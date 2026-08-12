@@ -67,6 +67,15 @@ from haven.ports.workspace import WorkspacePort
 
 MAX_EVIDENCE_NUDGES = 2
 
+#: An answer the provider cut at its output-token limit is continued at most
+#: this many times before Haven proceeds with the partial text (with a warning),
+#: so a model that truncates forever cannot spend the whole budget.
+MAX_OUTPUT_CONTINUATIONS = 2
+
+#: A reply with neither text nor tool calls (e.g. a reasoning-only response) is
+#: re-prompted this many times before the run stops for lack of progress.
+MAX_EMPTY_REPLIES = 2
+
 #: Transient provider failures are common enough on real networks that losing a
 #: whole run to one is the wrong default. Measured: 3 of 8 live runs hit a
 #: ConnectError before any token arrived.
@@ -268,6 +277,13 @@ class RunService:
         started = time.monotonic()
         elapsed_base = ctx.usage.wall_time_seconds
         final_text = ""
+        # Output-truncation recovery: parts of an answer the provider cut off
+        # at its output-token limit, stitched back together across bounded
+        # continuation requests (a truncated answer must never be silently
+        # accepted as a complete one).
+        answer_parts: list[str] = []
+        continuations = 0
+        empty_replies = 0
 
         try:
             while True:
@@ -341,8 +357,89 @@ class RunService:
                         return stopped
                     continue
 
+                # An answer cut off at the provider's output-token limit is not
+                # a final answer. Ask for the rest — bounded, because a model
+                # that truncates forever must not be able to spend the budget.
+                if result.finish_reason == "length" and continuations < MAX_OUTPUT_CONTINUATIONS:
+                    continuations += 1
+                    answer_parts.append(result.text)
+                    await self._emitter.emit(
+                        ctx.run_id,
+                        Notice(
+                            run_id=ctx.run_id,
+                            level="warning",
+                            message=(
+                                "answer hit the output token limit; requesting a "
+                                f"continuation ({continuations}/{MAX_OUTPUT_CONTINUATIONS})"
+                            ),
+                        ),
+                    )
+                    ctx.transcript.append(
+                        ModelMessage(
+                            role="user",
+                            content=(
+                                "Your previous message was cut off at the output token "
+                                "limit. Continue exactly from where it stopped, without "
+                                "repeating anything. If no answer text was produced yet, "
+                                "give the answer directly and concisely."
+                            ),
+                        )
+                    )
+                    continue
+
+                # A reply with neither text nor tool calls (a reasoning-only
+                # response) would sail through the no-edit gate as an empty
+                # answer. Re-prompt, bounded.
+                if not result.text.strip() and not answer_parts:
+                    empty_replies += 1
+                    if empty_replies > MAX_EMPTY_REPLIES:
+                        await self._emitter.emit(
+                            ctx.run_id,
+                            Notice(
+                                run_id=ctx.run_id,
+                                level="error",
+                                message="model repeatedly returned no content and no tool calls",
+                            ),
+                        )
+                        return await self._finish(
+                            ctx, RunStatus.STOPPED, StopReason.NO_PROGRESS, final_text
+                        )
+                    await self._emitter.emit(
+                        ctx.run_id,
+                        Notice(
+                            run_id=ctx.run_id,
+                            level="warning",
+                            message="model returned no content; asking again "
+                            f"({empty_replies}/{MAX_EMPTY_REPLIES})",
+                        ),
+                    )
+                    ctx.transcript.append(
+                        ModelMessage(
+                            role="user",
+                            content=(
+                                "Your reply contained no answer text and no tool calls. "
+                                "Reply with either a tool call or your answer."
+                            ),
+                        )
+                    )
+                    continue
+
                 # Final answer: the Evidence Gate decides, not the model.
-                final_text = result.text
+                final_text = "".join((*answer_parts, result.text))
+                answer_parts = []
+                if result.finish_reason == "length":
+                    await self._emitter.emit(
+                        ctx.run_id,
+                        Notice(
+                            run_id=ctx.run_id,
+                            level="warning",
+                            message=(
+                                "answer still truncated after "
+                                f"{MAX_OUTPUT_CONTINUATIONS} continuations; "
+                                "proceeding with the partial answer"
+                            ),
+                        ),
+                    )
                 ctx.move_to(RunStatus.VERIFYING)
                 # Re-read the accumulated diff so the review sees what is on
                 # disk now, not what a stale event recorded.
