@@ -42,18 +42,23 @@ silently changes meaning.
 ## Problem 2: the context budget is sized for a model that no longer exists
 
 `MAX_CONTEXT_CHARS = 96_000` is roughly 24K tokens against a **1M token**
-window — about 2.4% of it. That was a reasonable default when it was written.
-Against this model's cache economics it is actively counterproductive:
+window — about 2.4% of it. That was a reasonable default when it was written,
+and against this model it compacts far earlier than it needs to.
 
-- Context that stays in the prefix is billed at the **hit** rate, ~$0.0028/1M.
-  Retaining it is nearly free.
-- A compaction event rewrites the prefix, so the bytes after it are re-billed
-  at the **miss** rate, and any fact the agent must re-read is a fresh miss —
-  50× the price of simply having kept it.
+The tempting argument is that a cache hit costs 1/50 of a miss, so retaining
+context is free and compaction is pure loss. **The measurement does not support
+that**, and `evals/ab.py` prints the correction: cached tokens are cheap, not
+free, so the larger budget costs about **$0.000028 more per steady-state turn**
+on the same history.
 
-So on this model, compacting early costs money rather than saving it. The
-correct setting is a budget large enough that compaction is rare, with
-compaction still present as the thing that stops an unbounded transcript.
+The real case is avoided re-reads, and it is quantifiable. When compaction
+drops a file the agent still needs, re-reading it costs ~2,000 fresh tokens at
+the miss rate — about **$0.000280** — plus a step and a tool call. The larger
+budget therefore pays for itself if it avoids **one re-read every ten turns**,
+which a read-heavy task clears easily.
+
+So: raise the budget, but record it as a modest bounded trade rather than a
+free win, and keep compaction as the thing that stops an unbounded transcript.
 
 **Decision.** The character budget becomes a per-model value rather than a
 module constant, defaulting to today's 96,000 so nothing changes for an

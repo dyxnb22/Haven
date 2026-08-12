@@ -35,12 +35,12 @@ DEFAULT_PROFILE = ModelProfile(name="default")
 #: Published behavior as of 2026-08: a 1M-token window shared by input and
 #: output, and a cache hit priced at one fiftieth of a miss.
 #:
-#: The large character budget is a consequence of that price ratio rather than
-#: of the window size. Context retained in the prefix bills at the hit rate, so
-#: keeping it is nearly free, while a compaction event invalidates the prefix
-#: and forces any re-read to bill at the miss rate. Compacting early therefore
-#: costs money on this model. It is still far below the window: latency and the
-#: miss-rate cost of genuinely new content both grow with request size.
+#: The larger character budget is not free: carrying more cached tokens costs
+#: slightly more per turn. It pays for itself by avoiding re-reads, which bill
+#: at the miss rate and also cost a step — `evals/ab.py` puts the break-even at
+#: roughly one avoided re-read every ten turns. It stays far below the window
+#: because latency and the miss-rate cost of genuinely new content both grow
+#: with request size.
 DEEPSEEK_V4_FLASH = ModelProfile(
     name="deepseek-v4-flash",
     max_context_chars=480_000,

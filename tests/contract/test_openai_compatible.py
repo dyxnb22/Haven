@@ -144,6 +144,41 @@ async def test_tool_call_delta_assembly() -> None:
     assert finished.finish_reason == "tool_calls"
 
 
+async def test_interleaved_tool_calls_are_assembled_separately() -> None:
+    """A model may emit several calls in one turn, and their argument deltas
+    arrive interleaved. Each index must accumulate into its own call."""
+    body = (
+        chunk(
+            {
+                "tool_calls": [
+                    {"index": 0, "id": "call_a", "function": {"name": "repo.read", "arguments": ""}}
+                ]
+            }
+        )
+        + chunk(
+            {
+                "tool_calls": [
+                    {"index": 1, "id": "call_b", "function": {"name": "repo.list", "arguments": ""}}
+                ]
+            }
+        )
+        + chunk({"tool_calls": [{"index": 0, "function": {"arguments": '{"path":'}}]})
+        + chunk({"tool_calls": [{"index": 1, "function": {"arguments": '{"path":'}}]})
+        + chunk({"tool_calls": [{"index": 0, "function": {"arguments": ' "a.py"}'}}]})
+        + chunk({"tool_calls": [{"index": 1, "function": {"arguments": ' "."}'}}]})
+        + chunk({}, finish="tool_calls")
+        + b"data: [DONE]\n\n"
+    )
+
+    events = await collect(make_model(lambda req: httpx.Response(200, content=body)))
+    calls = [e.call for e in events if isinstance(e, ToolCallReady)]
+
+    assert [c.call_id for c in calls] == ["call_a", "call_b"]
+    assert [c.tool_name for c in calls] == ["repo.read", "repo.list"]
+    assert json.loads(calls[0].arguments_json) == {"path": "a.py"}
+    assert json.loads(calls[1].arguments_json) == {"path": "."}
+
+
 @pytest.mark.parametrize(
     ("status", "code"),
     [(401, "auth"), (403, "auth"), (429, "rate_limited"), (500, "server"), (503, "server")],
