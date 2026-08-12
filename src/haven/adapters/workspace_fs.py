@@ -84,7 +84,24 @@ IGNORED_DIRS = frozenset(
 
 
 class FsWorkspace:
-    """Implements WorkspacePort for a local directory."""
+    """Implements WorkspacePort for a local directory.
+
+    Invariants every write path upholds (the section headers below group the
+    implementations):
+
+    - every path is normalized and confined: escapes and PROTECTED_COMPONENTS
+      (.git/.haven/.haven.toml) fail closed before any I/O;
+    - a mutation is previewed first (unified diff + preimage digest), and the
+      apply re-verifies that preimage - approval binds to exactly what was
+      shown (`stale_preimage` otherwise);
+    - writes are atomic (temp file + fsync + rename) and the postimage is
+      re-read from disk: a successful write() call is not evidence;
+    - `apply_patch` stages every file then commits writes-before-removals
+      with journaled rollback; an unrollbackable failure raises
+      PatchRollbackError so the pipeline can mark effects unknown;
+    - the first touch of each file archives its original (`_originals`),
+      which is what powers the run-scoped diff and `haven rewind`.
+    """
 
     def __init__(self, root: Path, *, use_ripgrep: bool = True) -> None:
         resolved = root.resolve()

@@ -1,4 +1,22 @@
-"""Application layer: use cases orchestrating domain logic through ports."""
+"""Application layer: use cases orchestrating domain logic through ports.
+
+The two files that define the system live here:
+
+    run_service.py    the bounded agent loop (one turn = context -> model ->
+                      tools -> evidence -> checkpoint)
+    tool_pipeline.py  the single execution channel every model-proposed
+                      action must pass through
+
+supported by: context_builder (what the model sees), compaction (dropped
+history becomes recorded facts), approvals (broker between pipeline and
+human/auto policies), registry (static tool lookup + strict validation),
+recovery_service (crash recovery + user rewind), replay_service (journal
+projection), profiles (per-model defaults), emitter (persist + fan out
+events), state (the mutable per-run RunContext).
+
+This layer knows domain, ports, and contracts - never a concrete adapter;
+bootstrap.py injects those.
+"""
 
 from haven.application.approvals import ApprovalResponder, AutoApprover, QueueApprovalBroker
 from haven.application.context_builder import ContextBuilder

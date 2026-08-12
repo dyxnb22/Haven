@@ -1,4 +1,20 @@
-"""Haven domain layer: pure logic, no I/O, no framework imports."""
+"""Haven domain layer: pure logic, no I/O, no framework imports.
+
+Everything here is a deterministic function or an immutable value object, so
+every security-relevant decision is unit-testable in isolation:
+
+    policy.py       who may do what (the ONLY authority over side effects)
+    approval.py     digest-bound, single-use approval records
+    ticket.py       execution tickets - the only currency the executor takes
+    evidence.py     the Evidence Gate: what counts as a successful run
+    budget.py       hard ceilings (steps/tools/time/tokens/cost)
+    exec_policy.py  approval friction class for a proposed command line
+    review.py       deterministic scan of the lines a run wrote
+    stuck.py        no-progress (identical call+result) detection
+    transitions.py  the RunStatus state machine
+    discovery.py    propose verify recipes from a repo's own files
+    digest.py/ids.py/enums.py/pricing.py   shared primitives
+"""
 
 from haven.domain.approval import ApprovalRecord, ApprovalRequest, compute_approval_digest
 from haven.domain.budget import Budget, BudgetUsage, check_budget

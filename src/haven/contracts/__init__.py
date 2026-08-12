@@ -1,4 +1,14 @@
-"""Strict Pydantic contracts for every boundary of the system."""
+"""Strict Pydantic contracts for every boundary of the system.
+
+All models forbid unknown fields (StrictModel), so drift between components
+fails loudly at the boundary instead of silently downstream:
+
+    tools.py       tool args/results - the model-facing surface, versioned
+                   by TOOL_VERSION (bumped on any semantic change)
+    model.py       provider-neutral messages, stream events, usage
+    events.py      the typed trace stream (ApplicationEvent union)
+    checkpoint.py  the versioned fast-resume snapshot (CheckpointV1)
+"""
 
 from haven.contracts.base import StrictModel
 from haven.contracts.checkpoint import (

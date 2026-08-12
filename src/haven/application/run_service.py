@@ -3,6 +3,35 @@
 Loop shape: Model -> Tool(s) -> Observation -> Model ... until the program
 decides to stop. Every stop has exactly one reason; success additionally
 requires the Evidence Gate to pass.
+
+One turn of the loop (see `_drive`) does, in order:
+
+    1. budget check           - steps/tools/wall-time/tokens/cost ceilings
+                                (domain/budget.py); a breach stops the run.
+    2. steering delivery      - user input queued via `steer()` becomes a
+                                plain user message at this boundary, never
+                                mid-stream (ADR 0020).
+    3. context build          - ContextBuilder selects head/history/tail,
+                                compacts if over budget, and reports the
+                                segments to the trace (`context.built`).
+    4. model stream           - provider events are re-emitted live to the
+                                UI; disconnects mid-stream are retried in a
+                                bounded way (`_stream_model`).
+    5a. tool calls            - handed to the ToolPipeline one at a time;
+                                results append to the transcript; a stuck
+                                loop (3 identical call+result) stops the run.
+    5b. no tool calls         - the text is the candidate final answer; a
+                                `finish_reason == "length"` answer triggers a
+                                bounded continuation rather than acceptance.
+    6. checkpoint             - durable snapshot for crash recovery.
+    7. finish                 - `_finish` applies the Evidence Gate: a run
+                                that edited files succeeds only with a diff
+                                plus a green check recorded after the last
+                                write; otherwise it fails with a stop reason.
+
+Multi-turn sessions: `continue_run` restores the checkpointed transcript and
+appends a follow-up (fork = continue from any older run id, ADR 0015/0020);
+`rewind` (RecoveryService) is the user-level undo of a finished run's files.
 """
 
 from __future__ import annotations
@@ -308,6 +337,10 @@ class RunService:
     # -- the loop -------------------------------------------------------------
 
     async def _drive(self, ctx: RunContext) -> RunOutcome:
+        """The turn loop. The numbered stages are documented in the module
+        docstring. Every RunOutcome is minted by `_finish` (directly, or
+        inside `_handle_tool_calls`), so there is exactly one place where a
+        stop reason and the Evidence Gate are applied."""
         builder = ContextBuilder(
             goal=ctx.goal,
             tools=tool_schemas(),
@@ -595,6 +628,13 @@ class RunService:
         calls: tuple[ToolCallProposal, ...],
         stuck: StuckLoopDetector,
     ) -> RunOutcome | None:
+        """Execute a turn's tool calls strictly in order through the pipeline.
+
+        Returns a RunOutcome to stop the run (tool budget exhausted, an
+        unknown effect, a stuck loop) or None to hand the observations back
+        to the model. Deliberately sequential: parallel side effects would
+        make approvals, preimage pins, and the journal order ambiguous.
+        """
         for call in calls:
             if ctx.usage.tool_calls >= ctx.budget.max_tool_calls:
                 return await self._finish(
@@ -783,6 +823,13 @@ class RunService:
         final_text: str,
         gate_reason: str = "",
     ) -> RunOutcome:
+        """The single exit: every run ends here exactly once.
+
+        Persists the final status, checkpoints, and emits `run.finished`.
+        Callers that claim SUCCEEDED have already passed the Evidence Gate
+        (see the final-answer branch in `_drive`); this method never upgrades
+        a status, it only records the decision and its stop reason.
+        """
         if ctx.status is not status:
             ctx.status = status  # direct set: _finish targets are always terminal-ish
         await self._store.update_run_status(ctx.run_id, status, stop_reason.value)

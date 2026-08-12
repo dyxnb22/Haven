@@ -110,6 +110,15 @@ async def build_services(
     store_path: Path | None = None,
     tier: str | None = None,
 ) -> AppServices:
+    """Wire one workspace's full service graph; every interface calls this.
+
+    Order matters: resolve workspace -> load layered config -> take (or fail
+    to take) the writer lease, possibly downgrading to read-only -> construct
+    adapters (filesystem workspace, SQLite store, provider unless a test
+    injected one) -> assemble RunService/RecoveryService/ReplayService around
+    them. Tests pass `model=ScriptedModel(...)` and a temp `store_path`; the
+    returned AppServices.aclose() releases everything, including the lease.
+    """
     workspace_root = resolve_workspace(workspace_path)
     config = load_config(workspace_root, tier)
 

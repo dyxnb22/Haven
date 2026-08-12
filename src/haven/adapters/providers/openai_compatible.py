@@ -35,7 +35,20 @@ MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 
 class OpenAICompatibleModel:
-    """Implements ModelPort over an OpenAI-compatible /chat/completions API."""
+    """Implements ModelPort over an OpenAI-compatible /chat/completions API.
+
+    Call path for one request:
+
+        generate_stream -> _stream_with_reasoning_retry   (one precise retry)
+          -> _stream          SSE loop with first-event + total deadlines
+             -> _build_payload   sanitized history -> wire JSON
+             -> _ToolCallCollector   accumulates streamed tool-call deltas
+
+    yielding provider-neutral ModelEvents (TextDelta / ReasoningDelta /
+    ToolCallReady / StreamFinished). Retryable transport failures raise
+    ProviderError("network"|"timeout"...) and are retried by the run loop,
+    never silently inside this adapter (a partial stream must surface).
+    """
 
     def __init__(
         self,
@@ -269,6 +282,11 @@ class OpenAICompatibleModel:
             else f"unexpected provider status ({status})",
         )
 
+
+# -- wire translation helpers -------------------------------------------------
+# Everything below converts between Haven's provider-neutral contracts
+# (contracts/model.py) and the OpenAI chat-completions wire format. Provider
+# quirks are absorbed here so nothing upstream ever sees them.
 
 #: OpenAI-compatible APIs constrain function names to ^[a-zA-Z0-9_-]+$, which
 #: rejects Haven's namespaced `repo.read`. The dot is a core naming choice, so

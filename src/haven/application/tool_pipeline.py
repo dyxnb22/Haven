@@ -109,11 +109,26 @@ _ERROR_CODES: dict[str, ToolErrorCode] = {
 
 @dataclass(frozen=True, slots=True)
 class ToolExecution:
+    """What one pipeline pass returns to the run loop: the structured result
+    for the model, plus the one flag the loop must act on - `effect_unknown`
+    stops the run so recovery can classify the interrupted side effect."""
+
     result: ToolResult
     effect_unknown: bool = False
 
 
 class ToolPipeline:
+    """One instance per RunService; `execute` runs one proposal end to end.
+
+    The numbered comments inside `execute` mirror the stage order in the
+    module docstring (1-2 registry/schema, 3 facts, 4 policy, 5 approval,
+    6 ticket, 7 execute + evidence). Read tools return early at stage 7;
+    write tools journal STARTED -> CONFIRMED/FAILED around the actual I/O so
+    a crash between the two is classifiable; `repo.exec` / `repo.check`
+    additionally snapshot the tree before/after to attribute process writes
+    (ADR 0012) and fail the call on protected-path tamper (ADR 0018).
+    """
+
     def __init__(
         self,
         *,

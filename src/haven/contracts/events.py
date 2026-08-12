@@ -226,23 +226,31 @@ class RunFinished(StrictModel):
     duration_ms: int = 0
 
 
+# The one trace stream, in rough lifecycle order. Everything the UI shows,
+# `replay` re-renders, and the eval suite asserts on is one of these.
 ApplicationEvent = Annotated[
+    # run/turn lifecycle
     RunCreated
     | StepStarted
+    # model streaming (transient deltas + the persisted completion)
     | AssistantDelta
     | AssistantReasoning
     | StreamRestarted
     | ModelCompleted
+    # the execution channel, in pipeline order (see tool_pipeline.py)
     | ToolProposed
     | PolicyDecided
     | ApprovalRequested
     | ApprovalDecided
     | ExecutionStarted
     | ToolCompleted
+    # success bookkeeping: what the Evidence Gate will look at
     | EvidenceRecorded
     | DiffPreview
+    # context assembly + the agent's plan (rendered from State each turn)
     | ContextBuilt
     | PlanUpdated
+    # session runtime and diagnostics
     | Notice
     | SteerQueued
     | EffectUnknown

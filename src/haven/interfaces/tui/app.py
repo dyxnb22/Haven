@@ -109,7 +109,20 @@ class ApprovalScreen(ModalScreen[bool]):
 
 
 class HavenApp(App[None]):
-    """Main Haven TUI application."""
+    """Main Haven TUI application.
+
+    Data flows one way: user input -> service call -> application events ->
+    presenter.reduce -> PresenterState -> widgets. The app never mutates run
+    state directly; it only renders what the event stream says happened.
+
+    Input handling (`_on_submit`): `/commands` are dispatched locally; plain
+    text starts a run, continues the last one, forks (after `/fork RUN_ID`),
+    or - while a run is active - is queued as steering for the next turn
+    boundary. `@path` mentions are expanded into an explicit note for the
+    agent. Approvals arrive as `approval.requested` events and are answered
+    through a modal (`ApprovalScreen`) wired to QueueApprovalBroker, so the
+    human decision travels the same channel an auto-approver would use.
+    """
 
     TITLE = "Haven"
     CSS = """
