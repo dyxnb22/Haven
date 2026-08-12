@@ -3,6 +3,9 @@
 Written 2026-08-12, after three external gap analyses (against Reasonix, Codex
 CLI, and opencode) and a verification pass over their claims.
 
+> **This plan has been executed** (see Progress below). The current plan,
+> written after the second round of audits, is `docs/ROADMAP2.md`.
+
 ## Progress (2026-08-12)
 
 Where each phase actually stands — "done" means implemented and tested, not
@@ -56,7 +59,10 @@ decision, respectively.
   replayed reasoning toward the context budget, and `continue_run` verifies
   workspace identity and resets the run-scoped diff.
 
-The sections below are the original plan, kept as written.
+The sections below are the **original plan, kept as written** — a historical
+record, not current claims. Statements like "not yet measured" below were true
+when written and are superseded by the Progress section above and by
+`docs/EVAL_LIVE.md`.
 
 ---
 
