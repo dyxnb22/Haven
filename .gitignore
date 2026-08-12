@@ -70,3 +70,8 @@ evals/real/tier3/
 evals/real/tier4/
 evals/real/soak/
 evals/headtohead/runs/
+evals/real/tier5/
+evals/real/report-soak/
+evals/real/soak/
+evals/real/compaction-ab/
+evals/real/dist/

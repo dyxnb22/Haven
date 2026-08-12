@@ -96,6 +96,11 @@ class EvalCase(StrictModel):
     #: its way to `succeeded` without ever fixing anything (found live on
     #: tier 4: a bug-fix case passed with zero edits).
     hidden_check: str = ""
+    #: Override the model profile's context char budget for this case. Used by
+    #: the compaction A/B (ROADMAP3 phase 2): the same task at a tiny budget
+    #: (compaction forced early) vs a large one (no compaction), with task
+    #: success as the metric. 0 = use the profile default.
+    max_context_chars: int = 0
     budget: dict[str, int | float] = Field(default_factory=dict)
     recipes: dict[str, RecipeDef] = Field(default_factory=dict)
     turns: list[list[dict[str, Any]]] = Field(default_factory=list)
@@ -523,6 +528,7 @@ async def _run_agent_case(
         mode=PermissionMode(case.mode),
         budget=budget,
         launcher=launcher,
+        context_chars_override=case.max_context_chars,
     )
     try:
         outcome = await service.run(case.goal)

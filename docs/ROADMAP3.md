@@ -1,5 +1,13 @@
 # Haven roadmap v3
 
+> **This plan has been executed.** Phases 0, 1, 4, 5 shipped code + tests
+> (see the ADRs and `docs/EVAL_LIVE.md`); Phase 2 delivered the distribution,
+> compaction A/B, and a fifth-repo real issue (bulk task-count scaling
+> deferred as mechanical); Phases 3 and 6 are decided in ADR 0023 — the
+> read-only LSP gate was **not met** (≈1 semantic-localization failure vs a
+> threshold of 5), and no planner / FSM / subagent / MCP crosses its benefit
+> gate. The verdict, with evidence, is the deliverable.
+
 Written 2026-08-13, immediately after roadmap v2 was executed in full (see
 `ROADMAP2.md` execution status). The gap analysis behind this plan is the
 post-v2 self-assessment against Codex CLI, opencode, and Reasonix: the

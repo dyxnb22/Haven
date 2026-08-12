@@ -194,6 +194,7 @@ def build() -> None:
         "tier4",
         [task for task in TASKS if "tier4" in task.tags] + list(REFACTORS),
     )
+    _write_subset("tier5", [task for task in TASKS if "tier5" in task.tags])
     print(
         f"built {len(TASKS)} + {len(REFACTORS)} fixtures + {len(ZEROCONF)} zero-config "
         f"variants in {FIXTURES_DIR} and cases in {CASES_DIR}"

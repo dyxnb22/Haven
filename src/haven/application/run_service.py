@@ -128,6 +128,7 @@ class RunService:
         git_commit: str = "",
         project_guidance: str = "",
         launcher: SandboxLauncher | None = None,
+        context_chars_override: int = 0,
     ) -> None:
         self._model = model
         self._workspace = workspace
@@ -138,6 +139,10 @@ class RunService:
         # Per-model defaults; an unknown model inherits Haven's historical
         # behavior rather than numbers guessed from a similar name.
         self._profile = profile_for(model.model_name)
+        # An eval/A/B override of the profile's context budget (0 = use the
+        # profile). Lets the compaction A/B force compaction early by shrinking
+        # the budget without inventing a fake model.
+        self._context_chars = context_chars_override or self._profile.max_context_chars
         # Configured rates win; otherwise fall back to the model's published
         # rate card. Reporting a documented price for the model actually in use
         # beats reporting $0.00, but it is a published figure and not an
@@ -310,7 +315,7 @@ class RunService:
             recipe_ids=tuple(self._recipes),
             project_guidance=self._project_guidance,
             sandbox_backend=self._launcher.backend if self._launcher is not None else "",
-            max_context_chars=self._profile.max_context_chars,
+            max_context_chars=self._context_chars,
             reasoning_effort=self._profile.reasoning_effort,
         )
         stuck = StuckLoopDetector()
