@@ -22,6 +22,42 @@ def test_headless_run_rejects_an_unknown_approval_policy() -> None:
     assert "approval-policy" in result.stdout
 
 
+def test_jsonl_event_sink_streams_persisted_events(tmp_path: Path) -> None:
+    """--events writes one JSON line per persisted event, no transient deltas."""
+    import json as _json
+
+    from haven.contracts.events import EventEnvelope, RunCreated, StepStarted
+    from haven.interfaces.cli import JsonlEventSink
+
+    out = tmp_path / "events.jsonl"
+    sink = JsonlEventSink(out)
+
+    async def _drive() -> None:
+        await sink.emit(
+            EventEnvelope(
+                seq=1,
+                at="t",
+                event=RunCreated(
+                    run_id="r1",
+                    workspace="/w",
+                    workspace_digest="d",
+                    goal="g",
+                    mode="interactive",
+                    model_name="m",
+                ),
+            )
+        )
+        await sink.emit(EventEnvelope(seq=2, at="t", event=StepStarted(run_id="r1", step=1)))
+
+    import asyncio
+
+    asyncio.run(_drive())
+    sink.close()
+    lines = out.read_text().splitlines()
+    kinds = [_json.loads(line)["event"]["kind"] for line in lines]
+    assert kinds == ["run.created", "step.started"]
+
+
 class TestDiscoverAccept:
     def test_accept_writes_recipes_into_haven_toml(self, tmp_path: Path) -> None:
         (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\ntestpaths=['tests']\n")

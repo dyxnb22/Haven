@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
 import typer
 
@@ -18,6 +19,7 @@ from haven.application.approvals import ApprovalResponder, AutoApprover
 from haven.application.context_builder import MAX_CONTEXT_CHARS
 from haven.config import ConfigError, explain, load_config
 from haven.contracts.events import (
+    TRANSIENT_KINDS,
     ApprovalRequested,
     ContextBuilt,
     DiffPreview,
@@ -109,6 +111,28 @@ class NullSink:
         return None
 
 
+class JsonlEventSink:
+    """Streams every persisted event as one JSON line to a file, live.
+
+    This is the CI/automation counterpart to `--jsonl` (which prints only the
+    final outcome): a parseable, ordered record of the whole run as it happens,
+    written through the same event stream the TUI and journal see. Transient
+    UI-only deltas are dropped; everything with a journal seq is kept.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self._fh = path.open("w", encoding="utf-8")
+
+    async def emit(self, envelope: EventEnvelope) -> None:
+        if envelope.event.kind in TRANSIENT_KINDS:
+            return
+        self._fh.write(envelope.model_dump_json() + "\n")
+        self._fh.flush()
+
+    def close(self) -> None:
+        self._fh.close()
+
+
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
@@ -150,6 +174,11 @@ def run(
         help="Headless approval when --write is set: reject | trusted-recipe | all.",
     ),
     json_output: bool = typer.Option(False, "--json/--jsonl", help="Print the outcome as JSON."),
+    events_path: Path | None = typer.Option(
+        None,
+        "--events",
+        help="Stream every event as JSONL to this file, live (for CI/automation).",
+    ),
     tier: str = typer.Option(
         DEFAULT_TIER,
         "--tier",
@@ -176,7 +205,11 @@ def run(
         from haven.application.approvals import HeadlessApprover
         from haven.bootstrap import BootstrapError, build_services
 
-        sink = NullSink() if json_output else ConsoleSink()
+        primary_sink = NullSink() if json_output else ConsoleSink()
+        sinks: list[Any] = [primary_sink]
+        events_sink = JsonlEventSink(events_path) if events_path is not None else None
+        if events_sink is not None:
+            sinks.append(events_sink)
         # Read-only stays a policy-layer guarantee (writes denied regardless of
         # approver); --write moves to interactive mode where the headless
         # approver's policy decides. `all` is only reachable with --write, so
@@ -192,10 +225,12 @@ def run(
                 workspace,
                 mode=mode,
                 approvals=approver,
-                sinks=[sink],
+                sinks=sinks,
                 tier=tier,
             )
         except (BootstrapError, ConfigError) as exc:
+            if events_sink is not None:
+                events_sink.close()
             typer.echo(f"error: {exc}")
             return EXIT_USAGE
         if write and services.lease is None and services.lease_warning:
@@ -203,11 +238,15 @@ def run(
             # silently downgraded to read-only, which a CI caller must be told.
             typer.echo(f"error: {services.lease_warning}")
             await services.close()
+            if events_sink is not None:
+                events_sink.close()
             return EXIT_POLICY
         try:
             outcome = await services.run_service.run(goal)
         finally:
             await services.close()
+            if events_sink is not None:
+                events_sink.close()
         if json_output:
             typer.echo(
                 json.dumps(

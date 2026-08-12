@@ -264,6 +264,64 @@ async def test_steering_while_running_queues_instead_of_starting_a_run(tmp_path:
 
 
 @pytest.mark.timeout(30)
+async def test_sessions_and_fork_commands(tmp_path: Path) -> None:
+    """/sessions lists prior runs; /fork branches the next message from one."""
+    from haven.contracts.events import RunCreated
+
+    repo = make_repo(tmp_path)
+    turns = [
+        [text("ALPHA answer."), finish()],
+        [text("branched from alpha."), finish()],
+    ]
+    app = HavenApp(workspace=repo, services_builder=make_builder(repo, turns))
+    async with app.run_test() as pilot:
+        await _wait_ready(app, pilot)
+        await _submit(app, pilot, "first question")
+        await _settle(pilot, 40)
+        first_run_id = app._state.run_id  # noqa: SLF001
+        assert first_run_id
+
+        await _submit(app, pilot, "/sessions")
+        await _settle(pilot, 10)
+        assert any(first_run_id in e.text for e in app._state.timeline)  # noqa: SLF001
+
+        await _submit(app, pilot, f"/fork {first_run_id}")
+        await _settle(pilot, 5)
+        await _submit(app, pilot, "take a different direction")
+        await _settle(pilot, 40)
+        forked = app._state.run_id  # noqa: SLF001
+        assert forked and forked != first_run_id
+        events = await app._services.store.load_events(forked)  # noqa: SLF001
+        created = [e.event for e in events if isinstance(e.event, RunCreated)]
+        assert created and created[0].parent_run_id == first_run_id
+
+
+@pytest.mark.timeout(30)
+async def test_mention_expands_into_the_goal(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    app = HavenApp(workspace=repo, services_builder=make_builder(repo, [[text("ok"), finish()]]))
+    async with app.run_test() as pilot:
+        await _wait_ready(app, pilot)
+        expanded = app._expand_mentions("please look at @src/calc.py now")  # noqa: SLF001
+        assert "mentioned files" in expanded and "src/calc.py" in expanded
+        # A path that does not exist is left as-is.
+        assert app._expand_mentions("see @nope.py") == "see @nope.py"  # noqa: SLF001
+
+
+@pytest.mark.timeout(30)
+async def test_diff_command_switches_tab(tmp_path: Path) -> None:
+    from textual.widgets import TabbedContent
+
+    repo = make_repo(tmp_path)
+    app = HavenApp(workspace=repo, services_builder=make_builder(repo, []))
+    async with app.run_test() as pilot:
+        await _wait_ready(app, pilot)
+        await _submit(app, pilot, "/diff")
+        await _settle(pilot, 5)
+        assert app.query_one("#tabs", TabbedContent).active == "tab-diff"
+
+
+@pytest.mark.timeout(30)
 async def test_help_command_writes_to_timeline(tmp_path: Path) -> None:
     repo = make_repo(tmp_path)
     app = HavenApp(workspace=repo, services_builder=make_builder(repo, []))

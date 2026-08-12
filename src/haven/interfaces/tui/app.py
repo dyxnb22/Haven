@@ -36,8 +36,13 @@ Commands:
   /help      show this help
   /budget    show remaining budget
   /context   show what the model saw last turn
+  /sessions  list recent runs you can continue or fork
+  /fork ID   start a new turn branched from run ID (fork the session)
+  /diff      switch to the Diff tab
   /export    write a markdown report of the current run
   /quit      exit Haven
+Input:
+  @path      mention a file — its contents are read into your next message
 Keys:
   Enter      submit a task
   a / r      approve / reject (in the approval dialog)
@@ -146,6 +151,9 @@ class HavenApp(App[None]):
         self._state = PresenterState()
         self._run_worker: Worker[None] | None = None
         self._rendered_timeline = 0
+        #: Set by /fork; the next submit branches from this run id instead of
+        #: continuing the current session.
+        self._fork_run_id = ""
 
     # -- layout ---------------------------------------------------------------
 
@@ -331,6 +339,14 @@ class HavenApp(App[None]):
             # in-flight is interrupted (ROADMAP2 phase 3).
             self._queue_steering(text)
             return
+        text = self._expand_mentions(text)
+        # An explicit /fork target branches a new session from that run instead
+        # of continuing the current one (ROADMAP3 phase 4).
+        fork_target = self._fork_run_id
+        self._fork_run_id = ""
+        if fork_target:
+            self._run_worker = self._execute_continue(fork_target, text)
+            return
         # A follow-up after a finished run continues the same conversation, so
         # the model keeps the prior turn's context instead of starting blank
         # (Phase 2). The first submit of the session starts a fresh run.
@@ -338,6 +354,20 @@ class HavenApp(App[None]):
             self._run_worker = self._execute_continue(self._state.run_id, text)
         else:
             self._run_worker = self._execute_run(text)
+
+    def _expand_mentions(self, text: str) -> str:
+        """Expand @path mentions into a note naming the file(s), so the goal
+        points the agent at them explicitly. The agent still reads through
+        repo.read (provenance and preimage binding stay in the tool channel);
+        the mention only saves it a search."""
+        import re
+
+        mentions = re.findall(r"(?:^|\s)@([\w./-]+)", text)
+        existing = [m for m in mentions if (self._workspace / m).is_file()]
+        if not existing:
+            return text
+        note = " (mentioned files, read them first: " + ", ".join(dict.fromkeys(existing)) + ")"
+        return text + note
 
     def _queue_steering(self, text: str) -> None:
         async def _do() -> None:
@@ -370,12 +400,39 @@ class HavenApp(App[None]):
             )
         elif name == "/context":
             self._log_line("system", self._state.context_summary or "no context recorded yet")
+        elif name == "/sessions":
+            self._list_sessions()
+        elif name == "/fork":
+            parts = command.split(maxsplit=1)
+            if len(parts) < 2:
+                self._log_line("system", "usage: /fork RUN_ID (see /sessions)")
+            else:
+                self._fork_run_id = parts[1].strip()
+                self._log_line(
+                    "system",
+                    f"next message will fork from {self._fork_run_id}; type it and press Enter",
+                )
+        elif name == "/diff":
+            self.query_one("#tabs", TabbedContent).active = "tab-diff"
         elif name == "/export":
             self._export_run()
         elif name == "/quit":
             self.exit()
         else:
             self._log_line("system", f"unknown command {name}; try /help")
+
+    def _list_sessions(self) -> None:
+        async def _do() -> None:
+            runs = await self._services.store.list_runs(10)
+            if not runs:
+                self._log_line("system", "no recorded runs yet")
+                return
+            lines = ["recent runs (use /fork RUN_ID to branch from one):"]
+            for r in runs:
+                lines.append(f"  {r.run_id}  [{r.status.value}]  {r.goal[:60]}")
+            self._log_line("system", "\n".join(lines))
+
+        self.run_worker(_do(), exclusive=False)
 
     def _export_run(self) -> None:
         if not self._state.run_id:
