@@ -53,10 +53,16 @@ class AppServices:
     git_branch: str
     git_commit: str
     model_name: str
+    model: ModelPort | None = None
     sandbox_backend: str = "none"
 
     async def close(self) -> None:
         await self.store.close()
+        # Close the provider's HTTP client too; a ModelPort need not define
+        # aclose (ScriptedModel does not), so this is best-effort by protocol.
+        closer = getattr(self.model, "aclose", None)
+        if closer is not None:
+            await closer()
 
 
 def select_launcher(platform: str | None = None) -> SandboxLauncher | None:
@@ -146,6 +152,7 @@ async def build_services(
         git_branch=baseline.branch,
         git_commit=baseline.commit,
         model_name=model.model_name,
+        model=model,
         sandbox_backend=sandbox_backend_name(launcher),
     )
 
