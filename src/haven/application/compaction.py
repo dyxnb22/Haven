@@ -31,6 +31,19 @@ _MAX_ITEMS_PER_LINE = 12
 _DIGEST_PREFIX_CHARS = 8
 
 
+def message_chars(message: ModelMessage) -> int:
+    """Wire-size estimate for the context budget.
+
+    Content is not the only thing sent: replayed reasoning (ADR 0014) and
+    tool-call arguments both cost tokens, so counting only `content` would
+    undercount input and let the transcript overrun the budget silently.
+    """
+    size = len(message.content) + len(message.provider_reasoning)
+    for call in message.tool_calls:
+        size += len(call.arguments_json) + len(call.tool_name)
+    return size
+
+
 def _tool_name(message: ModelMessage) -> str:
     match = _TOOL_ATTR.search(message.content)
     return match.group(1) if match else "unknown"
@@ -136,24 +149,30 @@ def summarize_dropped(
     index in the surviving list where the digest belongs — or -1 when nothing
     was dropped.
 
-    Only tool outputs are droppable: assistant turns are the model's own record
-    of what it was doing, and user messages carry gate feedback. The two most
-    recent tool outputs are always kept whole, protected by role rather than by
-    position because the volatile tail now sits after the transcript.
+    A tool result is dropped together with the assistant turn that requested it,
+    as a whole unit, so a kept assistant message never carries a tool call whose
+    result was dropped — an orphaned tool call that OpenAI and DeepSeek reject.
+    Assistant turns without tool calls (narrative) and user turns (gate feedback)
+    are never dropped. The two most recent tool outputs are always kept whole,
+    protected by role rather than position because the volatile tail sits after
+    the transcript.
     """
-    total = sum(len(message.content) for message in messages)
+    total = sum(message_chars(message) for message in messages)
     if total <= limit:
         return list(messages), "", -1
 
-    tool_indices = [i for i, message in enumerate(messages) if message.role == "tool"]
-    protected = set(tool_indices[-2:])
+    units = _droppable_units(messages)
+    protected = _protected_units(messages, units)
 
     dropped_indices: set[int] = set()
-    for index in tool_indices:
-        if total <= limit or index in protected:
+    for unit_index, unit in enumerate(units):
+        if total <= limit:
+            break
+        if unit_index in protected:
             continue
-        total -= len(messages[index].content)
-        dropped_indices.add(index)
+        for index in unit:
+            total -= message_chars(messages[index])
+        dropped_indices.update(unit)
 
     if not dropped_indices:
         return list(messages), "", -1
@@ -165,6 +184,48 @@ def summarize_dropped(
         return kept, "", -1
     # The digest takes the place of the first message it replaces. Everything
     # before that index is kept (the first dropped index is, by definition, the
-    # smallest), so its position in `kept` is exactly that index.
+    # smallest of a dropped unit), so its position in `kept` is exactly that
+    # index.
     position = min(dropped_indices)
     return kept, digest, position
+
+
+def _droppable_units(messages: list[ModelMessage]) -> list[list[int]]:
+    """Group each assistant-with-tool-calls with its following tool results.
+
+    A unit is dropped or kept as a whole, which is what keeps tool calls and
+    their results paired. Standalone tool messages (none precede them) are their
+    own droppable units; user and plain-assistant turns are not droppable and
+    form no unit.
+    """
+    units: list[list[int]] = []
+    index = 0
+    count = len(messages)
+    while index < count:
+        message = messages[index]
+        if message.role == "assistant" and message.tool_calls:
+            group = [index]
+            follow = index + 1
+            while follow < count and messages[follow].role == "tool":
+                group.append(follow)
+                follow += 1
+            units.append(group)
+            index = follow
+        elif message.role == "tool":
+            units.append([index])
+            index += 1
+        else:
+            index += 1
+    return units
+
+
+def _protected_units(messages: list[ModelMessage], units: list[list[int]]) -> set[int]:
+    """The trailing units covering the two most recent tool outputs."""
+    protected: set[int] = set()
+    tools_protected = 0
+    for unit_index in range(len(units) - 1, -1, -1):
+        if tools_protected >= 2:
+            break
+        protected.add(unit_index)
+        tools_protected += sum(1 for i in units[unit_index] if messages[i].role == "tool")
+    return protected

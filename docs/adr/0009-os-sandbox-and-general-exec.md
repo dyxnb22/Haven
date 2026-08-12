@@ -6,6 +6,10 @@ Accepted — benefit gate passed. The capability gap was concrete, and the
 mechanism that closes it is enforced by the operating system and asserted by
 tests that run real commands on both supported platforms.
 
+Amended by ADR 0017: the exec profile described here originally left the
+workspace writable; it is now workspace-read-only (scratch stays writable),
+because Landlock cannot carve the protected paths out of a writable workspace.
+
 ## Gate: problem
 
 Haven could run exactly one kind of process: a `repo.check` recipe whose argv

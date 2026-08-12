@@ -27,6 +27,7 @@ from haven.contracts.events import (
     DiffPreview,
     EvidenceRecorded,
     ExecutionStarted,
+    Notice,
     PlanStepView,
     PlanUpdated,
     PolicyDecided,
@@ -859,10 +860,15 @@ class ToolPipeline:
         return ToolExecution(_ok(call, {"src": removal.path, "dest": addition.path, "moved": True}))
 
     def _sandbox_spec(self) -> SandboxSpec:
+        # Model-proposed exec is read-only on the workspace: only the scratch
+        # dir is writable. Real source changes must go through the audited
+        # edit/create/delete/move tools, and this closes the Linux hole where
+        # Landlock cannot carve `.git` out of a writable workspace — exec cannot
+        # write the workspace at all (ADR 0017).
         return SandboxSpec(
             workspace_root=self._workspace.root,
             scratch_dir=self._scratch_dir,
-            writable=True,
+            writable=False,
             allow_network=False,
             private_roots=default_private_roots(),
             extra_readable_roots=default_readable_roots(),
@@ -945,6 +951,25 @@ class ToolPipeline:
         snapshot is diffed and every change becomes edit evidence, so a run that
         mutates the tree through any tool is held to the same evidence standard.
         """
+        # A protected path changing during a process is a tamper the OS sandbox
+        # could not prevent (Landlock cannot protect `.git` in a writable
+        # workspace). It is surfaced as an error so it is attributable in the
+        # audit trail rather than silent — the invisibility half of the hole.
+        tampered = sorted(
+            name
+            for name in before.protected_digests.keys() | after.protected_digests.keys()
+            if before.protected_digests.get(name) != after.protected_digests.get(name)
+        )
+        for name in tampered:
+            await self._emitter.emit(
+                ctx.run_id,
+                Notice(
+                    run_id=ctx.run_id,
+                    level="error",
+                    message=f"{tool_name} modified a protected path ({name}); this must not happen",
+                ),
+            )
+
         changes = _detect_changes(before, after)
         if not changes:
             return

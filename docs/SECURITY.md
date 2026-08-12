@@ -116,11 +116,21 @@ backend exists. The two process tools are treated differently on purpose
   between the model and the machine. It is **mandatory**: with no backend, exec
   is denied outright (`sandbox_unavailable`), an absent capability fact failing
   closed exactly like a negative one. **No config key, CLI flag, or environment
-  variable can turn it off.**
+  variable can turn it off.** Its profile is **workspace-read-only** (ADR 0017):
+  only the scratch directory is writable. Source changes must go through the
+  audited `edit`/`create`/`delete`/`move` tools — a command that tries to write
+  the workspace fails with a permission error on both platforms, which is also
+  what closes the Landlock gap where `.git` could not be carved out of a
+  writable workspace.
 - `repo.check` runs a **user-authored recipe id** against a repository the user
-  has already chosen to trust, so the sandbox is defense-in-depth. It is applied
+  has already chosen to trust, so the sandbox is defense-in-depth and the
+  workspace stays **writable** (tests write caches and artifacts). It is applied
   whenever a backend exists, but a platform without one still runs registered
   checks, under the same locally-trusted-repo assumption the whole tool holds.
+  Files a check changes are attributed to the evidence ledger from before/after
+  snapshots (ADR 0012), and a change to a protected path (`.git`, `.haven`,
+  `.haven.toml`) — which Landlock cannot prevent for a writable workspace — is
+  detected the same way and surfaced as an **error** in the event stream.
 
 The practical consequence: on a platform with no supported backend (Windows, or
 a Linux kernel below Landlock ABI 4), `repo.exec` is unavailable and only
@@ -129,10 +139,11 @@ registered `repo.check` recipes run processes.
 | | macOS | Linux |
 |---|---|---|
 | Mechanism | Seatbelt (`sandbox-exec`, generated SBPL) | Landlock (ABI ≥ 4) |
-| Writes | workspace + scratch only | workspace + scratch only |
+| Writes (`repo.exec`) | scratch only | scratch only |
+| Writes (`repo.check`) | workspace + scratch | workspace + scratch |
 | Reads | everything except `$HOME` | enumerated system roots + workspace |
 | Network | all denied | TCP bind/connect denied |
-| `.git` writes | denied by the kernel | denied by Haven's tool layer only |
+| `.git` writes during a check | denied by the kernel | allowed by the kernel; detected by snapshot and surfaced as an error |
 
 Read confinement matters because `repo.exec` validates `cwd`, not the paths
 inside `argv`: without it, `["cat", "~/.ssh/id_rsa"]` would succeed and quietly
@@ -146,9 +157,10 @@ undo the boundary `repo.read` enforces.
 - IPC. The macOS profile allows `mach-lookup` and POSIX shared memory so
   ordinary interpreters run; process isolation is not a goal here.
 - UDP and DNS on Linux: Landlock ABI 4 governs TCP only.
-- `.git` writes on Linux at the kernel layer: Landlock's subtree grants cannot
-  express "the workspace except `.git`", so that line is held by the tool layer,
-  as it was before this sandbox existed.
+- A trusted `repo.check` recipe on Linux writing `.git` at the kernel layer:
+  Landlock's subtree grants cannot express "the workspace except `.git`". The
+  change is detected by the before/after snapshot and reported as an error, but
+  not prevented — the locally-trusted-repo assumption is what holds there.
 
 Enforcement is asserted by running real commands, not by inspecting profile
 text (`tests/security/test_sandbox_enforcement.py`), on both platforms in CI.

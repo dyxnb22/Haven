@@ -56,9 +56,16 @@ approaches it; a genuine multi-file refactor hits it and reports
 ## Decision 1: deterministic compaction
 
 `application/compaction.py` provides `summarize_dropped(messages, limit)`,
-which drops the oldest `tool` messages and returns the survivors plus one
+which drops the oldest tool-call turns and returns the survivors plus one
 digest, and `build_run_digest(dropped)`, which renders the digest. The digest
 is inserted at the position of the first message it replaces.
+
+*Amended 2026-08-12:* dropping is by whole turn group — an assistant message
+carrying tool calls is dropped together with all its tool results — because
+dropping a result alone leaves the kept assistant with an orphaned tool call,
+which OpenAI-compatible providers reject at the wire. Message size is measured
+as content plus replayed reasoning plus tool-call arguments, since all three
+are sent (ADR 0014 made reasoning part of the payload).
 
 **The digest is derived from the dropped messages, not from live run state.**
 This is the load-bearing decision and it is not the obvious one. Rendering the

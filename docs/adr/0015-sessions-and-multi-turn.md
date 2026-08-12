@@ -69,11 +69,21 @@ half-built:
   making the chat panel visibly continuous across turns is polish, not the
   functional fix, which is that the model now has the context.
 
+*Amended 2026-08-12:* two lifecycle guards external review showed were missing
+are now in place. `continue_run` refuses a workspace whose digest differs from
+the checkpoint's (a follow-up must not graft a transcript onto a different
+repository — recovery already made this check), and it resets the workspace's
+run-scoped diff originals, so a second turn's `repo.diff` reports only its own
+changes instead of leaking the first turn's edits through the long-lived TUI
+workspace.
+
 ## Gate: metrics
 
 - `tests/integration/test_session_continuity.py`: a follow-up's request carries
   the first turn's answer and the new instruction; the follow-up gets a fresh
-  budget; lineage is recorded; continuing a run with no checkpoint is refused.
+  budget; lineage is recorded; continuing a run with no checkpoint is refused;
+  a different workspace is refused; a follow-up's diff excludes the prior
+  turn's changes.
 - `tests/tui/test_tui_journey.py`: a second TUI prompt produces a new run whose
   `parent_run_id` is the first, proving the wiring end to end.
 - Golden trace regenerated for the additive `parent_run_id` field only.

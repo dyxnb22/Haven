@@ -121,7 +121,7 @@ that exactly one class enjoys that exception.
 | `repo.delete` | ask / deny | existing files only, content pinned at approval so a concurrent change fails closed |
 | `repo.move` | ask / deny | rename/move; fails if the destination exists, so it never silently overwrites |
 | `repo.diff` | allow / allow | shows only what *this run* changed, including created files |
-| `repo.exec` | allow if classified read-only, else ask / deny | argv array only (no shell string), OS sandbox, no network, `$HOME` unreadable; output is never evidence |
+| `repo.exec` | allow if classified read-only, else ask / deny | argv array only (no shell string), OS sandbox with the workspace read-only (only scratch writable, ADR 0017), no network, `$HOME` unreadable; output is never evidence |
 | `repo.check` | ask / deny | registered recipe ids only, fixed argv, scrubbed env, timeout, bounded output, same sandbox |
 | `task.plan` | allow / allow | touches only run state; no path, no external effect (`STATE_TOOLS`) |
 

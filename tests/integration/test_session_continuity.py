@@ -69,3 +69,53 @@ class TestFollowUpInheritsContext:
             assert "no checkpoint" in str(exc).lower()
         else:
             raise AssertionError("continuing a run with no checkpoint should raise")
+
+    async def test_continuing_a_different_workspace_is_refused(self, tmp_path: Path) -> None:
+        """A follow-up must not graft a run's transcript onto another repo."""
+        import pytest
+
+        h = Harness(make_repo(tmp_path), [[text("one"), finish()], [text("two"), finish()]])
+        first = await h.service.run("First")
+        checkpoint = await h.store.load_checkpoint(first.run_id)
+        assert checkpoint is not None
+        await h.store.save_checkpoint(
+            checkpoint.model_copy(update={"workspace_digest": "a-different-workspace"})
+        )
+        with pytest.raises(ValueError, match="workspace identity"):
+            await h.service.continue_run(first.run_id, "Second")
+
+    async def test_follow_up_diff_excludes_the_first_turns_changes(self, tmp_path: Path) -> None:
+        """The second turn's run diff is run-scoped: it must not re-report the
+        first turn's edit."""
+        from haven.contracts.events import DiffPreview
+
+        repo = make_repo(tmp_path)
+        turns = [
+            # Turn 1 fully satisfies the gate (edit + diff + check), so it ends
+            # cleanly and does not nudge into the turns meant for turn 2.
+            [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
+            [
+                tool(
+                    "c2",
+                    "repo.edit",
+                    path="src/calc.py",
+                    old_string="return a - b  # BUG: should be +",
+                    new_string="return a + b",
+                ),
+                finish("tool_calls"),
+            ],
+            [tool("c3", "repo.diff"), finish("tool_calls")],
+            [tool("c4", "repo.check", recipe_id="always-pass"), finish("tool_calls")],
+            [text("Fixed in turn one."), finish()],
+            # Turn 2 (continue): just diff, no new edit.
+            [tool("c5", "repo.diff"), finish("tool_calls")],
+            [text("Nothing changed this turn."), finish()],
+        ]
+        h = Harness(repo, turns)
+        first = await h.service.run("Fix add()")
+        h.sink.envelopes.clear()
+        await h.service.continue_run(first.run_id, "Did you change anything else?")
+
+        diffs = [e for e in h.sink.events_of("diff.preview") if isinstance(e, DiffPreview)]
+        assert diffs, "the follow-up ran repo.diff"
+        assert diffs[-1].files_changed == 0, "follow-up diff leaked the first turn's edit"

@@ -57,3 +57,42 @@ class TestExecWritesAreAttributed:
 
         assert outcome.status is RunStatus.SUCCEEDED
         assert outcome.stop_reason is StopReason.FINAL_ANSWER
+
+
+class TestProtectedPathTamperIsDetected:
+    async def test_a_process_that_rewrites_dot_git_raises_an_error_notice(
+        self, tmp_path: Path
+    ) -> None:
+        """Landlock cannot carve `.git` out of a writable workspace, and the
+        change snapshot excludes protected paths from normal attribution — so a
+        process touching them was previously invisible. It must now surface as
+        an error in the audit trail (ADR 0017)."""
+        from haven.contracts.events import Notice
+
+        repo = make_repo(tmp_path)
+        (repo / ".git").mkdir()
+        (repo / ".git" / "config").write_text("[core]\n")
+        turns = [
+            [
+                tool(
+                    "c1",
+                    "repo.exec",
+                    argv=[sys.executable, "-c", "open('.git/config','a').write('tampered\\n')"],
+                    cwd=".",
+                ),
+                finish("tool_calls"),
+            ],
+            [text("Done."), finish()],
+        ]
+        h = Harness(repo, turns)
+        await h.service.run("Do something")
+
+        assert "tampered" in (repo / ".git" / "config").read_text(), (
+            "precondition: the recording launcher does not enforce, so the write lands"
+        )
+        errors = [
+            e
+            for e in h.sink.events_of("notice")
+            if isinstance(e, Notice) and e.level == "error" and ".git" in e.message
+        ]
+        assert errors, "a protected-path change during a process must be surfaced, not silent"

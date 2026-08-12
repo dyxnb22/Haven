@@ -34,8 +34,12 @@ class TestProfile:
     def test_workspace_is_writable(self) -> None:
         assert f'(allow file-write* (subpath "{resolved("/tmp/ws")}")' in build_profile(spec())
 
-    def test_read_only_spec_grants_no_write_subpaths(self) -> None:
-        assert "file-write* (subpath" not in build_profile(spec(writable=False))
+    def test_read_only_spec_grants_scratch_but_not_the_workspace(self) -> None:
+        """Read-only means the workspace: scratch stays writable so a confined
+        process has somewhere to write (the repo.exec profile, ADR 0017)."""
+        profile = build_profile(spec(writable=False))
+        assert f'(allow file-write* (subpath "{resolved("/tmp/scratch")}")' in profile
+        assert f'(allow file-write* (subpath "{resolved("/tmp/ws")}")' not in profile
 
     def test_scratch_is_writable(self) -> None:
         assert f'(allow file-write* (subpath "{resolved("/tmp/scratch")}")' in build_profile(spec())

@@ -30,8 +30,11 @@ class TestEncoding:
             [resolved("/tmp/scratch"), resolved("/tmp/ws")]
         )
 
-    def test_read_only_spec_has_no_writable_roots(self) -> None:
-        assert json.loads(encode_spec(spec(writable=False)))["writable"] == []
+    def test_read_only_spec_grants_scratch_but_not_the_workspace(self) -> None:
+        """Read-only means the workspace: scratch stays writable so a confined
+        process has somewhere to write (the repo.exec profile, ADR 0017)."""
+        writable = json.loads(encode_spec(spec(writable=False)))["writable"]
+        assert writable == [str(Path("/tmp/scratch").resolve())]
 
     def test_system_roots_are_readable(self) -> None:
         assert "/usr" in json.loads(encode_spec(spec()))["readable"]

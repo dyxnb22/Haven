@@ -30,7 +30,9 @@ class SandboxSpec:
     #: Readable beyond the system roots — the Python prefix, so an interpreter
     #: living under $HOME stays executable.
     extra_readable_roots: tuple[Path, ...] = ()
-    protected_subpaths: tuple[str, ...] = (".git", ".haven.toml")
+    #: Kept in step with FsWorkspace.PROTECTED_COMPONENTS: git history, the
+    #: local data dir, and the project config a run must never rewrite.
+    protected_subpaths: tuple[str, ...] = (".git", ".haven", ".haven.toml")
 
 
 class SandboxLauncher(Protocol):

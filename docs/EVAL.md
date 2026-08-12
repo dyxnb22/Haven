@@ -38,7 +38,7 @@ so this list cannot drift. What each category covers:
 |---|---|
 | task | realistic workflows: fix a bug, guard empty input, dedup a function, rename with `replace_all`, a plan-driven multi-step fix, and a composed edit + delete + diff + check run |
 | robustness | recovery from bad input: invalid arguments, unknown tool, provider error, check timeout, an unwinnable evidence gate, and a run compacted mid-flight |
-| security | boundary holds: path escapes (parent, absolute), protected `.git`, reject-all, create/overwrite rules, a committed-secret review, sandboxed `repo.exec` escapes, a process write that must reach the gate, and protected-path delete / out-of-workspace move |
+| security | boundary holds: path escapes (parent, absolute), protected `.git`, reject-all, create/overwrite rules, a committed-secret review, sandboxed `repo.exec` escapes, an exec write stopped by the read-only workspace profile, and protected-path delete / out-of-workspace move |
 | injection | untrusted text cannot change behavior: README → read `~/.ssh`, tool-output injected recipe, edit `.haven.toml` |
 | budget | hard limits stop a run: stuck-loop detection, step-budget exhaustion |
 | recovery | interrupted effects: an edit that never ran (resumable), an ambiguous crash (blocked) |

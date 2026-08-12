@@ -5,8 +5,8 @@ state, so it stays byte-identical between compaction events and cannot move the
 cacheable prefix (ADR 0008).
 """
 
-from haven.application.compaction import build_run_digest, summarize_dropped
-from haven.contracts.model import ModelMessage
+from haven.application.compaction import build_run_digest, message_chars, summarize_dropped
+from haven.contracts.model import ModelMessage, ToolCallProposal
 
 
 def tool_message(tool: str, body: str, call_id: str = "c1") -> ModelMessage:
@@ -164,3 +164,83 @@ class TestSummarizeDropped:
         assert kept == messages
         assert digest == ""
         assert position == -1
+
+
+def assistant_tool_call(call_id: str, name: str = "repo.read") -> ModelMessage:
+    return ModelMessage(
+        role="assistant",
+        content="",
+        tool_calls=(ToolCallProposal(call_id=call_id, tool_name=name, arguments_json="{}"),),
+    )
+
+
+def paired_tool(call_id: str, path: str) -> ModelMessage:
+    return ModelMessage(
+        role="tool",
+        content=f'<tool_output tool="repo.read">\n{bulky_read(path, "d")}\n</tool_output>',
+        tool_call_id=call_id,
+    )
+
+
+class TestToolCallPairing:
+    """A dropped tool result must never orphan a kept assistant tool call —
+    OpenAI and DeepSeek reject an assistant tool_call with no following result.
+    """
+
+    def _turn_groups(self, n: int) -> list[ModelMessage]:
+        messages: list[ModelMessage] = []
+        for i in range(n):
+            messages.append(assistant_tool_call(f"c{i}"))
+            messages.append(paired_tool(f"c{i}", f"f{i}.py"))
+        return messages
+
+    def test_a_dropped_result_takes_its_assistant_call_with_it(self) -> None:
+        messages = self._turn_groups(5)
+        kept, digest, _ = summarize_dropped(messages, limit=1400)
+
+        kept_tool_ids = {m.tool_call_id for m in kept if m.role == "tool"}
+        for message in kept:
+            if message.role == "assistant":
+                for call in message.tool_calls:
+                    assert call.call_id in kept_tool_ids, (
+                        "a kept assistant tool call lost its result to compaction"
+                    )
+        assert digest  # something was condensed
+
+    def test_the_latest_turn_group_survives_whole(self) -> None:
+        messages = self._turn_groups(5)
+        kept, _, _ = summarize_dropped(messages, limit=1400)
+        # the last assistant tool call and its result are both kept
+        assert messages[-1] in kept
+        assert messages[-2] in kept
+
+
+class TestSizing:
+    def test_reasoning_and_tool_args_count_toward_the_budget(self) -> None:
+        plain = ModelMessage(role="assistant", content="hello")
+        with_reasoning = ModelMessage(
+            role="assistant", content="hello", provider_reasoning="x" * 500
+        )
+        assert message_chars(with_reasoning) > message_chars(plain) + 400
+
+    def test_a_transcript_over_budget_only_via_reasoning_is_compacted(self) -> None:
+        """Reasoning is replayed on the wire, so it must be able to trigger
+        compaction; counting content alone would miss it."""
+        messages = [
+            assistant_tool_call("c0"),
+            ModelMessage(
+                role="tool",
+                content='<tool_output tool="repo.read">\n'
+                + read_result("a.py", "d")
+                + "\n</tool_output>",
+                tool_call_id="c0",
+                provider_reasoning="r" * 2000,
+            ),
+            assistant_tool_call("c1"),
+            paired_tool("c1", "b.py"),
+            assistant_tool_call("c2"),
+            paired_tool("c2", "c.py"),
+        ]
+        # content is small, but reasoning pushes it over a tiny budget
+        kept, digest, _ = summarize_dropped(messages, limit=1500)
+        assert digest

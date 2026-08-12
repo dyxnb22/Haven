@@ -24,7 +24,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _spec(tmp_path: Path, private: Path | None = None) -> SandboxSpec:
+def _spec(tmp_path: Path, private: Path | None = None, *, writable: bool = True) -> SandboxSpec:
     workspace = tmp_path / "ws"
     workspace.mkdir(exist_ok=True)
     scratch = tmp_path / "scratch"
@@ -32,16 +32,21 @@ def _spec(tmp_path: Path, private: Path | None = None) -> SandboxSpec:
     return SandboxSpec(
         workspace_root=workspace,
         scratch_dir=scratch,
-        writable=True,
+        writable=writable,
         private_roots=(private,) if private is not None else (),
         extra_readable_roots=(Path(sys.base_prefix), Path(sys.prefix)),
     )
 
 
 async def run(
-    tmp_path: Path, code: str, *, private: Path | None = None, timeout: float = 30.0
+    tmp_path: Path,
+    code: str,
+    *,
+    private: Path | None = None,
+    timeout: float = 30.0,
+    writable: bool = True,
 ) -> tuple[int, str]:
-    spec = _spec(tmp_path, private)
+    spec = _spec(tmp_path, private, writable=writable)
     outcome = await ProcessExecutor(launcher=LAUNCHER).run_exec(
         ExecSpec(
             argv=(sys.executable, "-c", code),
@@ -74,6 +79,31 @@ class TestWriteConfinement:
         (tmp_path / "ws" / ".git").mkdir(parents=True, exist_ok=True)
         exit_code, _ = await run(tmp_path, "open('.git/config','w').write('x')")
         assert exit_code != 0
+
+    async def test_a_read_only_profile_blocks_workspace_writes(self, tmp_path: Path) -> None:
+        """The profile repo.exec runs under (ADR 0017): the workspace is
+        read-only on every platform, which is what closes the Linux hole where
+        Landlock cannot carve `.git` out of a writable workspace."""
+        exit_code, _ = await run(tmp_path, "open('inside.txt','w').write('x')", writable=False)
+        assert exit_code != 0
+        assert not (tmp_path / "ws" / "inside.txt").exists()
+
+    async def test_a_read_only_profile_blocks_dot_git_on_all_platforms(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "ws" / ".git").mkdir(parents=True, exist_ok=True)
+        exit_code, _ = await run(tmp_path, "open('.git/config','w').write('x')", writable=False)
+        assert exit_code != 0
+
+    async def test_a_read_only_profile_still_allows_scratch_writes(self, tmp_path: Path) -> None:
+        scratch_file = tmp_path / "scratch" / "out.txt"
+        exit_code, output = await run(
+            tmp_path,
+            f"open({str(scratch_file)!r},'w').write('ok')",
+            writable=False,
+        )
+        assert exit_code == 0, output
+        assert scratch_file.is_file()
 
 
 class TestReadConfinement:

@@ -50,9 +50,11 @@ def build_profile(spec: SandboxSpec) -> str:
     for root in (spec.workspace_root, spec.scratch_dir, *spec.extra_readable_roots):
         lines.append(f"(allow file-read* (subpath {_literal(root)}))")
 
+    # Scratch is always writable — it exists so a confined process has
+    # somewhere to write. `writable` governs the workspace alone.
+    lines.append(f"(allow file-write* (subpath {_literal(spec.scratch_dir)}))")
     if spec.writable:
-        for root in (spec.workspace_root, spec.scratch_dir):
-            lines.append(f"(allow file-write* (subpath {_literal(root)}))")
+        lines.append(f"(allow file-write* (subpath {_literal(spec.workspace_root)}))")
         for subpath in spec.protected_subpaths:
             lines.append(f"(deny file-write* (subpath {_literal(spec.workspace_root / subpath)}))")
     for device in _WRITABLE_DEVICES:
@@ -77,6 +79,10 @@ class SeatbeltLauncher:
         return (SANDBOX_EXEC, "-p", build_profile(spec), *argv)
 
     def describe(self, spec: SandboxSpec) -> str:
-        writes = f"writes limited to {spec.workspace_root}" if spec.writable else "read-only"
+        writes = (
+            f"writes limited to {spec.workspace_root}"
+            if spec.writable
+            else "workspace read-only (scratch writable)"
+        )
         network = "network allowed" if spec.allow_network else "no network"
         return f"sandbox: seatbelt, {writes}, {network}, home directory unreadable"

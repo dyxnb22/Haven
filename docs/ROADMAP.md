@@ -5,7 +5,10 @@ CLI, and opencode) and a verification pass over their claims.
 
 ## Progress (2026-08-12)
 
-All phases have been executed; each links to the ADR that records its decision.
+Where each phase actually stands — "done" means implemented and tested, not
+merely decided. Phase 4's real-repo measurement and Phase 5's extensions are
+explicitly *not* built; what exists there is scaffolding and a recorded
+decision, respectively.
 
 - **Phase 0 — claims made true again: done.** Process writes attributed to the
   Evidence Gate (ADR 0012), exec/check sandbox scope decided (ADR 0013),
@@ -27,6 +30,13 @@ All phases have been executed; each links to the ADR that records its decision.
 - **Phase 5 — extension boundary: decided (ADR 0016).** Guardrails documented;
   MCP, LSP, plugins, and multi-agent stay deferred with unlock conditions,
   consistent with the thesis.
+- **Post-plan boundary fixes (ADR 0017).** External review surfaced four
+  invariant gaps, all closed: `repo.exec` is now workspace-read-only (the
+  Linux protected-path bypass), protected-path changes by any process are
+  detected and surfaced, compaction drops tool-call turns as whole groups (a
+  kept assistant can no longer reference a dropped tool result) and counts
+  replayed reasoning toward the context budget, and `continue_run` verifies
+  workspace identity and resets the run-scoped diff.
 
 The sections below are the original plan, kept as written.
 

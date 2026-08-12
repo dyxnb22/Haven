@@ -710,7 +710,30 @@ class FsWorkspace:
             if len(data) <= MAX_EDIT_FILE_BYTES:
                 with contextlib.suppress(UnicodeDecodeError):
                     contents[normalized] = data.decode("utf-8")
-        return WorkspaceSnapshot(digests=digests, contents=contents)
+        return WorkspaceSnapshot(
+            digests=digests, contents=contents, protected_digests=self._protected_digests()
+        )
+
+    def _protected_digests(self) -> dict[str, str]:
+        """Digest the protected paths so a process touching them is detectable,
+        even where the OS sandbox cannot prevent the write."""
+        result: dict[str, str] = {}
+        for name in PROTECTED_COMPONENTS:
+            target = self._root / name
+            if target.is_file():
+                with contextlib.suppress(OSError):
+                    result[name] = sha256_bytes(target.read_bytes())
+            elif target.is_dir():
+                # A directory (e.g. .git): fold its file digests into one, so
+                # any change inside it moves the aggregate.
+                parts: list[str] = []
+                for child in sorted(target.rglob("*")):
+                    if child.is_file() and not child.is_symlink():
+                        with contextlib.suppress(OSError):
+                            rel = child.relative_to(self._root).as_posix()
+                            parts.append(f"{rel}:{sha256_bytes(child.read_bytes())}")
+                result[name] = sha256_text("\n".join(parts))
+        return result
 
     def register_run_original(self, path: str, content: str) -> None:
         """Seed the run diff's original for a path a process changed, but only

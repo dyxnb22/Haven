@@ -39,11 +39,11 @@ def encode_spec(spec: SandboxSpec) -> str:
         str(spec.scratch_dir.resolve()),
         *(str(root.resolve()) for root in spec.extra_readable_roots),
     ]
-    writable = (
-        [str(spec.workspace_root.resolve()), str(spec.scratch_dir.resolve())]
-        if spec.writable
-        else []
-    )
+    # Scratch is always writable — it exists so a confined process has
+    # somewhere to write. `writable` governs the workspace alone.
+    writable = [str(spec.scratch_dir.resolve())]
+    if spec.writable:
+        writable.insert(0, str(spec.workspace_root.resolve()))
     return json.dumps(
         {"readable": readable, "writable": writable, "allow_network": spec.allow_network},
         separators=(",", ":"),
@@ -64,7 +64,11 @@ class LandlockLauncher:
         return (sys.executable, "-m", LAUNCHER_MODULE, "--spec", encode_spec(spec), "--", *argv)
 
     def describe(self, spec: SandboxSpec) -> str:
-        writes = f"writes limited to {spec.workspace_root}" if spec.writable else "read-only"
+        writes = (
+            f"writes limited to {spec.workspace_root}"
+            if spec.writable
+            else "workspace read-only (scratch writable)"
+        )
         network = "network allowed" if spec.allow_network else "no TCP"
         # Subtree grants cannot express "the workspace except .git", so name the
         # layer that is really holding that line.

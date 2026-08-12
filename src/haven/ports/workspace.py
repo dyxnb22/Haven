@@ -98,6 +98,12 @@ class WorkspaceSnapshot:
 
     digests: dict[str, str] = field(default_factory=dict)
     contents: dict[str, str] = field(default_factory=dict)
+    #: Digests of the protected paths (`.git`, `.haven`, `.haven.toml`), kept
+    #: separately from `digests` (which excludes them). A process that touches
+    #: one of these is a tamper the tool layer must be able to detect, even
+    #: where the OS sandbox cannot prevent it (Landlock cannot carve `.git` out
+    #: of a writable workspace).
+    protected_digests: dict[str, str] = field(default_factory=dict)
 
 
 class WorkspaceError(Exception):

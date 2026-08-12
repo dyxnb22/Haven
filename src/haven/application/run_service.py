@@ -186,6 +186,20 @@ class RunService:
         if checkpoint is None:
             raise ValueError(f"no checkpoint for run {previous_run_id!r}; cannot continue it")
 
+        # Refuse to graft a run's transcript and file state onto a different
+        # repository: recovery makes this check, and a follow-up must too.
+        if checkpoint.workspace_digest != self._workspace.workspace_digest:
+            raise ValueError(
+                "workspace identity changed since the run being continued; "
+                "continue it from the same workspace"
+            )
+
+        # A follow-up is a new turn: its run diff must show only its own
+        # changes, so the run-scoped originals from the prior turn are reset
+        # (harmless in a fresh process, load-bearing in the long-lived TUI
+        # workspace that a session reuses).
+        self._workspace.restore_originals({})
+
         transcript = list(checkpoint.messages)
         transcript.append(ModelMessage(role="user", content=f"Follow-up request: {follow_up}"))
         ctx = RunContext(
