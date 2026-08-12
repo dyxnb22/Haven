@@ -17,6 +17,7 @@ from haven.adapters.sandbox.landlock import LandlockLauncher
 from haven.adapters.sandbox.seatbelt import SeatbeltLauncher
 from haven.adapters.sqlite_session import SqliteSessionStore
 from haven.adapters.workspace_fs import FsWorkspace
+from haven.adapters.workspace_lease import LeaseHeld, WorkspaceLease, acquire_workspace_lease
 from haven.application.approvals import ApprovalResponder
 from haven.application.context_builder import ContextBuilder
 from haven.application.emitter import EventEmitter
@@ -24,7 +25,7 @@ from haven.application.profiles import profile_for
 from haven.application.recovery_service import RecoveryService
 from haven.application.replay_service import ReplayService
 from haven.application.run_service import RunService
-from haven.config import ResolvedConfig, artifacts_dir, db_path, load_config
+from haven.config import ResolvedConfig, artifacts_dir, data_dir, db_path, load_config
 from haven.contracts.events import ContextSegment
 from haven.contracts.model import ModelRequest
 from haven.contracts.tools import tool_schemas
@@ -56,8 +57,15 @@ class AppServices:
     model_name: str
     model: ModelPort | None = None
     sandbox_backend: str = "none"
+    #: The single-writer lease when this process may mutate the workspace;
+    #: None in read-only mode or when another live process holds it (in which
+    #: case `lease_warning` says so and the mode was downgraded).
+    lease: WorkspaceLease | None = None
+    lease_warning: str = ""
 
     async def close(self) -> None:
+        if self.lease is not None:
+            self.lease.release()
         await self.store.close()
         # Close the provider's HTTP client too; a ModelPort need not define
         # aclose (ScriptedModel does not), so this is best-effort by protocol.
@@ -103,6 +111,20 @@ async def build_services(
 ) -> AppServices:
     workspace_root = resolve_workspace(workspace_path)
     config = load_config(workspace_root, tier)
+
+    # Single-writer lease: within one process every write is preimage-pinned
+    # and re-verified, but a second Haven process on the same workspace could
+    # mutate files between another run's approval and execution. The first
+    # writable process takes the lease; a contender is downgraded to
+    # read-only with an explicit warning rather than refused outright.
+    lease: WorkspaceLease | None = None
+    lease_warning = ""
+    if mode is not PermissionMode.READ_ONLY:
+        try:
+            lease = acquire_workspace_lease(workspace_root, data_dir() / "leases")
+        except LeaseHeld as held:
+            mode = PermissionMode.READ_ONLY
+            lease_warning = f"{held}; this session is read-only"
 
     workspace = FsWorkspace(workspace_root)
     store = await SqliteSessionStore.open(store_path or db_path(), artifacts_dir())
@@ -158,6 +180,8 @@ async def build_services(
         model_name=model.model_name,
         model=model,
         sandbox_backend=sandbox_backend_name(launcher),
+        lease=lease,
+        lease_warning=lease_warning,
     )
 
 

@@ -41,6 +41,17 @@ class RecoveryReport:
     checkpoint: CheckpointV1 | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class RewindReport:
+    """The outcome of a user-level undo of one run's file changes."""
+
+    run_id: str
+    rewound: bool = False
+    restored: tuple[str, ...] = ()
+    deleted: tuple[str, ...] = ()
+    blockers: tuple[str, ...] = ()
+
+
 class RecoveryService:
     def __init__(self, store: SessionStorePort, workspace: WorkspacePort) -> None:
         self._store = store
@@ -231,6 +242,75 @@ class RecoveryService:
             path,
             "unknown",
             "process may have run; confirm manually",
+        )
+
+    async def rewind(self, run_id: str) -> RewindReport:
+        """User-level undo: restore every file this run changed to its
+        pre-run content, refusing wherever disk state is not provably the
+        run's own output.
+
+        Safety rule per path: the file on disk must still match the run's
+        last recorded digest for it (the postimage of its final edit). A file
+        that changed since — an external edit, a later run — blocks that path
+        instead of being clobbered; rewind is compensation, never blind
+        replay (the same stance reconcile takes).
+        """
+        checkpoint = await self._store.load_checkpoint(run_id)
+        if checkpoint is None:
+            return RewindReport(run_id=run_id, blockers=("no checkpoint recorded for this run",))
+        if checkpoint.workspace_digest != self._workspace.workspace_digest:
+            return RewindReport(
+                run_id=run_id,
+                blockers=("workspace identity changed since the run; refusing to rewind",),
+            )
+
+        # The run's final word on each path: the postimage of its last edit
+        # ("" = the run deleted it). Paths created by the run are those whose
+        # first edit had no preimage.
+        final_digest: dict[str, str] = {}
+        first_preimage: dict[str, str] = {}
+        for edit in checkpoint.evidence.edits:
+            final_digest[edit.path] = edit.postimage_digest
+            first_preimage.setdefault(edit.path, edit.preimage_digest)
+
+        blocked: list[str] = []
+        planned: list[tuple[str, str | None]] = []  # (path, restore content | None=delete)
+        for path, artifact_digest in sorted(checkpoint.original_artifacts.items()):
+            expected = final_digest.get(path)
+            facts = self._workspace.path_facts(path)
+            if expected == "":
+                # The run deleted it; it must still be absent.
+                if facts.digest is not None:
+                    blocked.append(f"{path}: reappeared since the run deleted it")
+                    continue
+            elif expected is None or facts.digest != expected:
+                blocked.append(f"{path}: changed since this run; refusing to overwrite")
+                continue
+            if first_preimage.get(path) == "":
+                planned.append((path, None))  # created by the run -> remove
+            else:
+                artifact = await self._store.get_artifact(artifact_digest)
+                if artifact is None:
+                    blocked.append(f"{path}: original content is not in the artifact store")
+                    continue
+                planned.append((path, artifact.decode("utf-8")))
+
+        if blocked:
+            return RewindReport(run_id=run_id, blockers=tuple(blocked))
+
+        restored: list[str] = []
+        deleted: list[str] = []
+        for path, content in planned:
+            target = self._workspace.root / path
+            if content is None:
+                target.unlink(missing_ok=True)
+                deleted.append(path)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content, encoding="utf-8")
+                restored.append(path)
+        return RewindReport(
+            run_id=run_id, restored=tuple(restored), deleted=tuple(deleted), rewound=True
         )
 
     async def reconcile(

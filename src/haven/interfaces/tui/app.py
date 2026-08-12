@@ -197,6 +197,9 @@ class HavenApp(App[None]):
             model_name=getattr(self._services, "model_name", ""),
             mode="interactive",
         )
+        lease_warning = getattr(self._services, "lease_warning", "")
+        if lease_warning:
+            self._log_line("system", lease_warning)
         self._refresh_chrome()
         self._log_line("system", f"workspace: {self._workspace}")
         self._log_line("system", "ready — describe a task and press Enter (/help for commands)")
@@ -323,7 +326,10 @@ class HavenApp(App[None]):
             self._log_line("system", "still starting up, try again in a moment")
             return
         if self._state.running:
-            self._log_line("system", "a run is already active; Ctrl+C to cancel it first")
+            # Steering: queue the input for the active run instead of refusing
+            # it. Delivery happens at the next turn boundary, so nothing
+            # in-flight is interrupted (ROADMAP2 phase 3).
+            self._queue_steering(text)
             return
         # A follow-up after a finished run continues the same conversation, so
         # the model keeps the prior turn's context instead of starting blank
@@ -332,6 +338,17 @@ class HavenApp(App[None]):
             self._run_worker = self._execute_continue(self._state.run_id, text)
         else:
             self._run_worker = self._execute_run(text)
+
+    def _queue_steering(self, text: str) -> None:
+        async def _do() -> None:
+            accepted = await self._services.run_service.steer(text)
+            if accepted:
+                self._log_line("you (queued)", text)
+                self._log_line("system", "queued; it reaches the agent at the next turn")
+            else:
+                self._log_line("system", "no active run to steer; send again to start one")
+
+        self.run_worker(_do(), exclusive=False)
 
     def _handle_command(self, command: str) -> None:
         name = command.split()[0].lower()

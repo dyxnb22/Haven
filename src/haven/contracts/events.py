@@ -200,6 +200,16 @@ class EffectUnknown(StrictModel):
     detail: str
 
 
+class SteerQueued(StrictModel):
+    """User input accepted while a run is active, to be delivered at the next
+    turn boundary. Journaled, so an interrupted run's undelivered steering
+    survives a crash; delivery is visible as the user message it becomes."""
+
+    kind: Literal["steer.queued"] = "steer.queued"
+    run_id: str
+    text: str
+
+
 class RunFinished(StrictModel):
     kind: Literal["run.finished"] = "run.finished"
     run_id: str
@@ -234,6 +244,7 @@ ApplicationEvent = Annotated[
     | ContextBuilt
     | PlanUpdated
     | Notice
+    | SteerQueued
     | EffectUnknown
     | RunFinished,
     Field(discriminator="kind"),

@@ -435,6 +435,45 @@ def resume(
 
 
 @app.command()
+def rewind(
+    run_id: str,
+    workspace: Path = typer.Option(Path("."), "--workspace", "-w"),
+) -> None:
+    """Undo a finished run's file changes (user-level rewind, fail-closed).
+
+    Every file the run touched is restored to its pre-run content — but only
+    where the file on disk still matches what the run left behind. Anything
+    changed since (by you, or by a later run) blocks the rewind instead of
+    being overwritten. Rewinding does not delete the run's journal; the
+    history stays auditable.
+    """
+
+    async def _rewind() -> int:
+        from haven.application.recovery_service import RecoveryService
+        from haven.bootstrap import make_workspace, open_store
+
+        store = await open_store()
+        try:
+            recovery = RecoveryService(store, make_workspace(workspace))
+            report = await recovery.rewind(run_id)
+            if not report.rewound:
+                for blocker in report.blockers:
+                    typer.echo(f"blocked: {blocker}")
+                return EXIT_RECOVERY
+            for path in report.restored:
+                typer.echo(f"restored {path}")
+            for path in report.deleted:
+                typer.echo(f"removed  {path} (the run created it)")
+            if not report.restored and not report.deleted:
+                typer.echo("nothing to rewind: the run changed no files")
+            return EXIT_OK
+        finally:
+            await store.close()
+
+    raise typer.Exit(asyncio.run(_rewind()))
+
+
+@app.command()
 def reconcile(
     run_id: str,
     call_id: str,

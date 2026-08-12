@@ -11,6 +11,7 @@ import asyncio
 import shutil
 import tempfile
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -36,6 +37,7 @@ from haven.contracts.events import (
     Notice,
     RunCreated,
     RunFinished,
+    SteerQueued,
     StepStarted,
     StreamRestarted,
 )
@@ -147,6 +149,11 @@ class RunService:
         self._recipes = recipes
         self._registry = ToolRegistry()
         self._launcher = launcher
+        # Steering: user input accepted while a run is active, delivered only
+        # at a turn boundary so the tool channel is never interrupted
+        # mid-effect. Journaled on arrival (durable), drained by the loop.
+        self._steer_queue: deque[str] = deque()
+        self._active_run_id: str | None = None
         # One scratch directory per service, removed when a run finishes. It
         # exists so sandboxed tools that must write somewhere do not need write
         # access outside the workspace.
@@ -262,6 +269,37 @@ class RunService:
         )
         return await self._drive(ctx)
 
+    @property
+    def active_run_id(self) -> str | None:
+        """The run currently being driven, if any."""
+        return self._active_run_id
+
+    async def steer(self, text: str) -> bool:
+        """Queue user input for the active run, delivered at the next turn
+        boundary.
+
+        Nothing is interrupted: the current model call and any in-flight tool
+        execution finish untouched; the text becomes a user message before the
+        next model request. Returns False when no run is active (the caller
+        should start a run or a follow-up instead). The queued text is
+        journaled immediately, so it survives a crash.
+        """
+        text = text.strip()
+        if not text or self._active_run_id is None:
+            return False
+        self._steer_queue.append(text)
+        await self._emitter.emit(
+            self._active_run_id,
+            SteerQueued(run_id=self._active_run_id, text=text),
+        )
+        return True
+
+    def _drain_steering(self, ctx: RunContext) -> list[str]:
+        drained: list[str] = []
+        while self._steer_queue:
+            drained.append(self._steer_queue.popleft())
+        return drained
+
     # -- the loop -------------------------------------------------------------
 
     async def _drive(self, ctx: RunContext) -> RunOutcome:
@@ -287,6 +325,8 @@ class RunService:
         continuations = 0
         empty_replies = 0
 
+        self._active_run_id = ctx.run_id
+        self._steer_queue.clear()
         try:
             while True:
                 ctx.usage = ctx.usage.with_wall_time(elapsed_base + (time.monotonic() - started))
@@ -298,6 +338,22 @@ class RunService:
                 if ctx.status is RunStatus.CREATED:
                     ctx.move_to(RunStatus.RUNNING_MODEL)
                 await self._emitter.emit(ctx.run_id, StepStarted(run_id=ctx.run_id, step=step))
+
+                # Turn boundary: queued steering becomes ordinary user
+                # messages before the next model request — never mid-stream,
+                # never mid-tool-call.
+                for steered in self._drain_steering(ctx):
+                    ctx.transcript.append(
+                        ModelMessage(role="user", content=f"User update: {steered}")
+                    )
+                    await self._emitter.emit(
+                        ctx.run_id,
+                        Notice(
+                            run_id=ctx.run_id,
+                            level="info",
+                            message=f"steering delivered: {steered[:160]}",
+                        ),
+                    )
 
                 request, segments = builder.build(ctx.transcript, ctx.usage, ctx.plan)
                 await self._emitter.emit(
@@ -507,6 +563,11 @@ class RunService:
             await self._finish(ctx, RunStatus.CANCELLED, StopReason.CANCELLED, final_text)
             raise
         finally:
+            self._active_run_id = None
+            if self._steer_queue:
+                # Undelivered steering must not leak into a later run; the
+                # queued events stay in the journal for the record.
+                self._steer_queue.clear()
             shutil.rmtree(self._scratch_dir, ignore_errors=True)
 
     async def _handle_tool_calls(
