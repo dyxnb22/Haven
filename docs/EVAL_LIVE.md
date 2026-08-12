@@ -166,6 +166,27 @@ hit/miss token split, and `cost_usd` now that it is computed correctly. Until
 someone runs that, this section stays empty rather than carrying an estimate
 dressed as a measurement.
 
+## Reasoning replay (ADR 0014) — implemented, live-confirmation pending
+
+DeepSeek V4's thinking mode requires the `reasoning_content` that preceded a
+tool call to be replayed on every later request, or the API returns a 400 from
+the second turn on. Haven now captures that reasoning onto the assistant
+message and the adapter replays it when the model profile declares the
+capability — verified offline by contract tests, a capture/persist integration
+test, and a checkpoint round trip.
+
+Two things still need a paid run to settle, and are deliberately not claimed:
+
+- **The 400 itself.** The August run above passed 6/8 without this fix, which
+  either means the API was more lenient then or that something about Haven's
+  payload sidestepped the rule. One live tool-calling run with a follow-up turn
+  would confirm the failure the fix prevents.
+- **Output truncation continuation.** A turn that ends `finish_reason: length`
+  is currently accepted as-is (the Evidence Gate still refuses to call a
+  truncated, unverified answer a success). True prefix-continuation — re-issuing
+  to continue a cut-off turn — is deferred until the model's real truncation
+  behavior can be observed, because a half-built version is worse than none.
+
 ## Prompt-cache prefix stability (ADR 0008)
 
 The first live run spent ~26k input tokens per short task, which prompted a look

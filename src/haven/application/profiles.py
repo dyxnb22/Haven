@@ -28,6 +28,9 @@ class ModelProfile:
     #: Passed to the provider only when set, so an unset value means "whatever
     #: the provider defaults to" rather than a value Haven chose.
     reasoning_effort: str | None = None
+    #: Whether the provider requires the reasoning that preceded a tool call to
+    #: be replayed on subsequent requests (DeepSeek V4 does; ADR 0014).
+    requires_tool_call_reasoning: bool = False
 
 
 DEFAULT_PROFILE = ModelProfile(name="default")
@@ -49,6 +52,7 @@ DEEPSEEK_V4_FLASH = ModelProfile(
         output_per_1m_usd=0.28,
         cached_input_per_1m_usd=0.0028,
     ),
+    requires_tool_call_reasoning=True,
 )
 
 _PROFILES: dict[str, ModelProfile] = {

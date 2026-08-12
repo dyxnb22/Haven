@@ -47,6 +47,11 @@ class ModelMessage(StrictModel):
     content: str
     tool_calls: tuple[ToolCallProposal, ...] = ()
     tool_call_id: str | None = None
+    #: Opaque provider reasoning, carried for wire-protocol replay only (some
+    #: providers require it back on tool-call turns; ADR 0014). It is never the
+    #: answer: not rendered, not evidence, not in the compaction digest, not
+    #: trusted. `content` remains the only field that is any of those.
+    provider_reasoning: str = ""
 
 
 class ModelRequest(StrictModel):
@@ -110,3 +115,5 @@ class ModelResult(StrictModel):
     finish_reason: Literal["stop", "tool_calls", "length", "error"] = "stop"
     ttft_ms: int = 0
     duration_ms: int = 0
+    #: Provider reasoning streamed this turn, carried for wire replay (ADR 0014).
+    provider_reasoning: str = ""

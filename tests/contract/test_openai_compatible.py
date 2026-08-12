@@ -15,6 +15,7 @@ from haven.contracts.model import (
     ModelRequest,
     StreamFinished,
     TextDelta,
+    ToolCallProposal,
     ToolCallReady,
     UsageReport,
 )
@@ -158,6 +159,56 @@ async def _send(req: ModelRequest) -> dict[str, Any]:
     finally:
         await model.aclose()
     return captured
+
+
+def _assistant_with_tool_call(reasoning: str = "") -> ModelMessage:
+    return ModelMessage(
+        role="assistant",
+        content="",
+        tool_calls=(
+            ToolCallProposal(call_id="c1", tool_name="repo.read", arguments_json='{"path":"a"}'),
+        ),
+        provider_reasoning=reasoning,
+    )
+
+
+async def _wire_messages(messages: tuple[ModelMessage, ...], *, requires_reasoning: bool) -> Any:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, content=chunk({}, finish="stop") + b"data: [DONE]\n\n")
+
+    model = make_model(handler, requires_tool_call_reasoning=requires_reasoning)
+    try:
+        async for _ in model.generate_stream(ModelRequest(messages=messages)):
+            pass
+    finally:
+        await model.aclose()
+    return captured["messages"]
+
+
+class TestReasoningReplay:
+    async def test_tool_call_turn_carries_reasoning_when_required(self) -> None:
+        wire = await _wire_messages(
+            (_assistant_with_tool_call("I will read a."),), requires_reasoning=True
+        )
+        assert wire[0]["reasoning_content"] == "I will read a."
+
+    async def test_missing_reasoning_is_backfilled_with_empty_string(self) -> None:
+        wire = await _wire_messages((_assistant_with_tool_call(""),), requires_reasoning=True)
+        assert wire[0]["reasoning_content"] == ""
+
+    async def test_no_reasoning_field_when_capability_is_off(self) -> None:
+        wire = await _wire_messages(
+            (_assistant_with_tool_call("secret think"),), requires_reasoning=False
+        )
+        assert "reasoning_content" not in wire[0]
+
+    async def test_non_tool_assistant_turn_carries_no_reasoning(self) -> None:
+        plain = ModelMessage(role="assistant", content="the answer", provider_reasoning="think")
+        wire = await _wire_messages((plain,), requires_reasoning=True)
+        assert "reasoning_content" not in wire[0]
 
 
 async def test_reasoning_effort_is_sent_only_when_set() -> None:

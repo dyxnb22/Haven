@@ -274,7 +274,10 @@ class RunService:
                 )
                 ctx.transcript.append(
                     ModelMessage(
-                        role="assistant", content=result.text, tool_calls=result.tool_calls
+                        role="assistant",
+                        content=result.text,
+                        tool_calls=result.tool_calls,
+                        provider_reasoning=result.provider_reasoning,
                     )
                 )
 
@@ -456,6 +459,7 @@ class RunService:
         started = time.monotonic()
         ttft_ms = 0
         text_parts: list[str] = []
+        reasoning_parts: list[str] = []
         tool_calls: list[ToolCallProposal] = []
         usage = Usage()
         finish: Literal["stop", "tool_calls", "length", "error"] = "stop"
@@ -471,9 +475,11 @@ class RunService:
                     AssistantDelta(run_id=ctx.run_id, step=step, text=event.text),
                 )
             elif isinstance(event, ReasoningDelta):
-                # Shown so a long think is visible, but deliberately kept out of
-                # `text`: reasoning is not the answer and must never re-enter
-                # the transcript as assistant content.
+                # Shown so a long think is visible, and captured for wire replay
+                # (ADR 0014) — but deliberately kept out of `text`: reasoning is
+                # not the answer and must never re-enter the transcript as
+                # assistant content.
+                reasoning_parts.append(event.text)
                 await self._emitter.emit(
                     ctx.run_id,
                     AssistantReasoning(run_id=ctx.run_id, step=step, text=event.text),
@@ -492,6 +498,7 @@ class RunService:
             finish_reason="tool_calls" if tool_calls else finish,
             ttft_ms=ttft_ms,
             duration_ms=int((time.monotonic() - started) * 1000),
+            provider_reasoning="".join(reasoning_parts),
         )
 
     def _charge_usage(self, ctx: RunContext, request: ModelRequest, result: ModelResult) -> None:

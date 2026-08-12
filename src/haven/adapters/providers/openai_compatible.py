@@ -46,10 +46,14 @@ class OpenAICompatibleModel:
         first_event_timeout: float = 30.0,
         total_timeout: float = 120.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        requires_tool_call_reasoning: bool = False,
     ) -> None:
         self._model = model
         self._first_event_timeout = first_event_timeout
         self._total_timeout = total_timeout
+        # DeepSeek V4 rejects a tool-call assistant turn whose reasoning_content
+        # is not replayed (ADR 0014); set per model profile at bootstrap.
+        self._requires_tool_call_reasoning = requires_tool_call_reasoning
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             headers={"Authorization": f"Bearer {api_key}"},
@@ -162,7 +166,10 @@ class OpenAICompatibleModel:
             "stream": True,
             "stream_options": {"include_usage": True},
             "temperature": request.temperature,
-            "messages": [_to_wire_message(m) for m in request.messages],
+            "messages": [
+                _to_wire_message(m, replay_reasoning=self._requires_tool_call_reasoning)
+                for m in request.messages
+            ],
         }
         if request.max_output_tokens is not None:
             payload["max_tokens"] = request.max_output_tokens
@@ -254,7 +261,7 @@ def _map_finish_reason(reason: str) -> Any:
     return mapping.get(reason, "stop")
 
 
-def _to_wire_message(message: ModelMessage) -> dict[str, Any]:
+def _to_wire_message(message: ModelMessage, *, replay_reasoning: bool = False) -> dict[str, Any]:
     wire: dict[str, Any] = {"role": message.role, "content": message.content}
     if message.role == "assistant" and message.tool_calls:
         wire["tool_calls"] = [
@@ -268,6 +275,11 @@ def _to_wire_message(message: ModelMessage) -> dict[str, Any]:
             }
             for call in message.tool_calls
         ]
+        # DeepSeek V4 requires the reasoning that preceded a tool call to be
+        # replayed verbatim, or it 400s; an empty string is the accepted
+        # back-fill for history that predates capture (ADR 0014).
+        if replay_reasoning:
+            wire["reasoning_content"] = message.provider_reasoning
     if message.role == "tool" and message.tool_call_id:
         wire["tool_call_id"] = message.tool_call_id
     return wire

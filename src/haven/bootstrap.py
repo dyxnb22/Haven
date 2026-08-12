@@ -20,6 +20,7 @@ from haven.adapters.workspace_fs import FsWorkspace
 from haven.application.approvals import ApprovalResponder
 from haven.application.context_builder import ContextBuilder
 from haven.application.emitter import EventEmitter
+from haven.application.profiles import profile_for
 from haven.application.recovery_service import RecoveryService
 from haven.application.replay_service import ReplayService
 from haven.application.run_service import RunService
@@ -119,6 +120,9 @@ async def build_services(
             base_url=config.provider.base_url,
             api_key=api_key,
             model=config.provider.model,
+            requires_tool_call_reasoning=profile_for(
+                config.provider.model
+            ).requires_tool_call_reasoning,
         )
 
     baseline = await capture_git_baseline(workspace_root)
@@ -183,6 +187,9 @@ def build_provider(config: ResolvedConfig) -> OpenAICompatibleModel:
         base_url=config.provider.base_url,
         api_key=api_key,
         model=config.provider.model,
+        requires_tool_call_reasoning=profile_for(
+            config.provider.model
+        ).requires_tool_call_reasoning,
     )
 
 
