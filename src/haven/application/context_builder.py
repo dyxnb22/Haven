@@ -6,9 +6,10 @@ tail (the plan and live budget counters). Keeping everything that changes turn
 to turn in the tail means the leading bytes stay identical across turns, which
 is what lets a provider's automatic prompt cache reuse them (ADR 0008).
 
-Oversized transcripts are truncated deterministically (oldest tool outputs
-first) — never by asking the model to summarize, so summarization can never
-invent permission facts.
+Oversized transcripts are compacted deterministically: the oldest tool outputs
+are dropped and replaced by a program-assembled digest of what they contained
+(`application.compaction`). The model is never asked to summarize, so a summary
+can never invent permission facts.
 """
 
 from __future__ import annotations
@@ -16,13 +17,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from haven.application.compaction import summarize_dropped
 from haven.contracts.events import ContextSegment
 from haven.contracts.model import ModelMessage, ModelRequest, ToolSchema
 from haven.contracts.tools import PlanStep
 from haven.domain.budget import Budget, BudgetUsage
 
 MAX_CONTEXT_CHARS = 96_000
-TRUNCATED_STUB = "[tool output dropped to fit the context budget]"
 
 Trust = Literal["trusted", "untrusted"]
 
@@ -193,7 +194,24 @@ class ContextBuilder:
             )
         )
         # --- stable prefix ends; append-only transcript continues it ---
-        selected.extend(_classify(message) for message in transcript)
+        kept, digest, position = summarize_dropped(
+            transcript, MAX_CONTEXT_CHARS - _head_size(selected)
+        )
+        history = [_classify(message) for message in kept]
+        if digest:
+            history.insert(
+                position,
+                _Selected(
+                    message=ModelMessage(role="user", content=digest),
+                    source="run_digest",
+                    # Program-assembled from structured tool results: paths,
+                    # digests, and exit codes only. No repository text and no
+                    # model prose reach it, which is what makes this label true.
+                    trust="trusted",
+                    reason="facts condensed from tool outputs dropped to fit the budget",
+                ),
+            )
+        selected.extend(history)
 
         # --- volatile tail: everything that changes turn to turn goes last, so
         # it never shifts the cacheable prefix (ADR 0008) ---
@@ -225,7 +243,7 @@ class ContextBuilder:
             )
         )
 
-        fitted = self._fit_to_budget(selected)
+        fitted = selected
         request = ModelRequest(
             messages=tuple(item.message for item in fitted),
             tools=self._tools,
@@ -243,42 +261,8 @@ class ContextBuilder:
         )
         return request, segments
 
-    @staticmethod
-    def _fit_to_budget(selected: list[_Selected]) -> list[_Selected]:
-        """Deterministic truncation: drop the oldest tool outputs first.
 
-        Only tool outputs are ever truncated, and the two most recent ones are
-        always kept whole (the model usually needs its latest observations).
-        The model is never asked to summarize — a model-written summary could
-        invent facts that later reads would treat as established.
-
-        Protecting tool outputs by role, rather than protecting the last two
-        messages positionally, matters now that the volatile tail (plan, run
-        status) sits after the transcript: the newest tool output is no longer
-        in the final two slots.
-        """
-        total = sum(len(item.message.content) for item in selected)
-        if total <= MAX_CONTEXT_CHARS:
-            return selected
-        fitted = list(selected)
-        tool_indices = [i for i, item in enumerate(fitted) if item.message.role == "tool"]
-        protected = set(tool_indices[-2:])
-        for index in tool_indices:
-            if total <= MAX_CONTEXT_CHARS:
-                break
-            if index in protected:
-                continue
-            item = fitted[index]
-            if len(item.message.content) > len(TRUNCATED_STUB):
-                total -= len(item.message.content) - len(TRUNCATED_STUB)
-                fitted[index] = _Selected(
-                    message=ModelMessage(
-                        role="tool",
-                        content=TRUNCATED_STUB,
-                        tool_call_id=item.message.tool_call_id,
-                    ),
-                    source=item.source,
-                    trust=item.trust,
-                    reason="dropped: older tool output exceeded the context budget",
-                )
-        return fitted
+def _head_size(selected: list[_Selected]) -> int:
+    """Characters already spent on the stable head, so the transcript's share
+    of the budget accounts for the system rules and guidance above it."""
+    return sum(len(item.message.content) for item in selected)

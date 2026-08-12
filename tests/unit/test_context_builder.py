@@ -1,8 +1,8 @@
-"""Context selection: provenance, trust labelling, and deterministic truncation."""
+"""Context selection: provenance, trust labelling, and deterministic compaction."""
 
+from haven.application.compaction import DIGEST_HEADER
 from haven.application.context_builder import (
     MAX_CONTEXT_CHARS,
-    TRUNCATED_STUB,
     ContextBuilder,
 )
 from haven.contracts.model import ModelMessage
@@ -23,6 +23,19 @@ def builder(**overrides: object) -> ContextBuilder:
 
 def tool_message(content: str, call_id: str = "c1") -> ModelMessage:
     return ModelMessage(role="tool", content=content, tool_call_id=call_id)
+
+
+def bulky_tool_message(path: str, call_id: str = "c1", size: int = 40_000) -> ModelMessage:
+    """A realistically shaped, oversized read result for compaction tests."""
+    body = (
+        f'{{"status": "ok", "result": {{"path": "{path}", "digest": "d0d0d0d0", '
+        f'"content": "{"c" * size}"}}}}'
+    )
+    return ModelMessage(
+        role="tool",
+        content=f'<tool_output tool="repo.read">\n{body}\n</tool_output>',
+        tool_call_id=call_id,
+    )
 
 
 class TestProvenance:
@@ -154,47 +167,59 @@ class TestPlanReinjection:
         assert all(s.source != "task_plan" for s in segments)
 
     def test_plan_survives_context_truncation(self) -> None:
-        """The point of the design: a huge transcript drops tool output, not the plan."""
+        """The point of the design: a huge transcript is compacted, not the plan."""
         plan = (PlanStep(title="the plan must survive", status="in_progress"),)
-        big = "x" * 50_000
-        transcript = [tool_message(big, f"c{i}") for i in range(5)]
+        transcript = [bulky_tool_message(f"f{i}.py", f"c{i}") for i in range(5)]
         request, segments = builder().build(transcript, BudgetUsage(), plan)
 
         assert any(s.source == "task_plan" for s in segments)
         assert any("the plan must survive" in m.content for m in request.messages)
-        assert any(TRUNCATED_STUB in m.content for m in request.messages)
+        assert any(s.source == "run_digest" for s in segments)
 
 
-class TestDeterministicTruncation:
+class TestDeterministicCompaction:
     def test_small_context_is_untouched(self) -> None:
         transcript = [tool_message("small output")]
-        request, _ = builder().build(transcript, BudgetUsage())
-        assert all(TRUNCATED_STUB not in m.content for m in request.messages)
+        _, segments = builder().build(transcript, BudgetUsage())
+        assert all(s.source != "run_digest" for s in segments)
 
-    def test_oldest_tool_outputs_are_dropped_first(self) -> None:
-        big = "x" * 40_000
+    def test_oldest_tool_outputs_are_condensed_first(self) -> None:
         transcript = [
-            tool_message(big, "c1"),
-            tool_message(big, "c2"),
-            tool_message(big, "c3"),
+            bulky_tool_message("oldest.py", "c1"),
+            bulky_tool_message("middle.py", "c2"),
+            bulky_tool_message("third.py", "c3"),
             ModelMessage(role="assistant", content="thinking"),
             tool_message("recent and important", "c4"),
         ]
-        request, segments = builder().build(transcript, BudgetUsage())
+        request, _ = builder().build(transcript, BudgetUsage())
 
         contents = [m.content for m in request.messages]
-        assert contents[2] == TRUNCATED_STUB  # oldest tool output dropped
+        joined = "\n".join(contents)
+        # the oldest output's bytes are gone, but the fact that it was read is not
+        assert "oldest.py" in joined
+        assert not any(len(c) > 40_000 and "oldest.py" in c for c in contents)
         # the newest tool output is kept whole even though it is no longer the
         # last message (run status now trails it)
         assert any("recent and important" in c for c in contents)
         assert sum(len(c) for c in contents) <= MAX_CONTEXT_CHARS
 
-    def test_dropped_segments_explain_themselves(self) -> None:
-        big = "x" * 60_000
-        transcript = [tool_message(big, "c1"), tool_message(big, "c2"), tool_message("tail", "c3")]
+    def test_the_digest_is_trusted_and_explains_itself(self) -> None:
+        transcript = [bulky_tool_message(f"f{i}.py", f"c{i}") for i in range(4)]
         _, segments = builder().build(transcript, BudgetUsage())
-        dropped = [s for s in segments if "context budget" in s.reason]
-        assert dropped, "a dropped segment must say why it was dropped"
+
+        digests = [s for s in segments if s.source == "run_digest"]
+        assert digests, "compaction must announce itself as a segment"
+        assert digests[0].trust == "trusted"
+        assert "dropped" in digests[0].reason
+
+    def test_the_digest_carries_facts_not_content(self) -> None:
+        """It is labelled trusted, so repository bytes must never be in it."""
+        transcript = [bulky_tool_message(f"f{i}.py", f"c{i}") for i in range(4)]
+        request, _ = builder().build(transcript, BudgetUsage())
+
+        digest = next(m.content for m in request.messages if DIGEST_HEADER in m.content)
+        assert "f0.py" in digest
+        assert "cccc" not in digest
 
     def test_system_and_goal_are_never_dropped(self) -> None:
         big = "x" * 80_000
@@ -203,12 +228,24 @@ class TestDeterministicTruncation:
         assert "You are Haven" in request.messages[0].content
         assert "Task: fix the bug" in request.messages[1].content
 
-    def test_truncation_is_stable_across_calls(self) -> None:
-        big = "y" * 50_000
-        transcript = [tool_message(big, f"c{i}") for i in range(4)]
+    def test_compaction_is_stable_across_calls(self) -> None:
+        transcript = [bulky_tool_message(f"f{i}.py", f"c{i}") for i in range(4)]
         first, _ = builder().build(transcript, BudgetUsage())
         second, _ = builder().build(transcript, BudgetUsage())
         assert [m.content for m in first.messages] == [m.content for m in second.messages]
+
+    def test_the_prefix_survives_a_turn_after_compaction(self) -> None:
+        """Compaction invalidates the cache once, not on every later turn."""
+        b = builder()
+        turn_n = [bulky_tool_message(f"f{i}.py", f"c{i}") for i in range(4)]
+        req_n, _ = b.build(turn_n, BudgetUsage(steps=4))
+
+        turn_n1 = [*turn_n, ModelMessage(role="assistant", content="next")]
+        req_n1, _ = b.build(turn_n1, BudgetUsage(steps=5))
+
+        prefix_n = "\u0000".join(m.content for m in req_n.messages[:-1])
+        prefix_n1 = "\u0000".join(m.content for m in req_n1.messages)
+        assert prefix_n1.startswith(prefix_n)
 
 
 class TestPrefixStability:
