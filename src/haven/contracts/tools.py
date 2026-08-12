@@ -217,6 +217,10 @@ class RecipeSpec(StrictModel):
     id: str
     argv: tuple[str, ...] = Field(min_length=1)
     timeout_seconds: float = 120.0
+    #: Recipes run sandboxed like any other process. A check that genuinely
+    #: needs the network (an integration suite) can opt in, because the recipe
+    #: comes from user-authored config rather than from the model.
+    allow_network: bool = False
 
 
 def tool_schemas() -> tuple[ToolSchema, ...]:
