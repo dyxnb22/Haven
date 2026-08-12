@@ -127,9 +127,20 @@ that exactly one class enjoys that exception.
 
 `task.plan` writes an ordered step list into `RunContext` — **State**, not the
 transcript. `ContextBuilder` re-renders it into every subsequent request, so
-budget-driven truncation (which drops the oldest tool outputs first) can never
+budget-driven compaction (which drops the oldest tool outputs first) can never
 discard the agent's plan. It is emitted as `plan.updated` for the **Trace**, and
 persisted in `CheckpointV1` so a resumed run still knows what it was doing.
+
+### What happens when the transcript outgrows the budget
+
+The oldest tool outputs are dropped and replaced by one program-assembled
+`run_digest` — which files were read, which edits landed, which checks ran and
+with what exit code. The model is never asked to summarize, because a summary
+it wrote could invent permission-shaped facts. The digest is derived from the
+dropped messages rather than from live state, which keeps it byte-identical
+between compaction events and so keeps the prefix cacheable (ADR 0008, ADR
+0010). It is labelled **trusted** and therefore carries only program-made
+metadata: no file content, no model prose.
 
 The rendered plan is labelled **untrusted**, because the model wrote its text.
 See ADR 0006 for the benefit gate and ADR 0007 for the capabilities that were

@@ -34,7 +34,7 @@ from a command in this repository; nothing is estimated.
    append-only event journal + execution journal. An interrupted effect is
    classified against preimage/postimage digests; anything unprovable is
    `EFFECT_UNKNOWN`, blocks resume, and is **never** auto-replayed.
-5. **Reproducible offline eval as a security gate.** 31 scripted cases run the
+5. **Reproducible offline eval as a security gate.** 32 scripted cases run the
    real stack with only the model faked; unauthorized file changes and transcript
    leaks fail the build. Sandbox confinement is proven separately by running
    real commands and asserting the OS refused them, on both platforms in CI.
@@ -46,11 +46,11 @@ Reproduce with `uv run pytest -q`, `uv run haven eval --offline`, and
 
 | Metric | Value |
 |---|---|
-| Automated tests | **434** passing |
+| Automated tests | **465** passing |
 | Line coverage (`src/`) | **87%** (domain + contracts ~100%) |
-| Offline eval cases | **31/31 passed**, **0 security violations**, ~1 s wall clock |
+| Offline eval cases | **32/32 passed**, **0 security violations**, ~1 s wall clock |
 | Live eval (DeepSeek `deepseek-v4-flash`) | **7/8 task cases**, **0 security violations**, **89% prompt-cache hit** (up from 71%) |
-| Eval categories | security 11 · task 8 · robustness 5 · injection 3 · budget 2 · recovery 2 |
+| Eval categories | security 11 · task 8 · robustness 6 · injection 3 · budget 2 · recovery 2 |
 | Dedicated security tests | 13 path-escape / protected-path, 8 sandbox-enforcement, plus 11 security and 3 injection eval cases |
 | Sandbox enforcement | writes outside the workspace, reads of `$HOME`, and TCP all refused by the OS — asserted by running real commands on macOS and Linux |
 | Recovery tests | 8, covering not-run / confirmed / ambiguous / abandoned / identity-mismatch |
@@ -76,6 +76,7 @@ measured cost of the last context change.
 | Registered check recipes (id only) | Arbitrary shell | Unbounded risk and unreproducible eval; the model can never supply a command string |
 | Digest-bound one-time approval | Persistent broad grants | Easy to over-approve; drift must invalidate authorization |
 | Program Evidence Gate | Model self-report | "Done!" is unfalsifiable; success must be an artifact |
+| Program-assembled context digest | Model-written summarization | A summary the model wrote can invent permission-shaped facts; dropping only loses information, which a re-read recovers (ADR 0010) |
 | Block on ambiguous effects | Auto-retry the last step | Re-running a possibly-completed write is worse than asking a human |
 | ScriptedModel as the default test model | Live-model CI | Free, fast, deterministic; live eval is separate and explicitly paid |
 | Textual | Hand-rolled Rich loop | Workers, modal screens, and Pilot make the TUI testable offline |
