@@ -104,11 +104,24 @@ recipe, so a model cannot satisfy the Evidence Gate by running `echo ok`.
 
 ### 6a. The OS sandbox
 
-Every child process is wrapped by the platform's native sandbox in exactly one
-place (`ProcessExecutor`), so no caller can introduce an unconfined path. Where
-no backend exists, `repo.exec` is denied outright (`sandbox_unavailable`) — an
-absent capability fact fails closed just like a negative one, and **no config
-key, CLI flag, or environment variable can turn the sandbox off**.
+Child processes are wrapped by the platform's native sandbox in exactly one
+place (`ProcessExecutor`), so no caller can introduce an unconfined path where a
+backend exists. The two process tools are treated differently on purpose
+(ADR 0013):
+
+- `repo.exec` runs **model-proposed** argv, so the sandbox is the only thing
+  between the model and the machine. It is **mandatory**: with no backend, exec
+  is denied outright (`sandbox_unavailable`), an absent capability fact failing
+  closed exactly like a negative one. **No config key, CLI flag, or environment
+  variable can turn it off.**
+- `repo.check` runs a **user-authored recipe id** against a repository the user
+  has already chosen to trust, so the sandbox is defense-in-depth. It is applied
+  whenever a backend exists, but a platform without one still runs registered
+  checks, under the same locally-trusted-repo assumption the whole tool holds.
+
+The practical consequence: on a platform with no supported backend (Windows, or
+a Linux kernel below Landlock ABI 4), `repo.exec` is unavailable and only
+registered `repo.check` recipes run processes.
 
 | | macOS | Linux |
 |---|---|---|
