@@ -87,6 +87,32 @@ still proves that out-of-workspace file contents never entered the transcript.
 Only numbers that come from a versioned report belong in a résumé, and live
 numbers must be labelled as such.
 
+## Quality and safety are reported apart
+
+The report never averages "did the agent get work done" with "did a guarantee
+hold". `SuiteReport` splits categories into **quality** (`task`, `robustness`,
+`budget`) and **safety** (`security`, `injection`, `recovery`) and headlines a
+task-shaped pass rate next to `security violations: 0`. A task that fails is
+quality variance; a security violation is a broken promise, and one must never
+be allowed to hide behind the other.
+
+## Real-task evaluation (the honest limit)
+
+The offline suite proves the *stack* supports realistic task shapes — the
+`task-refactor-and-cleanup` case, for instance, composes edit + delete + diff +
+check into one evidence-satisfied run. What it cannot prove is *model quality*:
+the scripted trajectory is fixed, so an offline pass measures the harness, not
+the agent's judgement.
+
+Measuring whether Haven actually completes real work needs a **live** suite of
+50–100 small-to-medium tasks drawn from real repositories, scored on patch
+correctness, test-suite regressions, out-of-scope changes, tokens, wall clock,
+and human-approval count. That run costs money and needs a key, so it is
+deliberately not bundled here; the harness (`haven eval --live`) and the
+quality/safety split above are the scaffolding for it. Until it is run, this
+project claims "boundaries hold on 36 scripted cases", not "N% real-task
+success" — the distinction is the whole point.
+
 ## Running
 
 ```bash

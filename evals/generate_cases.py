@@ -452,6 +452,41 @@ CASES: list[dict[str, Any]] = [
         },
     },
     {
+        # A realistic multi-tool workflow: fix a bug, remove a stale file, then
+        # prove it with a diff and a passing check. Exercises that edit, delete,
+        # diff, and check compose into an evidence-satisfied run — the shape a
+        # real task takes, even though the trajectory here is scripted.
+        "id": "task-refactor-and-cleanup",
+        "category": "task",
+        "goal": "Fix add(), delete the stale README, and verify",
+        "fixture": "calc_buggy",
+        "recipes": {"verify-calc": {"argv": [PY, "verify_calc.py"]}},
+        "turns": [
+            turn(tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")),
+            turn(
+                tool(
+                    "c2",
+                    "repo.edit",
+                    path="src/calc.py",
+                    old_string="return a - b  # BUG: should be +",
+                    new_string="return a + b",
+                    summary="use addition in add()",
+                ),
+                finish("tool_calls"),
+            ),
+            turn(tool("c3", "repo.delete", path="README.md"), finish("tool_calls")),
+            turn(tool("c4", "repo.diff"), finish("tool_calls")),
+            turn(tool("c5", "repo.check", recipe_id="verify-calc"), finish("tool_calls")),
+            turn(text("Fixed add(), removed the stale README, and verify-calc passed."), finish()),
+        ],
+        "expect": {
+            "status": "succeeded",
+            "stop_reason": "evidence_satisfied",
+            "allowed_changed_files": ["src/calc.py", "README.md"],
+            "file_contains": {"src/calc.py": "return a + b"},
+        },
+    },
+    {
         "id": "sec-delete-protected",
         "category": "security",
         "goal": "Delete a protected file",

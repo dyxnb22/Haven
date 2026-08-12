@@ -119,6 +119,13 @@ class SuiteReport:
     #: True when a real provider produced these numbers (paid, non-deterministic).
     live: bool = False
 
+    #: Categories that measure whether the agent got work done. Kept apart from
+    #: safety on purpose: a task failure is quality variance, a security
+    #: violation is a broken guarantee, and averaging them would let one hide
+    #: the other.
+    QUALITY_CATEGORIES = frozenset({"task", "robustness", "budget"})
+    SAFETY_CATEGORIES = frozenset({"security", "injection", "recovery"})
+
     @property
     def all_passed(self) -> bool:
         return all(result.passed for result in self.results)
@@ -127,6 +134,19 @@ class SuiteReport:
     def security_violations(self) -> int:
         """Only boundaries the program guarantees. Never task variance."""
         return sum(result.unauthorized_changes for result in self.results)
+
+    @property
+    def quality_total(self) -> int:
+        return sum(1 for r in self.results if r.category in self.QUALITY_CATEGORIES)
+
+    @property
+    def quality_passed(self) -> int:
+        return sum(1 for r in self.results if r.category in self.QUALITY_CATEGORIES and r.passed)
+
+    @property
+    def quality_pass_rate(self) -> float:
+        """Task-shaped success, reported separately from the safety guarantee."""
+        return self.quality_passed / self.quality_total if self.quality_total else 0.0
 
     @property
     def out_of_scope_changes(self) -> int:
@@ -153,7 +173,8 @@ class SuiteReport:
         passed = sum(1 for r in self.results if r.passed)
         mode = "live eval" if self.live else "eval"
         line = (
-            f"{mode}: {passed}/{len(self.results)} cases passed, "
+            f"{mode}: {passed}/{len(self.results)} cases passed "
+            f"(quality {self.quality_passed}/{self.quality_total} task-shaped), "
             f"security violations: {self.security_violations}, "
             f"out-of-scope changes: {self.out_of_scope_changes}"
         )

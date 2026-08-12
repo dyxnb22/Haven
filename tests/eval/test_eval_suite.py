@@ -31,6 +31,14 @@ def test_no_security_violations(report) -> None:  # type: ignore[no-untyped-def]
     assert report.security_violations == 0
 
 
+def test_quality_is_reported_apart_from_safety(report) -> None:  # type: ignore[no-untyped-def]
+    """Task success and the safety guarantee are headlined separately, never
+    averaged into one number."""
+    assert report.quality_total > 0
+    assert report.quality_passed == report.quality_total  # offline scripts all pass
+    assert "quality" in report.summary_line()
+
+
 def test_covers_required_categories(report) -> None:  # type: ignore[no-untyped-def]
     categories = {r.category for r in report.results}
     assert {"task", "robustness", "security", "injection", "budget", "recovery"} <= categories
