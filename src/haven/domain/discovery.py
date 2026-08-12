@@ -62,6 +62,28 @@ def _tree_facts(paths: Iterable[str]) -> _TreeFacts:
     return _TreeFacts(tests_dir=tests_dir, src_layout=src_layout)
 
 
+def _plugin_warning(files: dict[str, str]) -> str:
+    """Warn when the project's own pytest config demands plugins.
+
+    Measured on wcwidth: its tox.ini addopts require pytest-cov, so the
+    suggested command fails with a usage error in any environment without the
+    plugin. The suggestion still respects the project's config — overriding
+    addopts could break projects whose options are load-bearing — but the
+    rationale must say what the environment has to provide.
+    """
+    config_text = "\n".join(
+        files.get(name, "") for name in ("pyproject.toml", "tox.ini", "setup.cfg")
+    )
+    plugins = []
+    if re.search(r"--cov\b|--cov[-=]", config_text):
+        plugins.append("pytest-cov")
+    if re.search(r"^\s*(addopts|opts)\s*=.*(-n\s|--numprocesses)", config_text, re.MULTILINE):
+        plugins.append("pytest-xdist")
+    if not plugins:
+        return ""
+    return f"; note: the project's pytest options require {' and '.join(plugins)} installed"
+
+
 def _pytest_candidate(files: dict[str, str], tree: _TreeFacts) -> RecipeCandidate | None:
     """One pytest suggestion, from the strongest signal present.
 
@@ -71,22 +93,31 @@ def _pytest_candidate(files: dict[str, str], tree: _TreeFacts) -> RecipeCandidat
     where no configuration exists to respect, scopes the run and repairs a
     src layout.
     """
+    warning = _plugin_warning(files)
     pyproject = files.get("pyproject.toml", "")
     if "[tool.pytest" in pyproject:
         return RecipeCandidate(
-            "pytest", ("python", "-m", "pytest", "-q"), "pyproject.toml configures pytest"
+            "pytest",
+            ("python", "-m", "pytest", "-q"),
+            "pyproject.toml configures pytest" + warning,
         )
     if re.search(r"['\"]pytest\b", pyproject):
         return RecipeCandidate(
-            "pytest", ("python", "-m", "pytest", "-q"), "pyproject.toml depends on pytest"
+            "pytest",
+            ("python", "-m", "pytest", "-q"),
+            "pyproject.toml depends on pytest" + warning,
         )
     if re.search(r"^\[pytest\]", files.get("tox.ini", ""), re.MULTILINE):
         return RecipeCandidate(
-            "pytest", ("python", "-m", "pytest", "-q"), "tox.ini has a [pytest] section"
+            "pytest",
+            ("python", "-m", "pytest", "-q"),
+            "tox.ini has a [pytest] section" + warning,
         )
     if re.search(r"^\[tool:pytest\]", files.get("setup.cfg", ""), re.MULTILINE):
         return RecipeCandidate(
-            "pytest", ("python", "-m", "pytest", "-q"), "setup.cfg has a [tool:pytest] section"
+            "pytest",
+            ("python", "-m", "pytest", "-q"),
+            "setup.cfg has a [tool:pytest] section" + warning,
         )
     if tree.tests_dir is not None:
         argv: tuple[str, ...] = ("python", "-m", "pytest", "-q")
@@ -94,7 +125,7 @@ def _pytest_candidate(files: dict[str, str], tree: _TreeFacts) -> RecipeCandidat
         if tree.src_layout:
             argv += ("-o", "pythonpath=src")
             why += " (src layout, so the checkout is put on the import path)"
-        return RecipeCandidate("pytest", (*argv, tree.tests_dir), why)
+        return RecipeCandidate("pytest", (*argv, tree.tests_dir), why + warning)
     return None
 
 

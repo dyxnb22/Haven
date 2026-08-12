@@ -1,0 +1,29 @@
+{
+  "id": "multi-idna",
+  "category": "real",
+  "goal": "Two independent regressions: (1) label length validation accepts one octet too many; (2) codepoint interval ranges are encoded with the start packed into the wrong bit position, corrupting lookups. Find and fix both, then run the `verify` check.",
+  "fixture": "multi-idna",
+  "approval_policy": "approve_all",
+  "recipes": {
+    "verify": {
+      "argv": [
+        "{python}",
+        "-m",
+        "pytest",
+        "-q",
+        "-x",
+        "-p",
+        "no:cacheprovider",
+        "tests"
+      ],
+      "timeout_seconds": 180.0
+    }
+  },
+  "expect": {
+    "status": "succeeded",
+    "allowed_changed_files": [
+      "idna/core.py",
+      "idna/intranges.py"
+    ]
+  }
+}

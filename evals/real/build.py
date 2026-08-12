@@ -35,9 +35,7 @@ _IGNORE = shutil.ignore_patterns(".git", "__pycache__", "*.pyc", ".pytest_cache"
 def _apply(text: str, old: str, new: str, where: str) -> str:
     count = text.count(old)
     if count != 1:
-        raise SystemExit(
-            f"{where}: snippet must appear exactly once, found {count}:\n  {old!r}"
-        )
+        raise SystemExit(f"{where}: snippet must appear exactly once, found {count}:\n  {old!r}")
     return text.replace(old, new)
 
 

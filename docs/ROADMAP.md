@@ -33,9 +33,11 @@ decision, respectively.
   editing tests). Zero-config is measured too: recipe discovery went 1/5 → 4/5
   working commands after four evidence-driven detector fixes, and the live
   `discover: true` cases score 5/5 — four end-to-end completions plus one
-  honest stop where the repo's own pytest config is broken. Written up in
-  `docs/EVAL_LIVE.md`. Scaling to 50–100 tasks and green-field
-  (non-bug-injection) work remains.
+  honest stop where the repo's own pytest config is broken. A second tier —
+  six green-field implement-the-missing-function tasks and three multi-file
+  double bugs — scores 9/9. Written up in `docs/EVAL_LIVE.md`. This difficulty
+  class is saturated; the remaining escalation is scale: larger repositories
+  and vaguer, issue-style goals.
 - **Phase 5 — extension boundary: decided (ADR 0016).** Guardrails documented;
   MCP, LSP, plugins, and multi-agent stay deferred with unlock conditions,
   consistent with the thesis.

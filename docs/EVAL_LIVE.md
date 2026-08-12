@@ -80,6 +80,30 @@ repositories, and that success is decided by the projects' own tests rather
 than the model's say-so. Notably, all three bugs this exercise found were in
 the *harness*, not the model.
 
+### Tier 2: green-field and multi-file (2026-08-12)
+
+With the injection tier saturated at 31/31, nine harder tasks probe two new
+axes. Six **green-field** tasks delete an entire function — jmespath's
+`ends_with` and `map`, idna's `valid_label_length`, wcwidth's `bisearch`,
+tomli's `cached_tz`, tabulate's `_padboth` — so the suite fails with
+`UnknownFunctionError` / `NameError` / an import-time collection error, and the
+agent must write the function back from call sites and tests. Three
+**multi-file** tasks plant two independent bugs in different files and describe
+both symptoms in one goal. All nine are proven red-broken / green-restored by
+`build.py --verify` before any model call.
+
+Result: **9/9, 0 out-of-scope changes** (~$0.02). The hardest — implementing
+`map` from the expression-reference machinery (14 steps) and rewriting a binary
+search over interval tables starting from a repo that does not even import —
+both landed with the projects' full suites green.
+
+Three tiers in, the honest reading is that this difficulty class is *saturated*:
+on small pure-Python libraries with test-defined outcomes, the model plus this
+harness is reliable, and the residual failures live in infrastructure and
+oracle-gaming — both of which this exercise converted into harness fixes. The
+next informative escalation is scale (larger repositories, vaguer issue-style
+goals, cross-cutting changes), not more tasks of this shape.
+
 ### Zero-config repositories (2026-08-12)
 
 The suite above pre-registers a `verify` recipe, which sidesteps the gap every

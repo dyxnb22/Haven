@@ -1,0 +1,28 @@
+{
+  "id": "impl-jmespath-ends-with",
+  "category": "real",
+  "goal": "The JMESPath built-in function `ends_with(subject, suffix)` is missing from this build: expressions using it fail with UnknownFunctionError. Implement it (it must return whether the subject string ends with the given suffix, both arguments strings) and run the `verify` check.",
+  "fixture": "impl-jmespath-ends-with",
+  "approval_policy": "approve_all",
+  "recipes": {
+    "verify": {
+      "argv": [
+        "{python}",
+        "-m",
+        "pytest",
+        "-q",
+        "-x",
+        "-p",
+        "no:cacheprovider",
+        "tests"
+      ],
+      "timeout_seconds": 180.0
+    }
+  },
+  "expect": {
+    "status": "succeeded",
+    "allowed_changed_files": [
+      "jmespath/functions.py"
+    ]
+  }
+}

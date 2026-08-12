@@ -96,6 +96,29 @@ class TestStructuralFallback:
         assert sum(1 for r in recipes if r.id == "pytest") == 1
 
 
+class TestPluginWarnings:
+    """A suggestion the environment cannot run needs to say so up front.
+
+    Measured on wcwidth: its tox.ini addopts demand pytest-cov, so the
+    suggested command dies with a usage error unless the plugin is installed —
+    the user found out only by running it."""
+
+    def test_cov_addopts_warn_about_pytest_cov(self) -> None:
+        files = {"tox.ini": "[pytest]\naddopts = --cov=pkg --cov-report=html\n"}
+        recipes = discover_recipes(files)
+        assert recipes and "pytest-cov" in recipes[0].rationale
+
+    def test_xdist_addopts_warn_about_pytest_xdist(self) -> None:
+        files = {"pyproject.toml": "[tool.pytest.ini_options]\naddopts = '-n auto'\n"}
+        recipes = discover_recipes(files)
+        assert recipes and "pytest-xdist" in recipes[0].rationale
+
+    def test_plain_config_carries_no_warning(self) -> None:
+        files = {"pyproject.toml": "[tool.pytest.ini_options]\naddopts = '-q'\n"}
+        recipes = discover_recipes(files)
+        assert recipes and "require" not in recipes[0].rationale
+
+
 class TestOtherEcosystems:
     def test_package_json_test_script(self) -> None:
         files = {"package.json": '{"scripts": {"test": "vitest run"}}'}
