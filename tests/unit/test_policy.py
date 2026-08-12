@@ -1,10 +1,12 @@
 from haven.domain import (
     EFFECT_TOOLS,
+    EXEC_TOOLS,
     KNOWN_TOOLS,
     READ_ONLY_TOOLS,
     STATE_TOOLS,
     PermissionMode,
     PolicyDecision,
+    RiskLevel,
     ToolFacts,
     evaluate_policy,
 )
@@ -86,6 +88,74 @@ class TestEffectTools:
         assert outcome.reason_code == "unregistered_recipe"
 
 
+class TestExecTool:
+    def exec_facts(self, **overrides: object) -> ToolFacts:
+        base: dict[str, object] = {
+            "tool_name": "repo.exec",
+            "exec_class": "other",
+            "sandbox_available": True,
+        }
+        base.update(overrides)
+        return ToolFacts(**base)  # type: ignore[arg-type]
+
+    def test_denied_when_no_sandbox_backend(self) -> None:
+        """Fail closed: there is no unsandboxed fallback."""
+        outcome = evaluate_policy(
+            PermissionMode.INTERACTIVE, self.exec_facts(sandbox_available=False)
+        )
+        assert outcome.decision is PolicyDecision.DENY
+        assert outcome.reason_code == "sandbox_unavailable"
+
+    def test_missing_sandbox_fact_fails_closed(self) -> None:
+        """An un-collected fact must never read as permission."""
+        outcome = evaluate_policy(
+            PermissionMode.INTERACTIVE, self.exec_facts(sandbox_available=None)
+        )
+        assert outcome.decision is PolicyDecision.DENY
+        assert outcome.reason_code == "sandbox_unavailable"
+
+    def test_safe_read_command_is_allowed(self) -> None:
+        outcome = evaluate_policy(
+            PermissionMode.INTERACTIVE, self.exec_facts(exec_class="safe_read")
+        )
+        assert outcome.decision is PolicyDecision.ALLOW
+        assert outcome.reason_code == "safe_read_exec"
+
+    def test_other_command_requires_approval(self) -> None:
+        outcome = evaluate_policy(PermissionMode.INTERACTIVE, self.exec_facts())
+        assert outcome.decision is PolicyDecision.ASK
+        assert outcome.reason_code == "exec_requires_approval"
+
+    def test_shell_passthrough_asks_with_high_risk(self) -> None:
+        outcome = evaluate_policy(
+            PermissionMode.INTERACTIVE, self.exec_facts(exec_class="shell_passthrough")
+        )
+        assert outcome.decision is PolicyDecision.ASK
+        assert outcome.reason_code == "shell_passthrough_requires_approval"
+        assert outcome.risk is RiskLevel.HIGH
+
+    def test_denied_in_read_only_mode_even_when_safe(self) -> None:
+        outcome = evaluate_policy(PermissionMode.READ_ONLY, self.exec_facts(exec_class="safe_read"))
+        assert outcome.decision is PolicyDecision.DENY
+        assert outcome.reason_code == "read_only_mode"
+
+    def test_cwd_outside_workspace_denied_before_classification(self) -> None:
+        outcome = evaluate_policy(
+            PermissionMode.INTERACTIVE,
+            self.exec_facts(exec_class="safe_read", within_workspace=False),
+        )
+        assert outcome.decision is PolicyDecision.DENY
+        assert outcome.reason_code == "outside_workspace"
+
+    def test_protected_cwd_denied(self) -> None:
+        outcome = evaluate_policy(
+            PermissionMode.INTERACTIVE,
+            self.exec_facts(exec_class="safe_read", touches_protected_path=True),
+        )
+        assert outcome.decision is PolicyDecision.DENY
+        assert outcome.reason_code == "protected_path"
+
+
 class TestHardDenies:
     def test_outside_workspace_denied_even_for_read(self) -> None:
         outcome = evaluate_policy(
@@ -116,12 +186,26 @@ class TestPolicyCompleteness:
         assert set(ARGS_MODELS) == KNOWN_TOOLS
 
     def test_tool_categories_are_disjoint(self) -> None:
-        assert not (READ_ONLY_TOOLS & EFFECT_TOOLS)
-        assert not (READ_ONLY_TOOLS & STATE_TOOLS)
-        assert not (EFFECT_TOOLS & STATE_TOOLS)
+        groups = (READ_ONLY_TOOLS, EFFECT_TOOLS, STATE_TOOLS, EXEC_TOOLS)
+        for index, left in enumerate(groups):
+            for right in groups[index + 1 :]:
+                assert not (left & right)
 
     def test_no_effect_tool_is_ever_auto_allowed(self) -> None:
         for tool in EFFECT_TOOLS:
             for mode in (PermissionMode.INTERACTIVE, PermissionMode.READ_ONLY):
                 outcome = evaluate_policy(mode, facts(tool_name=tool, recipe_registered=True))
                 assert outcome.decision is not PolicyDecision.ALLOW, tool
+
+    def test_exec_is_auto_allowed_only_for_classified_read_only_commands(self) -> None:
+        """The single auto-allow exception, pinned so it cannot widen silently."""
+        allowed = [
+            exec_class
+            for exec_class in ("safe_read", "shell_passthrough", "other")
+            if evaluate_policy(
+                PermissionMode.INTERACTIVE,
+                ToolFacts(tool_name="repo.exec", exec_class=exec_class, sandbox_available=True),
+            ).decision
+            is PolicyDecision.ALLOW
+        ]
+        assert allowed == ["safe_read"]

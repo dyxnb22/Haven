@@ -23,6 +23,7 @@ from haven.domain.evidence import (
     GateResult,
     evaluate_evidence_gate,
 )
+from haven.domain.exec_policy import ExecClass, classify_argv
 from haven.domain.ids import (
     ApprovalId,
     RunId,
@@ -33,6 +34,7 @@ from haven.domain.ids import (
 )
 from haven.domain.policy import (
     EFFECT_TOOLS,
+    EXEC_TOOLS,
     KNOWN_TOOLS,
     READ_ONLY_TOOLS,
     STATE_TOOLS,
@@ -48,6 +50,7 @@ from haven.domain.transitions import InvalidTransitionError, transition
 __all__ = [
     "ACTIVE_STATUSES",
     "EFFECT_TOOLS",
+    "EXEC_TOOLS",
     "KNOWN_TOOLS",
     "READ_ONLY_TOOLS",
     "STATE_TOOLS",
@@ -62,6 +65,7 @@ __all__ = [
     "EditEvidence",
     "EffectState",
     "EvidenceLedger",
+    "ExecClass",
     "ExecutionTicket",
     "GateResult",
     "InvalidTransitionError",
@@ -82,6 +86,7 @@ __all__ = [
     "call_fingerprint",
     "canonical_json",
     "check_budget",
+    "classify_argv",
     "compute_approval_digest",
     "digest_of",
     "evaluate_evidence_gate",

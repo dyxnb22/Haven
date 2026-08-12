@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from haven.domain.enums import PermissionMode, PolicyDecision, RiskLevel
+from haven.domain.exec_policy import ExecClass
 
 #: Tools that only observe the workspace.
 READ_ONLY_TOOLS = frozenset({"repo.list", "repo.search", "repo.read", "repo.diff"})
@@ -21,7 +22,12 @@ EFFECT_TOOLS = frozenset({"repo.edit", "repo.create", "repo.check"})
 #: disk and nothing outside the run, so they are allowed even in read_only mode.
 STATE_TOOLS = frozenset({"task.plan"})
 
-KNOWN_TOOLS = READ_ONLY_TOOLS | EFFECT_TOOLS | STATE_TOOLS
+#: Tools that run an arbitrary program. Their blast radius is bounded by an OS
+#: sandbox rather than by an allowlist of arguments, so the policy's job here is
+#: to refuse entirely when no sandbox is available.
+EXEC_TOOLS = frozenset({"repo.exec"})
+
+KNOWN_TOOLS = READ_ONLY_TOOLS | EFFECT_TOOLS | STATE_TOOLS | EXEC_TOOLS
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +42,8 @@ class ToolFacts:
     within_workspace: bool = True
     touches_protected_path: bool = False
     recipe_registered: bool | None = None
+    exec_class: str | None = None
+    sandbox_available: bool | None = None
     preimage_digest: str | None = None
     path: str | None = None
 
@@ -63,6 +71,21 @@ def evaluate_policy(mode: PermissionMode, facts: ToolFacts) -> PolicyOutcome:
 
     if facts.tool_name in READ_ONLY_TOOLS:
         return PolicyOutcome(PolicyDecision.ALLOW, "read_only_tool", RiskLevel.NONE)
+
+    if facts.tool_name in EXEC_TOOLS:
+        # Fail closed on an absent fact as well as a false one: exec without a
+        # sandbox is the one capability this project will not offer.
+        if not facts.sandbox_available:
+            return PolicyOutcome(PolicyDecision.DENY, "sandbox_unavailable", RiskLevel.HIGH)
+        if mode is PermissionMode.READ_ONLY:
+            return PolicyOutcome(PolicyDecision.DENY, "read_only_mode", RiskLevel.MEDIUM)
+        if facts.exec_class == ExecClass.SAFE_READ.value:
+            return PolicyOutcome(PolicyDecision.ALLOW, "safe_read_exec", RiskLevel.LOW)
+        if facts.exec_class == ExecClass.SHELL_PASSTHROUGH.value:
+            return PolicyOutcome(
+                PolicyDecision.ASK, "shell_passthrough_requires_approval", RiskLevel.HIGH
+            )
+        return PolicyOutcome(PolicyDecision.ASK, "exec_requires_approval", RiskLevel.MEDIUM)
 
     # Side-effect tools from here on.
     if mode is PermissionMode.READ_ONLY:
