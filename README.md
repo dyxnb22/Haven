@@ -178,7 +178,7 @@ All reproducible from a clean checkout with no API key:
 
 | Metric | Value |
 |---|---|
-| Automated tests | **465** passing, **87%** line coverage on `src/` |
+| Automated tests | **486** passing, **87%** line coverage on `src/` |
 | Offline eval | **32/32 cases**, **0 security violations**, ~1 s |
 | Eval categories | security 11 · task 8 · robustness 6 · injection 3 · budget 2 · recovery 2 |
 | Live eval (DeepSeek `deepseek-v4-flash`) | **7/8 task cases**, **0 security violations**, **89% prompt-cache hit** ([report](docs/EVAL_LIVE.md)) |

@@ -46,15 +46,16 @@ Reproduce with `uv run pytest -q`, `uv run haven eval --offline`, and
 
 | Metric | Value |
 |---|---|
-| Automated tests | **465** passing |
+| Automated tests | **486** passing |
 | Line coverage (`src/`) | **87%** (domain + contracts ~100%) |
 | Offline eval cases | **32/32 passed**, **0 security violations**, ~1 s wall clock |
 | Live eval (DeepSeek `deepseek-v4-flash`) | **7/8 task cases**, **0 security violations**, **89% prompt-cache hit** (up from 71%) |
+| Cost accounting | cache hits billed at their own rate; the previous single-rate arithmetic overstated the input bill ~7.8× at the measured hit rate (ADR 0011) |
 | Eval categories | security 11 · task 8 · robustness 6 · injection 3 · budget 2 · recovery 2 |
 | Dedicated security tests | 13 path-escape / protected-path, 8 sandbox-enforcement, plus 11 security and 3 injection eval cases |
 | Sandbox enforcement | writes outside the workspace, reads of `$HOME`, and TCP all refused by the OS — asserted by running real commands on macOS and Linux |
 | Recovery tests | 8, covering not-run / confirmed / ambiguous / abandoned / identity-mismatch |
-| Static gates | `ruff`, `mypy --strict` (62 modules), `import-linter` (3 layering contracts) |
+| Static gates | `ruff`, `mypy --strict` (65 modules), `import-linter` (3 layering contracts) |
 | Trace determinism | golden trace stable across runs; TUI and headless produce identical traces |
 | Source / test size | ~7.9k / ~4.2k lines |
 

@@ -132,11 +132,39 @@ steps rather than exhausting its budget.
 
 ## Cost accounting
 
-`cost_usd` reads `$0.0000` because no `[pricing]` block was configured; Haven
-only reports money it can compute from configured rates rather than guessing.
-Token counts above are exact — DeepSeek returns usage, including
-`reasoning_tokens` (14–18 per short turn), which Haven now records separately so
-a cost report can explain where output tokens went.
+`cost_usd` reads `$0.0000` in this run because no `[pricing]` block was
+configured; Haven only reports money it can compute from configured rates
+rather than guessing. Token counts above are exact — DeepSeek returns usage,
+including `reasoning_tokens` (14–18 per short turn), which Haven records
+separately so a cost report can explain where output tokens went.
+
+**A defect this run's own success created.** Cost was computed by charging
+every input token at one rate. This model bills a cache hit at $0.0028/1M and
+a miss at $0.14/1M, so at the 89.3% hit rate measured above, that arithmetic
+overstated the input bill by roughly 7.8×. The error grew in proportion to how
+well the ADR 0008 reordering worked. `Pricing` now takes a separate cached
+rate and splits the bill (ADR 0011); with the rate left unset the behavior is
+unchanged, so no existing configuration silently changed meaning.
+
+## Not yet measured (ADR 0011)
+
+The model profile, the larger context budget, and cache-aware pricing landed
+after the run above. Their offline numbers are in
+`eval_report/ab-report.md`; their live effect is **unmeasured**. Reproducing it
+costs money and needs a real key:
+
+```bash
+export DEEPSEEK_API_KEY=...
+export HAVEN_API_KEY_ENV=DEEPSEEK_API_KEY
+export HAVEN_BASE_URL=https://api.deepseek.com/v1
+export HAVEN_MODEL=deepseek-v4-flash
+uv run haven eval --live --yes --category task
+```
+
+The figures that would settle it are step count per case, the
+hit/miss token split, and `cost_usd` now that it is computed correctly. Until
+someone runs that, this section stays empty rather than carrying an estimate
+dressed as a measurement.
 
 ## Prompt-cache prefix stability (ADR 0008)
 
