@@ -6,6 +6,9 @@ real-task measurement. Every load-bearing claim in those audits was verified
 against the code before this plan was written; file:line references below are
 the verified evidence, not quotations.
 
+> **This plan has been executed** (status below). The current plan is
+> `docs/ROADMAP3.md`, written after the post-execution gap re-assessment.
+
 ## Execution status (2026-08-12)
 
 All six phases below have been implemented and are covered by tests; the
