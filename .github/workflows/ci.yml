@@ -8,7 +8,13 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Both platforms, because each has its own sandbox backend and the
+    # enforcement tests skip where a backend is missing.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -30,6 +36,12 @@ jobs:
 
       - name: Mypy
         run: uv run mypy src
+
+      - name: Report sandbox backend
+        run: >
+          uv run python -c "from haven.bootstrap import select_launcher;
+          l = select_launcher();
+          print('backend:', l.backend if l else 'none', 'available:', bool(l and l.available()))"
 
       - name: Pytest
         run: uv run pytest
