@@ -46,7 +46,11 @@ workspace entirely.
 
 The side-effecting tools — `repo.edit`, `repo.create`, `repo.delete`,
 `repo.move`, `repo.apply_patch`, and `repo.check` — are `ask` in interactive
-mode and `deny` in read-only mode. Policy is a pure function of `(mode, program-collected facts)`;
+mode and `deny` in read-only mode. Headless runs (`haven run`) are read-only
+by default; `--write` moves to interactive mode where an automated approval
+policy (`reject` / `trusted-recipe` / `all`, ADR 0021) supplies the decision,
+and `all` is reachable only with an explicit `--write` so unattended mutation
+is never the default. Policy is a pure function of `(mode, program-collected facts)`;
 the model cannot influence facts. Approval is bound to a canonical digest of
 workspace + tool + args + preimage + preview and is single-use (a conditional
 SQL `UPDATE`), so it cannot be replayed or reused for a different action. Every

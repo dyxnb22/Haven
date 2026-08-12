@@ -6,6 +6,36 @@ real-task measurement. Every load-bearing claim in those audits was verified
 against the code before this plan was written; file:line references below are
 the verified evidence, not quotations.
 
+## Execution status (2026-08-12)
+
+All six phases below have been implemented and are covered by tests; the
+detail lives in the ADRs and `docs/EVAL_LIVE.md`.
+
+- **Phase 0 — done.** Exec prompts corrected to the read-only profile;
+  protected-path tamper fails the call (ADR 0018); recovery windows narrowed
+  (schema v2 journals move-dest and expected postimages); cross-turn process
+  regressions pinned; per-case eval event streams persisted; a generated
+  live-eval summary (`evals/real/results.json` → README/PROJECT_CARD) ended
+  the drift; one same-version rerun published at 61/65, fully attributed.
+- **Phase 1 — done.** `repo.apply_patch`: one approval, atomic apply,
+  journaled rollback (ADR 0019).
+- **Phase 2 — done.** Tier 4 (real historical bugs + cross-file refactors +
+  honesty tasks) scored 9–10/13 — the first non-saturated tier, failures
+  attributed to model capability, plus a hidden grader.
+- **Phase 3 — done.** Queued steering, user-level rewind, fork pin, and a
+  workspace writer lease (ADR 0020).
+- **Phase 4 — done.** Wire-boundary history sanitizer, missing-reasoning
+  precise retry, idle watchdog (already present), hidden grader.
+- **Phase 5 — done.** Hard budget clamp with a builder assertion, scoped
+  nested AGENTS.md, digest-preservation proxy (live compaction A/B remains
+  the one open measurement, documented).
+- **Phase 6 — done.** Headless write mode and one-step discovery accept
+  (ADR 0021); command-generated patches assessed as already covered by
+  `repo.check` recipes + `repo.apply_patch`, with the model-proposed-command
+  sliver deliberately deferred (it contradicts ADR 0017).
+
+The sections below are the plan as written.
+
 ## What the audits agree on
 
 All three audits, independently:

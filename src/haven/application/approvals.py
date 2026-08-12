@@ -30,6 +30,34 @@ class AutoApprover:
         return ApprovalDecision.REJECTED
 
 
+class HeadlessApprover:
+    """Automated approval policy for headless (non-interactive) runs.
+
+    Headless work has no human to ask, so the decision must be a policy set
+    explicitly on the command line — every write still travels the same
+    Registry -> Policy -> Approval -> Evidence channel; this only supplies the
+    yes/no a human would otherwise give.
+
+    - ``reject``: deny everything (the run can read and propose, never mutate).
+    - ``trusted_recipe``: approve only registered ``repo.check`` recipes, so a
+      pipeline can verify unattended, but deny every workspace mutation.
+    - ``all``: approve everything (full unattended auto-fix); pair with an
+      explicit ``--write`` so it cannot be the accidental default.
+    """
+
+    def __init__(self, policy: Literal["reject", "trusted_recipe", "all"]) -> None:
+        self._policy = policy
+        self.seen: list[ApprovalRequest] = []
+
+    async def respond(self, request: ApprovalRequest) -> ApprovalDecision:
+        self.seen.append(request)
+        if self._policy == "all":
+            return ApprovalDecision.APPROVED
+        if self._policy == "trusted_recipe" and request.tool_name == "repo.check":
+            return ApprovalDecision.APPROVED
+        return ApprovalDecision.REJECTED
+
+
 class QueueApprovalBroker:
     """Bridges approvals to an interactive UI.
 

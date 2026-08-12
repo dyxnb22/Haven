@@ -14,7 +14,7 @@ from pathlib import Path
 import typer
 
 from haven import __version__
-from haven.application.approvals import AutoApprover
+from haven.application.approvals import ApprovalResponder, AutoApprover
 from haven.application.context_builder import MAX_CONTEXT_CHARS
 from haven.config import ConfigError, explain, load_config
 from haven.contracts.events import (
@@ -32,6 +32,7 @@ from haven.contracts.events import (
     ToolProposed,
 )
 from haven.domain.budget import BUDGET_TIERS, DEFAULT_TIER
+from haven.domain.discovery import RecipeCandidate
 from haven.domain.enums import PermissionMode, RunStatus, StopReason
 
 app = typer.Typer(
@@ -137,12 +138,18 @@ def tui(
 def run(
     goal: str = typer.Argument(..., help="The coding task to perform."),
     workspace: Path = typer.Option(Path("."), "--workspace", "-w"),
-    read_only: bool = typer.Option(
-        True,
-        "--read-only/--no-read-only",
-        help="Headless runs are always read-only; disabling this is refused.",
+    write: bool = typer.Option(
+        False,
+        "--write/--read-only",
+        help="Allow writes headlessly. Off by default; every write still goes "
+        "through the approval and evidence channel under --approval-policy.",
     ),
-    json_output: bool = typer.Option(False, "--json", help="Print the outcome as JSON."),
+    approval_policy: str = typer.Option(
+        "reject",
+        "--approval-policy",
+        help="Headless approval when --write is set: reject | trusted-recipe | all.",
+    ),
+    json_output: bool = typer.Option(False, "--json/--jsonl", help="Print the outcome as JSON."),
     tier: str = typer.Option(
         DEFAULT_TIER,
         "--tier",
@@ -152,26 +159,51 @@ def run(
         ),
     ),
 ) -> None:
-    """Run a goal headlessly (read-only; no approvals, no writes)."""
-    if not read_only:
-        typer.echo("error: headless runs are read-only by design; there is no bypass flag.")
-        raise typer.Exit(EXIT_POLICY)
+    """Run a goal headlessly.
+
+    Read-only by default (proposes, never mutates). With --write the run may
+    change files, but only through the same approval + Evidence Gate channel a
+    TUI run uses — the --approval-policy supplies the decision a human would:
+    `reject` (see what it would do), `trusted-recipe` (verify but do not
+    mutate), or `all` (full unattended auto-fix). CI-friendly with --jsonl.
+    """
+    policy_map = {"reject": "reject", "trusted-recipe": "trusted_recipe", "all": "all"}
+    if approval_policy not in policy_map:
+        typer.echo("error: --approval-policy must be reject, trusted-recipe, or all")
+        raise typer.Exit(EXIT_USAGE)
 
     async def _run() -> int:
+        from haven.application.approvals import HeadlessApprover
         from haven.bootstrap import BootstrapError, build_services
 
         sink = NullSink() if json_output else ConsoleSink()
+        # Read-only stays a policy-layer guarantee (writes denied regardless of
+        # approver); --write moves to interactive mode where the headless
+        # approver's policy decides. `all` is only reachable with --write, so
+        # unattended mutation can never be the accidental default.
+        if write:
+            mode = PermissionMode.INTERACTIVE
+            approver: ApprovalResponder = HeadlessApprover(policy_map[approval_policy])  # type: ignore[arg-type]
+        else:
+            mode = PermissionMode.READ_ONLY
+            approver = HeadlessApprover("reject")
         try:
             services = await build_services(
                 workspace,
-                mode=PermissionMode.READ_ONLY,
-                approvals=AutoApprover("reject_all"),
+                mode=mode,
+                approvals=approver,
                 sinks=[sink],
                 tier=tier,
             )
         except (BootstrapError, ConfigError) as exc:
             typer.echo(f"error: {exc}")
             return EXIT_USAGE
+        if write and services.lease is None and services.lease_warning:
+            # Another process holds the writer lease; a headless write would be
+            # silently downgraded to read-only, which a CI caller must be told.
+            typer.echo(f"error: {services.lease_warning}")
+            await services.close()
+            return EXIT_POLICY
         try:
             outcome = await services.run_service.run(goal)
         finally:
@@ -537,15 +569,22 @@ def export(
 @app.command()
 def discover(
     workspace: Path = typer.Option(Path("."), "--workspace", "-w"),
+    accept: bool = typer.Option(
+        False,
+        "--accept",
+        help="Persist the suggested recipes into .haven.toml (creates or appends), "
+        "so they are usable on the next run without hand-editing.",
+    ),
 ) -> None:
     """Suggest verification recipes from the project's files.
 
     Reads the ordinary project files (pyproject.toml, tox.ini, setup.cfg,
     package.json, Makefile, Cargo.toml, go.mod) plus a shallow look at the
     tests/ and src/ layout, and prints the `[recipes]` block they imply, so a
-    fresh repo can get a check the Evidence Gate will accept. Runs nothing and
-    writes nothing: review the output and paste what you trust into
-    `.haven.toml`.
+    fresh repo can get a check the Evidence Gate will accept. Runs nothing.
+    Prints for review by default; with --accept it writes the block into
+    `.haven.toml` (the model still never supplies a command — you authorize
+    it once, and it becomes a normal registered recipe).
     """
     from haven.domain.discovery import KNOWN_FILES, discover_recipes
 
@@ -580,12 +619,52 @@ def discover(
         )
         raise typer.Exit(EXIT_OK)
 
+    if accept:
+        config_path = ws / ".haven.toml"
+        added, skipped = _persist_recipes(config_path, recipes)
+        for recipe_id in added:
+            typer.echo(f"added [recipes.{recipe_id}] to {config_path}")
+        for recipe_id in skipped:
+            typer.echo(f"kept existing [recipes.{recipe_id}] (not overwritten)")
+        if added:
+            typer.echo("\nusable on the next run; review the file before trusting it.")
+        raise typer.Exit(EXIT_OK)
+
     typer.echo("# Suggested recipes for .haven.toml — review, then paste what you trust:\n")
     for recipe in recipes:
         argv = ", ".join(f'"{item}"' for item in recipe.argv)
         typer.echo(f"[recipes.{recipe.id}]  # {recipe.rationale}")
         typer.echo(f"argv = [{argv}]\n")
+    typer.echo("re-run with --accept to write these into .haven.toml")
     raise typer.Exit(EXIT_OK)
+
+
+def _persist_recipes(
+    config_path: Path, recipes: list[RecipeCandidate]
+) -> tuple[list[str], list[str]]:
+    """Append discovered recipes to .haven.toml, never overwriting an existing
+    one of the same id. Returns (added ids, skipped ids).
+
+    A deliberately minimal appender rather than a TOML round-trip: it only ever
+    adds new `[recipes.<id>]` tables, so it cannot mangle hand-authored config
+    above it. An id already present is left untouched — the user's version wins.
+    """
+    existing = config_path.read_text(encoding="utf-8") if config_path.is_file() else ""
+    added: list[str] = []
+    skipped: list[str] = []
+    blocks: list[str] = []
+    for recipe in recipes:
+        if f"[recipes.{recipe.id}]" in existing:
+            skipped.append(recipe.id)
+            continue
+        argv = ", ".join(f'"{item}"' for item in recipe.argv)
+        blocks.append(f"[recipes.{recipe.id}]  # {recipe.rationale}\nargv = [{argv}]\n")
+        added.append(recipe.id)
+    if blocks:
+        prefix = "" if not existing or existing.endswith("\n") else "\n"
+        header = "" if existing else "# Written by `haven discover --accept`.\n"
+        config_path.write_text(existing + prefix + header + "\n".join(blocks), encoding="utf-8")
+    return added, skipped
 
 
 @app.command("config")

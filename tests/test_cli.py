@@ -16,10 +16,51 @@ def test_version_flag() -> None:
     assert __version__ in result.stdout
 
 
-def test_headless_run_refuses_write_mode() -> None:
-    result = runner.invoke(app, ["run", "do stuff", "--no-read-only"])
-    assert result.exit_code == 3  # EXIT_POLICY
-    assert "read-only" in result.stdout
+def test_headless_run_rejects_an_unknown_approval_policy() -> None:
+    result = runner.invoke(app, ["run", "do stuff", "--write", "--approval-policy", "bogus"])
+    assert result.exit_code == 2  # EXIT_USAGE
+    assert "approval-policy" in result.stdout
+
+
+class TestDiscoverAccept:
+    def test_accept_writes_recipes_into_haven_toml(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\ntestpaths=['tests']\n")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_x.py").write_text("def test_x(): pass\n")
+
+        result = runner.invoke(app, ["discover", "--workspace", str(tmp_path), "--accept"])
+        assert result.exit_code == 0
+        config = (tmp_path / ".haven.toml").read_text()
+        assert "[recipes." in config
+        assert "argv = [" in config
+
+    def test_accept_does_not_overwrite_an_existing_recipe(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\ntestpaths=['tests']\n")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_x.py").write_text("def test_x(): pass\n")
+        # Discover once to learn the id, then pre-author it with a sentinel.
+        first = runner.invoke(app, ["discover", "--workspace", str(tmp_path)])
+        recipe_id = next(
+            line.split("[recipes.")[1].split("]")[0]
+            for line in first.stdout.splitlines()
+            if "[recipes." in line
+        )
+        (tmp_path / ".haven.toml").write_text(
+            f'[recipes.{recipe_id}]\nargv = ["my", "own", "command"]\n'
+        )
+        result = runner.invoke(app, ["discover", "--workspace", str(tmp_path), "--accept"])
+        assert result.exit_code == 0
+        assert "kept existing" in result.stdout
+        assert "my" in (tmp_path / ".haven.toml").read_text()
+
+    def test_default_prints_without_writing(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\ntestpaths=['tests']\n")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_x.py").write_text("def test_x(): pass\n")
+        result = runner.invoke(app, ["discover", "--workspace", str(tmp_path)])
+        assert result.exit_code == 0
+        assert not (tmp_path / ".haven.toml").exists()
+        assert "--accept" in result.stdout
 
 
 def test_doctor_reports_environment(tmp_path: Path) -> None:
