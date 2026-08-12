@@ -43,11 +43,16 @@ jobs:
           l = select_launcher();
           print('backend:', l.backend if l else 'none', 'available:', bool(l and l.available()))"
 
-      - name: Pytest
-        run: uv run pytest
+      - name: Pytest (with coverage)
+        run: uv run coverage run -m pytest
 
       - name: Import linter
         run: uv run lint-imports
 
       - name: Offline eval (security gate)
         run: uv run haven eval --offline
+
+      - name: Metrics are not stale
+        # Runs last: needs the coverage data and the eval report the two steps
+        # above produce. Fails if a committed number drifted from reality.
+        run: uv run python scripts/refresh_metrics.py --check

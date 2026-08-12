@@ -57,3 +57,5 @@ haven-run-*.md
 # Environment
 .env
 .env.*
+coverage.xml
+htmlcov/
