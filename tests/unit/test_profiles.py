@@ -31,11 +31,17 @@ class TestFlashProfile:
         money on this model rather than saving it."""
         assert DEEPSEEK_V4_FLASH.max_context_chars > 4 * DEFAULT_CONTEXT_CHARS
 
-    def test_its_context_budget_stays_well_inside_the_1m_token_window(self) -> None:
-        """~4 chars per token; a request near the window would be slow and, on
-        its first uncached turn, expensive."""
-        approx_tokens = DEEPSEEK_V4_FLASH.max_context_chars / 4
-        assert approx_tokens < 200_000
+    def test_its_context_budget_stays_inside_the_window_at_the_measured_worst_case(
+        self,
+    ) -> None:
+        """The char budget must imply a token count under the window even at
+        the densest chars-per-token ratio observed live (evals/
+        calibrate_context.py), so the hand-set constant is checked, not guessed."""
+        from haven.application.profiles import MEASURED_MIN_CHARS_PER_TOKEN
+
+        worst_case_tokens = DEEPSEEK_V4_FLASH.max_context_chars / MEASURED_MIN_CHARS_PER_TOKEN
+        assert DEEPSEEK_V4_FLASH.context_window_tokens > 0
+        assert worst_case_tokens < DEEPSEEK_V4_FLASH.context_window_tokens
 
     def test_it_prices_cache_hits_far_below_misses(self) -> None:
         pricing = DEEPSEEK_V4_FLASH.pricing

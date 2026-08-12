@@ -24,7 +24,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from harness import SUBSETS, _BY_ID, _prepare_repo, _spec  # noqa: E402
+from harness import _BY_ID, SUBSETS, _prepare_repo, _spec  # noqa: E402
 
 MODEL = os.environ.get("HAVEN_MODEL", "deepseek-v4-flash")
 BASE_URL = os.environ.get("HAVEN_BASE_URL", "https://api.deepseek.com/v1")
@@ -46,9 +46,17 @@ def drive_haven(subset: str) -> None:
         started = time.monotonic()
         proc = subprocess.run(
             [
-                "uv", "run", "haven", "run", spec.goal,
-                "--workspace", str(repo),
-                "--write", "--approval-policy", "all", "--jsonl",
+                "uv",
+                "run",
+                "haven",
+                "run",
+                spec.goal,
+                "--workspace",
+                str(repo),
+                "--write",
+                "--approval-policy",
+                "all",
+                "--jsonl",
             ],
             cwd=HERE.parent.parent,
             capture_output=True,
@@ -58,8 +66,12 @@ def drive_haven(subset: str) -> None:
         elapsed = time.monotonic() - started
         (repo.parent / "driver.json").write_text(
             json.dumps(
-                {"tool": "haven", "elapsed_s": round(elapsed, 1),
-                 "returncode": proc.returncode, "stdout_tail": proc.stdout[-2000:]},
+                {
+                    "tool": "haven",
+                    "elapsed_s": round(elapsed, 1),
+                    "returncode": proc.returncode,
+                    "stdout_tail": proc.stdout[-2000:],
+                },
                 indent=2,
             )
         )
@@ -69,11 +81,16 @@ def drive_haven(subset: str) -> None:
 #: DeepSeek as an OpenAI-compatible provider, injected via `codex exec -c`
 #: overrides so no global ~/.codex/config.toml edit is needed.
 _CODEX_PROVIDER = [
-    "-c", 'model_providers.deepseek.name="DeepSeek"',
-    "-c", f'model_providers.deepseek.base_url="{BASE_URL}"',
-    "-c", 'model_providers.deepseek.env_key="DEEPSEEK_API_KEY"',
-    "-c", 'model_providers.deepseek.wire_api="chat"',
-    "-c", 'model_provider="deepseek"',
+    "-c",
+    'model_providers.deepseek.name="DeepSeek"',
+    "-c",
+    f'model_providers.deepseek.base_url="{BASE_URL}"',
+    "-c",
+    'model_providers.deepseek.env_key="DEEPSEEK_API_KEY"',
+    "-c",
+    'model_providers.deepseek.wire_api="chat"',
+    "-c",
+    'model_provider="deepseek"',
 ]
 
 
@@ -90,9 +107,12 @@ def drive_codex(subset: str) -> None:
         started = time.monotonic()
         proc = subprocess.run(
             [
-                "codex", "exec",
-                "-C", str(repo),
-                "-m", MODEL,
+                "codex",
+                "exec",
+                "-C",
+                str(repo),
+                "-m",
+                MODEL,
                 *_CODEX_PROVIDER,
                 "--dangerously-bypass-approvals-and-sandbox",
                 prompt,
@@ -104,9 +124,13 @@ def drive_codex(subset: str) -> None:
         elapsed = time.monotonic() - started
         (repo.parent / "driver.json").write_text(
             json.dumps(
-                {"tool": "codex", "elapsed_s": round(elapsed, 1),
-                 "returncode": proc.returncode,
-                 "stdout_tail": proc.stdout[-2000:], "stderr_tail": proc.stderr[-2000:]},
+                {
+                    "tool": "codex",
+                    "elapsed_s": round(elapsed, 1),
+                    "returncode": proc.returncode,
+                    "stdout_tail": proc.stdout[-2000:],
+                    "stderr_tail": proc.stderr[-2000:],
+                },
                 indent=2,
             )
         )
@@ -121,15 +145,17 @@ def drive_opencode(subset: str) -> None:
         spec = _spec(task)
         repo = _prepare_repo(task, "opencode", subset)
         prompt = (
-            f"{spec.goal}\n\n"
-            "Work only inside this repository and make the project's tests pass."
+            f"{spec.goal}\n\nWork only inside this repository and make the project's tests pass."
         )
         started = time.monotonic()
         proc = subprocess.run(
             [
-                "opencode", "run",
-                "--dir", str(repo),
-                "-m", f"deepseek/{MODEL}",
+                "opencode",
+                "run",
+                "--dir",
+                str(repo),
+                "-m",
+                f"deepseek/{MODEL}",
                 prompt,
             ],
             capture_output=True,
@@ -139,9 +165,13 @@ def drive_opencode(subset: str) -> None:
         elapsed = time.monotonic() - started
         (repo.parent / "driver.json").write_text(
             json.dumps(
-                {"tool": "opencode", "elapsed_s": round(elapsed, 1),
-                 "returncode": proc.returncode,
-                 "stdout_tail": proc.stdout[-2000:], "stderr_tail": proc.stderr[-2000:]},
+                {
+                    "tool": "opencode",
+                    "elapsed_s": round(elapsed, 1),
+                    "returncode": proc.returncode,
+                    "stdout_tail": proc.stdout[-2000:],
+                    "stderr_tail": proc.stderr[-2000:],
+                },
                 indent=2,
             )
         )

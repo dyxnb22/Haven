@@ -272,7 +272,13 @@ class ContextBuilder:
 
         # --- volatile tail: everything that changes turn to turn goes last, so
         # it never shifts the cacheable prefix (ADR 0008) ---
-        selected.extend(tail)
+        # Exception: a native prefix-continuation turn (ADR 0022) ends with an
+        # assistant message the provider must extend in place, so nothing may
+        # follow it on the wire. That turn drops the tail; it is a rare one-off
+        # and the cache prefix is unaffected (the tail returns next turn).
+        ends_with_prefix = bool(transcript) and transcript[-1].is_prefix
+        if not ends_with_prefix:
+            selected.extend(tail)
 
         fitted = selected
         # The hard budget is real: assembled messages must never exceed the

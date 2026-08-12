@@ -276,6 +276,24 @@ class TestMissingReasoningRetry:
         assert len(calls) == 1, "a 400 unrelated to reasoning is not retried"
 
 
+class TestPrefixContinuation:
+    """Native prefix continuation (ADR 0022): a trailing assistant message
+    flagged is_prefix goes on the wire with `prefix: true` so the provider
+    extends it in place instead of replying."""
+
+    async def test_a_prefix_assistant_message_carries_the_prefix_flag(self) -> None:
+        partial = ModelMessage(role="assistant", content="The answer so far", is_prefix=True)
+        wire = await _wire_messages((partial,), requires_reasoning=False)
+        assert wire[-1]["role"] == "assistant"
+        assert wire[-1]["prefix"] is True
+        assert wire[-1]["content"] == "The answer so far"
+
+    async def test_an_ordinary_assistant_message_has_no_prefix_flag(self) -> None:
+        plain = ModelMessage(role="assistant", content="done")
+        wire = await _wire_messages((plain,), requires_reasoning=False)
+        assert "prefix" not in wire[-1]
+
+
 class TestReasoningReplay:
     async def test_tool_call_turn_carries_reasoning_when_required(self) -> None:
         wire = await _wire_messages(

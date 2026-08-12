@@ -52,6 +52,11 @@ class ModelMessage(StrictModel):
     #: answer: not rendered, not evidence, not in the compaction digest, not
     #: trusted. `content` remains the only field that is any of those.
     provider_reasoning: str = ""
+    #: A trailing assistant message the model should *continue in place* rather
+    #: than reply to — native prefix continuation of a length-truncated answer
+    #: (ADR 0022). Only meaningful on the last message; the adapter sends it
+    #: with the provider's prefix flag when the profile declares support.
+    is_prefix: bool = False
 
 
 class ModelRequest(StrictModel):

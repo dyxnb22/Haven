@@ -432,17 +432,30 @@ class RunService:
                             ),
                         ),
                     )
-                    ctx.transcript.append(
-                        ModelMessage(
-                            role="user",
-                            content=(
-                                "Your previous message was cut off at the output token "
-                                "limit. Continue exactly from where it stopped, without "
-                                "repeating anything. If no answer text was produced yet, "
-                                "give the answer directly and concisely."
-                            ),
+                    if self._profile.supports_assistant_prefix:
+                        # Native prefix continuation (ADR 0022): re-issue with
+                        # the partial answer as an assistant *prefix* the model
+                        # extends in place — no seam duplication, no extra user
+                        # turn. The adapter recognises a trailing assistant
+                        # message and sends it with the provider's prefix flag.
+                        ctx.transcript.append(
+                            ModelMessage(role="assistant", content=result.text, is_prefix=True)
                         )
-                    )
+                    else:
+                        # Conversational shim: ask the next turn to continue.
+                        # Can duplicate at the seam and costs a full extra
+                        # request, but needs no provider-specific support.
+                        ctx.transcript.append(
+                            ModelMessage(
+                                role="user",
+                                content=(
+                                    "Your previous message was cut off at the output token "
+                                    "limit. Continue exactly from where it stopped, without "
+                                    "repeating anything. If no answer text was produced yet, "
+                                    "give the answer directly and concisely."
+                                ),
+                            )
+                        )
                     continue
 
                 # A reply with neither text nor tool calls (a reasoning-only

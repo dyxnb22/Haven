@@ -47,9 +47,7 @@ from haven.ports.sandbox import (  # noqa: E402
     default_readable_roots,
 )
 
-_IGNORE = shutil.ignore_patterns(
-    ".git", "__pycache__", "*.pyc", ".pytest_cache", ".tox", ".venv"
-)
+_IGNORE = shutil.ignore_patterns(".git", "__pycache__", "*.pyc", ".pytest_cache", ".tox", ".venv")
 
 #: A cross-tier, cross-repo, cross-difficulty slice for the distribution runs.
 #: Deliberately small so N>=5 per tool stays affordable.
@@ -236,8 +234,11 @@ def grade(subset: str, tool: str) -> None:
         print(f"[{'PASS' if passed else 'FAIL'}] {tool}/{case_id}: {reason}")
     out = RUNS / tool / subset / "results.json"
     passed = sum(1 for r in results if r["passed"])
-    out.write_text(json.dumps({"tool": tool, "passed": passed, "total": len(results),
-                               "cases": results}, indent=2))
+    out.write_text(
+        json.dumps(
+            {"tool": tool, "passed": passed, "total": len(results), "cases": results}, indent=2
+        )
+    )
     print(f"\n{tool}: {passed}/{len(results)} — {out}")
 
 

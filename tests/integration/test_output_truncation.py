@@ -68,6 +68,36 @@ class TestTruncatedAnswers:
         assert any("still truncated" in w for w in _warnings(h))
 
 
+class TestNativePrefixContinuation:
+    """With a profile that supports native prefix continuation (ADR 0022), the
+    truncated partial is re-sent as an assistant *prefix* the model extends in
+    place, instead of a user 'continue' nudge — no seam duplication."""
+
+    async def test_prefix_capable_profile_resends_the_partial_as_assistant_prefix(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:  # type: ignore[no-untyped-def]
+        import haven.application.run_service as rs
+        from haven.application.profiles import ModelProfile
+
+        prefix_profile = ModelProfile(name="scripted", supports_assistant_prefix=True)
+        monkeypatch.setattr(rs, "profile_for", lambda _name: prefix_profile)
+
+        turns = [
+            [text("first half"), finish("length")],
+            [text(" second half"), finish()],
+        ]
+        h = Harness(make_repo(tmp_path), turns)
+        outcome = await h.service.run("Explain something long")
+
+        assert outcome.status is RunStatus.SUCCEEDED
+        # The continuation request ends with the partial as an assistant prefix,
+        # and carries no "cut off" user nudge.
+        last = h.model.requests_seen[-1].messages
+        assert last[-1].role == "assistant"
+        assert last[-1].is_prefix and last[-1].content == "first half"
+        assert not any("cut off" in m.content for m in last if m.role == "user")
+
+
 class TestEmptyReplies:
     async def test_an_empty_reply_is_reprompted_then_answered(self, tmp_path: Path) -> None:
         turns = [

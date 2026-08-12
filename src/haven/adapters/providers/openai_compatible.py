@@ -391,6 +391,11 @@ def _to_wire_message(message: ModelMessage, *, replay_reasoning: bool = False) -
             wire["reasoning_content"] = message.provider_reasoning
     if message.role == "tool" and message.tool_call_id:
         wire["tool_call_id"] = message.tool_call_id
+    if message.role == "assistant" and message.is_prefix:
+        # Native prefix continuation (ADR 0022): the provider extends this
+        # partial content in place instead of replying to it. DeepSeek marks
+        # such a message with `prefix: true` (its beta prefix-completion mode).
+        wire["prefix"] = True
     return wire
 
 
