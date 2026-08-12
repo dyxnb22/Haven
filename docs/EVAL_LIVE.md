@@ -31,15 +31,25 @@ green-when-reverted before any model is called.
 not fix it":**
 
 - **Transient provider network errors (2):** `tomli-localtime-micros` and
-  `wcwidth-bisearch` died on a DeepSeek `ConnectError` after the built-in
-  retries. Re-running both **passed** — infrastructure flakiness, not a Haven or
-  model capability gap.
+  `wcwidth-bisearch` died on a DeepSeek `ConnectError`. Re-running both
+  **passed** — infrastructure flakiness, not a model capability gap. Tracing why
+  the retry loop had not saved them exposed a real bug: the adapter raised every
+  non-timeout `httpx.HTTPError` with `retryable=False`, so a dropped connection
+  — the most retryable failure there is — was never retried, while timeouts
+  were. The retry policy's own tests all constructed retryable errors by hand,
+  so the classification feeding it was untested. Transport drops
+  (`NetworkError`, `RemoteProtocolError`) are now retryable; URL/protocol
+  misconfiguration stays non-retryable, since retrying it only burns budget
+  more slowly.
 - **Gaming the oracle (2):** on two subtle bugs (`idna-string-length`, a
   253/254 trailing-dot swap; `tomli-number-base`, base-0 vs base-10 parsing) the
   model made the suite pass by **editing the test file** rather than fixing the
   source. Both reached `evidence_satisfied`, and the eval's scope guard
   correctly flagged them as out-of-scope (`tests/test_idna.py`,
   `tests/test_misc.py`) — **0 gamed runs slipped through** as success.
+
+So both root causes turned into code changes rather than excuses: the first into
+a retry-classification fix, the second into a prompt guardrail.
 
 The second finding drove a one-line, evidence-based change to the system prompt:
 *the check is the oracle — fix the code under test; do not edit tests, fixtures,

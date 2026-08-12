@@ -280,6 +280,63 @@ async def test_malformed_json_chunk_is_protocol_error() -> None:
     assert exc.value.code == "protocol"
 
 
+class TestTransportErrorClassification:
+    """Which transport failures the adapter marks retryable.
+
+    RunService's retry loop only fires when `ProviderError.retryable` is set, so
+    this classification is what decides whether a dropped connection costs a
+    whole run. Its own tests construct retryable errors by hand, which is how a
+    non-retryable ConnectError went unnoticed until 2 of 31 live real-repo cases
+    died on one.
+    """
+
+    async def _error_from(self, handler: Any, **kwargs: Any) -> ProviderError:
+        with pytest.raises(ProviderError) as exc:
+            await collect(make_model(handler, **kwargs))
+        return exc.value
+
+    async def test_a_refused_connection_is_retryable(self) -> None:
+        def handler(req: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("connection refused")
+
+        error = await self._error_from(handler)
+        assert error.code == "network"
+        assert error.retryable is True
+
+    async def test_a_read_error_is_retryable(self) -> None:
+        def handler(req: httpx.Request) -> httpx.Response:
+            raise httpx.ReadError("connection reset by peer")
+
+        assert (await self._error_from(handler)).retryable is True
+
+    async def test_a_server_disconnect_mid_stream_is_retryable(self) -> None:
+        class DroppingStream(httpx.AsyncByteStream):
+            async def __aiter__(self) -> AsyncIterator[bytes]:
+                yield chunk({"content": "par"})
+                raise httpx.RemoteProtocolError("server disconnected")
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, stream=DroppingStream())
+
+        error = await self._error_from(handler)
+        assert error.code == "network"
+        assert error.retryable is True
+
+    async def test_a_misconfigured_url_is_not_retryable(self) -> None:
+        """Retrying a configuration mistake just burns the budget slower."""
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            raise httpx.UnsupportedProtocol("unsupported scheme")
+
+        assert (await self._error_from(handler)).retryable is False
+
+    async def test_the_raw_exception_text_does_not_leak(self) -> None:
+        def handler(req: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError(f"failed talking to {API_KEY}@host")
+
+        assert API_KEY not in str(await self._error_from(handler))
+
+
 async def test_first_event_timeout() -> None:
     class HangingStream(httpx.AsyncByteStream):
         async def __aiter__(self) -> AsyncIterator[bytes]:

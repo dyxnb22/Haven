@@ -78,7 +78,9 @@ MAX_EMPTY_REPLIES = 2
 
 #: Transient provider failures are common enough on real networks that losing a
 #: whole run to one is the wrong default. Measured: 3 of 8 live runs hit a
-#: ConnectError before any token arrived.
+#: ConnectError before any token arrived, and 2 of 31 real-repo cases later died
+#: on one the adapter was still classifying as non-retryable — this loop is only
+#: as good as that classification.
 MODEL_RETRY_ATTEMPTS = 2
 MODEL_RETRY_BASE_DELAY = 1.0
 

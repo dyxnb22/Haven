@@ -158,7 +158,14 @@ class OpenAICompatibleModel:
         except httpx.TimeoutException as exc:
             raise ProviderError("timeout", "network timeout", retryable=True) from exc
         except httpx.HTTPError as exc:
-            raise ProviderError("network", f"transport error: {type(exc).__name__}") from exc
+            # A dropped, reset, or server-closed connection is transient, and a
+            # model call has no side effects, so RunService may safely retry it.
+            # A protocol or URL misconfiguration fails identically every time,
+            # so retrying it would only burn the budget more slowly.
+            transient = isinstance(exc, httpx.NetworkError | httpx.RemoteProtocolError)
+            raise ProviderError(
+                "network", f"transport error: {type(exc).__name__}", retryable=transient
+            ) from exc
 
     def _build_payload(self, request: ModelRequest) -> dict[str, Any]:
         payload: dict[str, Any] = {
