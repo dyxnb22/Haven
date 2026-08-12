@@ -109,13 +109,17 @@ the scripted trajectory is fixed, so an offline pass measures the harness, not
 the agent's judgement.
 
 Measuring whether Haven actually completes real work needs a **live** suite of
-50–100 small-to-medium tasks drawn from real repositories, scored on patch
-correctness, test-suite regressions, out-of-scope changes, tokens, wall clock,
-and human-approval count. That run costs money and needs a key, so it is
-deliberately not bundled here; the harness (`haven eval --live`) and the
-quality/safety split above are the scaffolding for it. Until it is run, this
-project claims "boundaries hold on 36 scripted cases", not "N% real-task
-success" — the distinction is the whole point.
+tasks drawn from real repositories, scored on patch correctness, out-of-scope
+changes, tokens, wall clock, and approval count. That suite now exists in
+`evals/real/`: 31 bug-injection tasks across five pinned third-party projects,
+each project's own test suite as the oracle (a run succeeds only when the
+Evidence Gate sees a green check). `build.py --verify` proves every task is
+red-with-bug and green-when-reverted. The first run on `deepseek-v4-flash`
+scored 27/31, with the failure distribution — transient network vs. the model
+gaming the oracle — in `docs/EVAL_LIVE.md`. It costs money and needs a key, so
+it is not part of CI; scaling to 50–100 tasks and adding green-field (non-bug)
+work is the remaining step. The offline suite still claims only "boundaries
+hold on 36 scripted cases"; the real-task number lives in the live report.
 
 ## Running
 

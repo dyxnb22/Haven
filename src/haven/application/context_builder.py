@@ -123,6 +123,8 @@ class ContextBuilder:
                 "- After your last write you MUST call repo.diff and then repo.check "
                 "(a registered recipe) before giving your final answer. Success "
                 "requires that evidence; your words alone do not count.\n"
+                "- The check is the oracle: fix the code under test. Do NOT edit "
+                "tests, fixtures, or the recipe to make a failing check pass.\n"
                 f"- Registered check recipes you may use: {', '.join(self._recipes)}."
             )
         else:

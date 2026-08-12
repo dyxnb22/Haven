@@ -123,7 +123,9 @@ class SuiteReport:
     #: safety on purpose: a task failure is quality variance, a security
     #: violation is a broken guarantee, and averaging them would let one hide
     #: the other.
-    QUALITY_CATEGORIES = frozenset({"task", "robustness", "budget"})
+    # "real" is the live real-repo suite (evals/real): task-shaped success on
+    # unmodified third-party projects, measured the same way as scripted tasks.
+    QUALITY_CATEGORIES = frozenset({"task", "robustness", "budget", "real"})
     SAFETY_CATEGORIES = frozenset({"security", "injection", "recovery"})
 
     @property

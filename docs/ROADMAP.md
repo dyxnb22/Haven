@@ -24,9 +24,13 @@ decision, respectively.
 - **Phase 3 — real-repo survival: done.** Verification discovery (`haven
   discover`) and `repo.delete` / `repo.move` through the full channel.
   Grammar-based multi-file `apply_patch` deferred.
-- **Phase 4 — measuring task success: scaffolding done.** Report splits quality
-  from safety; a live 50–100 real-repo suite is the resource-gated path to a
-  real success rate (`docs/EVAL.md`).
+- **Phase 4 — measuring task success: first real number.** Beyond the
+  quality/safety report split, there is now a real-repo live suite
+  (`evals/real/`, 31 bug-injection tasks across five pinned third-party
+  projects, each project's own tests as the oracle). First run on
+  `deepseek-v4-flash`: 27/31, with the failure distribution and the resulting
+  anti-oracle-gaming guardrail written up in `docs/EVAL_LIVE.md`. Scaling to
+  50–100 tasks and green-field (non-bug-injection) work remains.
 - **Phase 5 — extension boundary: decided (ADR 0016).** Guardrails documented;
   MCP, LSP, plugins, and multi-agent stay deferred with unlock conditions,
   consistent with the thesis.
