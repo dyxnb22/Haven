@@ -247,4 +247,4 @@ source. See `docs/adr/` for the decisions and trade-offs, and
 
 ## License
 
-TBD
+[MIT](LICENSE) © 2026 diaoyuxuan.
