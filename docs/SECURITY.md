@@ -44,12 +44,15 @@ workspace entirely.
 
 ### 3. Unauthorized writes / privilege escalation
 
-`repo.edit`, `repo.create`, and `repo.check` are `ask` in interactive mode and
-`deny` in read-only mode. Policy is a pure function of
-`(mode, program-collected facts)`; the model cannot influence facts. Approval is
-bound to a canonical digest of workspace + tool + args + preimage + preview and
-is single-use (a conditional SQL `UPDATE`), so it cannot be replayed or reused
-for a different action. A unit test asserts that every registered tool is
+The side-effecting tools — `repo.edit`, `repo.create`, `repo.delete`,
+`repo.move`, and `repo.check` — are `ask` in interactive mode and `deny` in
+read-only mode. Policy is a pure function of `(mode, program-collected facts)`;
+the model cannot influence facts. Approval is bound to a canonical digest of
+workspace + tool + args + preimage + preview and is single-use (a conditional
+SQL `UPDATE`), so it cannot be replayed or reused for a different action. Every
+tool that pins a file's content at approval — edit, delete, and the source of a
+move — re-verifies that content on disk before executing, so a change between
+approval and execution fails closed with `stale_preimage`. A unit test asserts that every registered tool is
 classified by the policy and that no side-effecting tool is ever auto-allowed,
 so adding a tool cannot silently create an unguarded path.
 

@@ -28,16 +28,20 @@ expectations:
 `haven eval --offline` runs the suite and writes `eval_report/report.json` and
 `report.md`.
 
-## Case coverage (27 cases)
+## Case coverage
 
-| Category | Count | Examples |
-|---|---:|---|
-| task | 8 | fix a bug, fix a default, guard empty input, dedup a function, locate a bug (read-only), create a regression test, rename with `replace_all`, plan-driven multi-step fix |
-| robustness | 5 | invalid arguments recovery, unknown tool, provider error, check timeout, unwinnable evidence gate |
-| security | 7 | parent-dir escape, absolute path, protected `.git` edit, reject-all, create outside the workspace, create cannot overwrite, review blocks a committed AWS key |
-| injection | 3 | README → read `~/.ssh`, tool-output injected recipe, edit `.haven.toml` |
-| budget | 2 | stuck-loop detection, step-budget exhaustion |
-| recovery | 2 | crash where edit never ran (resumable), ambiguous crash (blocked) |
+The authoritative case counts live in the generated metrics table (README /
+`PROJECT_CARD.md`) and in `eval_report/report.json`; they are not repeated here,
+so this list cannot drift. What each category covers:
+
+| Category | What it exercises |
+|---|---|
+| task | realistic workflows: fix a bug, guard empty input, dedup a function, rename with `replace_all`, a plan-driven multi-step fix, and a composed edit + delete + diff + check run |
+| robustness | recovery from bad input: invalid arguments, unknown tool, provider error, check timeout, an unwinnable evidence gate, and a run compacted mid-flight |
+| security | boundary holds: path escapes (parent, absolute), protected `.git`, reject-all, create/overwrite rules, a committed-secret review, sandboxed `repo.exec` escapes, a process write that must reach the gate, and protected-path delete / out-of-workspace move |
+| injection | untrusted text cannot change behavior: README → read `~/.ssh`, tool-output injected recipe, edit `.haven.toml` |
+| budget | hard limits stop a run: stuck-loop detection, step-budget exhaustion |
+| recovery | interrupted effects: an edit that never ran (resumable), an ambiguous crash (blocked) |
 
 ## Metrics (reported separately, never averaged into one score)
 
