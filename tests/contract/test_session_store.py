@@ -179,6 +179,54 @@ class TestSqliteSpecific:
         with pytest.raises(StoreError, match="schema"):
             await SqliteSessionStore.open(db, art)
 
+    async def test_v1_database_migrates_in_place(self, tmp_path: Path) -> None:
+        """A v1 store (no dest_path column) must open, gain the column, and
+        read back records written before the migration."""
+        import aiosqlite
+
+        from haven.adapters.sqlite_session import DB_SCHEMA_VERSION
+
+        db_path, art = tmp_path / "haven.db", tmp_path / "artifacts"
+        # Build a genuine v1 database by hand: the v1 executions shape, v1 meta.
+        raw = await aiosqlite.connect(db_path)
+        await raw.executescript(
+            """
+            CREATE TABLE schema_meta (version INTEGER NOT NULL, migrated_at TEXT NOT NULL);
+            INSERT INTO schema_meta VALUES (1, '2026-01-01T00:00:00');
+            CREATE TABLE runs (id TEXT PRIMARY KEY, workspace TEXT NOT NULL,
+                workspace_digest TEXT NOT NULL, goal TEXT NOT NULL, mode TEXT NOT NULL,
+                status TEXT NOT NULL, stop_reason TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE TABLE events (run_id TEXT NOT NULL, seq INTEGER NOT NULL,
+                kind TEXT NOT NULL, schema_version INTEGER NOT NULL,
+                payload_json TEXT NOT NULL, payload_digest TEXT NOT NULL,
+                created_at TEXT NOT NULL, PRIMARY KEY (run_id, seq));
+            CREATE TABLE checkpoints (run_id TEXT NOT NULL, seq INTEGER NOT NULL,
+                state_json TEXT NOT NULL, checksum TEXT NOT NULL,
+                created_at TEXT NOT NULL, PRIMARY KEY (run_id, seq));
+            CREATE TABLE approvals (id TEXT PRIMARY KEY, run_id TEXT NOT NULL,
+                request_digest TEXT NOT NULL, decision TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL, decided_at TEXT, consumed_at TEXT);
+            CREATE TABLE executions (call_id TEXT PRIMARY KEY, run_id TEXT NOT NULL,
+                ticket_digest TEXT NOT NULL, tool_name TEXT NOT NULL,
+                effect_state TEXT NOT NULL, preimage_digest TEXT NOT NULL DEFAULT '',
+                postimage_digest TEXT NOT NULL DEFAULT '', path TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            INSERT INTO executions VALUES ('c1', 'run-1', 't', 'repo.edit', 'started',
+                'pre', '', 'src/a.py', '2026-01-01T00:00:00', '2026-01-01T00:00:00');
+            """
+        )
+        await raw.commit()
+        await raw.close()
+
+        store = await SqliteSessionStore.open(db_path, art)
+        records = await store.load_executions("run-1")
+        assert records[0].dest_path == ""
+        cursor = await store._db.execute("SELECT version FROM schema_meta")  # type: ignore[attr-defined]  # noqa: SLF001
+        row = await cursor.fetchone()
+        assert row is not None and int(row["version"]) == DB_SCHEMA_VERSION
+        await store.close()
+
 
 def _unused(*args: Any) -> None:  # pragma: no cover
     pass

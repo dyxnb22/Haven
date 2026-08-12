@@ -125,10 +125,13 @@ project's addopts (other projects' addopts are load-bearing).
 
 **Live: `discover: true` eval cases** register exactly what discovery proposes
 (simulating a user accepting `haven discover` output) on fixtures with no
-authored recipe and no shims. Result: **5/5** — four end-to-end zero-config
-completions (`evidence_satisfied` via the discovered check), and wcwidth
-finishing `stopped/evidence_missing`: it fixed the code, could not verify with
-the repo's broken-config check, and said so rather than claiming success.
+authored recipe and no shims. Result, stated precisely: **4/5 end-to-end
+zero-config completions plus 1 expected honest stop — 5/5 expected outcomes.**
+Four cases reached `evidence_satisfied` via the discovered check; wcwidth
+finished `stopped/evidence_missing`: it fixed the code, could not verify with
+the repo's broken-config check, and said so rather than claiming success. The
+stop is counted as a pass because honesty was the expected outcome for that
+case, not because the task completed.
 
 The first attempt at this run scored 0/5, and both causes were again harness
 bugs, not model failures: pytest's `.pytest_cache` (which authored recipes
@@ -421,46 +424,42 @@ well the ADR 0008 reordering worked. `Pricing` now takes a separate cached
 rate and splits the bill (ADR 0011); with the rate left unset the behavior is
 unchanged, so no existing configuration silently changed meaning.
 
-## Not yet measured (ADR 0011)
+## Since measured (ADR 0011)
 
 The model profile, the larger context budget, and cache-aware pricing landed
-after the run above. Their offline numbers are in
-`eval_report/ab-report.md`; their live effect is **unmeasured**. Reproducing it
-costs money and needs a real key:
+after the eight-fixture run; the sections above supersede the "unmeasured"
+status this section used to carry. The live effect is now on record across
+the real-repo suites: per-case step counts (median 6 on tier 1, median 9 on
+tier 3), the hit/miss token split (84–89% cache hit), and correctly split
+`cost_usd` (~$0.0016–0.008 per case depending on tier) are all reported in
+the tier tables above, from paid runs rather than estimates.
 
-```bash
-export DEEPSEEK_API_KEY=...
-export HAVEN_API_KEY_ENV=DEEPSEEK_API_KEY
-export HAVEN_BASE_URL=https://api.deepseek.com/v1
-export HAVEN_MODEL=deepseek-v4-flash
-uv run haven eval --live --yes --category task
-```
-
-The figures that would settle it are step count per case, the
-hit/miss token split, and `cost_usd` now that it is computed correctly. Until
-someone runs that, this section stays empty rather than carrying an estimate
-dressed as a measurement.
-
-## Reasoning replay (ADR 0014) — implemented, live-confirmation pending
+## Reasoning replay (ADR 0014) — implemented, exercised live at scale
 
 DeepSeek V4's thinking mode requires the `reasoning_content` that preceded a
 tool call to be replayed on every later request, or the API returns a 400 from
-the second turn on. Haven now captures that reasoning onto the assistant
-message and the adapter replays it when the model profile declares the
-capability — verified offline by contract tests, a capture/persist integration
-test, and a checkpoint round trip.
+the second turn on. Haven captures that reasoning onto the assistant message
+and the adapter replays it when the model profile declares the capability —
+verified offline by contract tests, a capture/persist integration test, and a
+checkpoint round trip. Since then the real-repo suites have pushed ~90
+multi-turn tool-calling cases through the live API with replay enabled and hit
+no protocol 400s, so the implementation is exercised at scale, not merely
+unit-tested.
 
-Two things still need a paid run to settle, and are deliberately not claimed:
+Stated precisely, what remains unproven: the *counterfactual* (that these runs
+would 400 **without** replay) has not been reproduced, because demonstrating
+it costs a deliberately broken paid run and changes no decision — the
+capability stays on either way.
 
-- **The 400 itself.** The August run above passed 6/8 without this fix, which
-  either means the API was more lenient then or that something about Haven's
-  payload sidestepped the rule. One live tool-calling run with a follow-up turn
-  would confirm the failure the fix prevents.
-- **Output truncation continuation.** A turn that ends `finish_reason: length`
-  is currently accepted as-is (the Evidence Gate still refuses to call a
-  truncated, unverified answer a success). True prefix-continuation — re-issuing
-  to continue a cut-off turn — is deferred until the model's real truncation
-  behavior can be observed, because a half-built version is worse than none.
+**Output truncation continuation** is no longer deferred: a turn ending
+`finish_reason: length` now saves the partial text and asks the model to
+continue from the cut, bounded to two continuations, with empty-reply and
+reasoning-only replies handled (`run_service.py`). This is a conversational
+continuation — a follow-up user message — not provider-level prefix
+continuation; the seam can repeat a phrase and costs one extra request, which
+is why native continuation remains on the roadmap (ROADMAP2 Phase 4). The
+Evidence Gate semantics are unchanged: a truncated, unverified answer still
+cannot be reported as success.
 
 ## Prompt-cache prefix stability (ADR 0008)
 

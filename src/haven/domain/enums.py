@@ -85,6 +85,10 @@ class ToolErrorCode(StrEnum):
     TIMEOUT = "timeout"
     TRUNCATED = "truncated"
     INTERNAL = "internal"
+    #: A process changed `.git` / `.haven` / `.haven.toml` — a boundary the
+    #: kernel could not enforce (Landlock, or no backend). The tool call fails
+    #: so the violation is a hard outcome, not an annotation (ADR 0018).
+    PROTECTED_PATH_TAMPERED = "protected_path_tampered"
 
 
 class EffectState(StrEnum):

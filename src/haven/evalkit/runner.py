@@ -347,13 +347,18 @@ def _discovered_recipes(repo: Path) -> dict[str, RecipeSpec]:
 
 
 async def run_case(
-    case: EvalCase, fixtures_dir: Path, model_factory: ModelFactory | None = None
+    case: EvalCase,
+    fixtures_dir: Path,
+    model_factory: ModelFactory | None = None,
+    events_path: Path | None = None,
 ) -> CaseResult:
     """Run one case in a disposable copy of its fixture.
 
     With `model_factory` the case runs against a real provider (live eval) and
     scripted-only expectations are skipped; the security invariants below are
-    enforced either way.
+    enforced either way. With `events_path` the case's event envelopes are
+    persisted as JSONL, so a failed run can be diagnosed by reading instead of
+    by a paid replay.
     """
     result = CaseResult(case_id=case.id, category=case.category, passed=True)
     started = time.monotonic()
@@ -373,7 +378,7 @@ async def run_case(
         if case.scenario:
             await _run_recovery_scenario(case, repo, result)
         else:
-            await _run_agent_case(case, repo, result, model_factory)
+            await _run_agent_case(case, repo, result, model_factory, events_path)
 
         after = _snapshot(repo)
         changed = sorted(
@@ -422,8 +427,17 @@ async def run_case(
     return result
 
 
+#: Transient streaming chunks: high-volume, no forensic value — the assembled
+#: text arrives in model.completed and the transcript. Everything else is kept.
+_EPHEMERAL_EVENT_KINDS = frozenset({"assistant.delta", "assistant.reasoning"})
+
+
 async def _run_agent_case(
-    case: EvalCase, repo: Path, result: CaseResult, model_factory: ModelFactory | None = None
+    case: EvalCase,
+    repo: Path,
+    result: CaseResult,
+    model_factory: ModelFactory | None = None,
+    events_path: Path | None = None,
 ) -> None:
     workspace = FsWorkspace(repo)
     store = MemorySessionStore()
@@ -475,6 +489,14 @@ async def _run_agent_case(
         outcome = await service.run(case.goal)
     finally:
         await model.aclose()
+        # Written even when the run raises: a crashed case is exactly the one
+        # whose trail must survive.
+        if events_path is not None:
+            with events_path.open("w", encoding="utf-8") as fh:
+                for envelope in envelopes:
+                    if envelope.event.kind in _EPHEMERAL_EVENT_KINDS:
+                        continue
+                    fh.write(envelope.model_dump_json() + "\n")
 
     result.status = outcome.status.value
     result.stop_reason = outcome.stop_reason.value
@@ -678,11 +700,16 @@ async def run_suite(
     out_dir.mkdir(parents=True, exist_ok=True)
     progress_path = out_dir / f"{report_name}-progress.jsonl"
     progress_path.write_text("", encoding="utf-8")
+    # Per-case event streams, for failure forensics without a paid replay.
+    events_dir = out_dir / f"{report_name}-events"
+    events_dir.mkdir(parents=True, exist_ok=True)
 
     results = []
     for index, case in enumerate(cases, start=1):
         try:
-            result = await run_case(case, fixtures_dir, model_factory)
+            result = await run_case(
+                case, fixtures_dir, model_factory, events_path=events_dir / f"{case.id}.jsonl"
+            )
         except Exception as exc:  # noqa: BLE001 — one case must not end the suite
             # A live suite is long, costs money, and is not reproducible, so an
             # unexpected failure in one case is recorded as that case failing

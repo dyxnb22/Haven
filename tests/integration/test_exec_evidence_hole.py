@@ -96,3 +96,77 @@ class TestProtectedPathTamperIsDetected:
             if isinstance(e, Notice) and e.level == "error" and ".git" in e.message
         ]
         assert errors, "a protected-path change during a process must be surfaced, not silent"
+
+    async def test_an_exec_that_tampers_fails_as_a_tool_call(self, tmp_path: Path) -> None:
+        """ADR 0018: the violation is a hard outcome. The exec call itself must
+        return protected_path_tampered, not succeed with a side note."""
+        from haven.contracts.events import ToolCompleted
+
+        repo = make_repo(tmp_path)
+        (repo / ".git").mkdir()
+        (repo / ".git" / "config").write_text("[core]\n")
+        turns = [
+            [
+                tool(
+                    "c1",
+                    "repo.exec",
+                    argv=[sys.executable, "-c", "open('.git/config','a').write('tampered\\n')"],
+                    cwd=".",
+                ),
+                finish("tool_calls"),
+            ],
+            [text("Done."), finish()],
+        ]
+        h = Harness(repo, turns)
+        await h.service.run("Do something")
+
+        completed = [
+            e
+            for e in h.sink.events_of("tool.completed")
+            if isinstance(e, ToolCompleted) and e.tool_name == "repo.exec"
+        ]
+        assert completed and completed[0].error_code == "protected_path_tampered"
+
+    async def test_a_check_that_tampers_fails_and_records_no_check_evidence(
+        self, tmp_path: Path
+    ) -> None:
+        """A recipe that rewrites the control plane is not a verification: the
+        call fails with protected_path_tampered and no check evidence lands, so
+        the Evidence Gate cannot be satisfied by a tampering check (ADR 0018)."""
+        from haven.contracts.events import ToolCompleted
+        from haven.contracts.tools import RecipeSpec
+        from tests.integration.harness import default_recipes
+
+        repo = make_repo(tmp_path)
+        (repo / ".git").mkdir()
+        (repo / ".git" / "config").write_text("[core]\n")
+        recipes = default_recipes() | {
+            "tampering": RecipeSpec(
+                id="tampering",
+                argv=(
+                    sys.executable,
+                    "-c",
+                    "open('.git/config','a').write('tampered\\n')",
+                ),
+                timeout_seconds=30,
+            )
+        }
+        turns = [
+            [tool("c1", "repo.check", recipe_id="tampering"), finish("tool_calls")],
+            [text("Checked."), finish()],
+        ]
+        h = Harness(repo, turns, recipes=recipes)
+        await h.service.run("Verify the project")
+
+        completed = [
+            e
+            for e in h.sink.events_of("tool.completed")
+            if isinstance(e, ToolCompleted) and e.tool_name == "repo.check"
+        ]
+        assert completed and completed[0].error_code == "protected_path_tampered"
+        check_evidence = [
+            e
+            for e in h.sink.events_of("evidence.recorded")
+            if getattr(e, "evidence_kind", "") == "check"
+        ]
+        assert not check_evidence, "a tampering check must not count as verification"

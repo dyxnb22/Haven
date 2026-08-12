@@ -6,9 +6,10 @@ what the first turn did (Phase 2). Durable-run semantics are unchanged: each
 turn is still its own Run with its own checkpoint and budget.
 """
 
+import sys
 from pathlib import Path
 
-from haven.contracts.events import RunCreated
+from haven.contracts.events import RunCreated, ToolCompleted
 from haven.domain.enums import RunStatus
 from tests.integration.harness import Harness, finish, make_repo, text, tool
 
@@ -119,3 +120,52 @@ class TestFollowUpInheritsContext:
         diffs = [e for e in h.sink.events_of("diff.preview") if isinstance(e, DiffPreview)]
         assert diffs, "the follow-up ran repo.diff"
         assert diffs[-1].files_changed == 0, "follow-up diff leaked the first turn's edit"
+
+
+class TestProcessToolsAcrossTurns:
+    """repo.check and repo.exec must behave identically on a continued run:
+    same recipes, recreated scratch, no state bleeding from the first turn.
+    The tier-3 audits asked for exactly this regression pin."""
+
+    async def test_check_runs_green_again_on_the_follow_up_turn(self, tmp_path: Path) -> None:
+        repo = make_repo(tmp_path)
+        turns = [
+            [tool("c1", "repo.check", recipe_id="always-pass"), finish("tool_calls")],
+            [text("Checked in turn one."), finish()],
+            [tool("c2", "repo.check", recipe_id="always-pass"), finish("tool_calls")],
+            [text("Checked again in turn two."), finish()],
+        ]
+        h = Harness(repo, turns)
+        first = await h.service.run("Verify the project")
+        h.sink.envelopes.clear()
+        second = await h.service.continue_run(first.run_id, "Verify once more")
+
+        assert second.status is RunStatus.SUCCEEDED
+        checks = [
+            e
+            for e in h.sink.events_of("tool.completed")
+            if isinstance(e, ToolCompleted) and e.tool_name == "repo.check"
+        ]
+        assert checks and checks[0].status == "ok" and not checks[0].error_code
+
+    async def test_exec_runs_again_on_the_follow_up_turn(self, tmp_path: Path) -> None:
+        repo = make_repo(tmp_path)
+        argv = [sys.executable, "-c", "print('hello from exec')"]
+        turns = [
+            [tool("c1", "repo.exec", argv=argv, cwd="."), finish("tool_calls")],
+            [text("Ran it."), finish()],
+            [tool("c2", "repo.exec", argv=argv, cwd="."), finish("tool_calls")],
+            [text("Ran it again."), finish()],
+        ]
+        h = Harness(repo, turns)
+        first = await h.service.run("Run the command")
+        h.sink.envelopes.clear()
+        second = await h.service.continue_run(first.run_id, "Run it once more")
+
+        assert second.status is RunStatus.SUCCEEDED
+        execs = [
+            e
+            for e in h.sink.events_of("tool.completed")
+            if isinstance(e, ToolCompleted) and e.tool_name == "repo.exec"
+        ]
+        assert execs and execs[0].status == "ok" and not execs[0].error_code

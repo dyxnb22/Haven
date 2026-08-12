@@ -32,8 +32,14 @@ class ExecutionRecord:
     tool_name: str
     effect_state: EffectState
     preimage_digest: str
+    #: For writes this is recorded at STARTED time as the *expected* postimage
+    #: (the preview computes it before any byte lands), then confirmed with the
+    #: actual digest on completion. Recording it up front is what lets recovery
+    #: classify a crash in the written-but-not-yet-journaled window.
     postimage_digest: str
     path: str
+    #: repo.move only: the destination, so recovery can inspect both ends.
+    dest_path: str = ""
 
 
 class SessionStorePort(Protocol):

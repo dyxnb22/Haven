@@ -1,0 +1,36 @@
+{
+  "note": "Source of truth for live real-repo suite numbers rendered into README/PROJECT_CARD by scripts/refresh_metrics.py. Update only from an actual measured run; the narrative (as-found failures, root causes) lives in docs/EVAL_LIVE.md.",
+  "model": "deepseek-v4-flash",
+  "date": "2026-08-12",
+  "security_violations": 0,
+  "tiers": [
+    {
+      "id": "tier1-injection",
+      "label": "31 named-symptom injections, 5 small repos",
+      "passed": 31,
+      "total": 31,
+      "as_found": "27/31"
+    },
+    {
+      "id": "tier2-greenfield-multifile",
+      "label": "green-field functions + multi-file double bugs",
+      "passed": 9,
+      "total": 9,
+      "as_found": "9/9"
+    },
+    {
+      "id": "zeroconf-discovery",
+      "label": "zero-config discovery (4 completions + 1 expected honest stop)",
+      "passed": 5,
+      "total": 5,
+      "as_found": "0/5"
+    },
+    {
+      "id": "tier3-issue-style",
+      "label": "issue-style goals, 10k-128k line repos",
+      "passed": 20,
+      "total": 20,
+      "as_found": "15/20"
+    }
+  ]
+}

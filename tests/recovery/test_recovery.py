@@ -84,7 +84,14 @@ async def crash_setup(
 
 
 async def crash_setup_for(
-    repo: Path, h: Harness, *, tool_name: str, path: str, preimage: str
+    repo: Path,
+    h: Harness,
+    *,
+    tool_name: str,
+    path: str,
+    preimage: str,
+    postimage: str = "",
+    dest_path: str = "",
 ) -> tuple[str, RecoveryService]:
     """Like crash_setup, but for an arbitrary interrupted write tool."""
     run_id = "run-crash02"
@@ -113,8 +120,9 @@ async def crash_setup_for(
             tool_name=tool_name,
             effect_state=EffectState.STARTED,
             preimage_digest=preimage,
-            postimage_digest="",
+            postimage_digest=postimage,
             path=path,
+            dest_path=dest_path,
         )
     )
     return run_id, RecoveryService(h.store, workspace)
@@ -135,12 +143,58 @@ class TestCreateDeleteClassification:
         assert report.can_resume
         assert report.findings[0].classification == "not_run"
 
-    async def test_create_with_a_present_file_is_unknown(self, tmp_path: Path) -> None:
+    async def test_create_with_a_present_file_and_no_postimage_is_unknown(
+        self, tmp_path: Path
+    ) -> None:
+        """A legacy record without the expected postimage cannot prove the
+        present file is the intended content."""
         repo = make_repo(tmp_path)
         (repo / "src" / "new_module.py").write_text("something\n")
         h = Harness(repo, [])
         run_id, recovery = await crash_setup_for(
             repo, h, tool_name="repo.create", path="src/new_module.py", preimage=""
+        )
+        report = await recovery.inspect(run_id)
+        assert not report.can_resume
+        assert report.findings[0].classification == "unknown"
+
+    async def test_create_matching_the_expected_postimage_is_confirmed(
+        self, tmp_path: Path
+    ) -> None:
+        """The expected postimage is journaled at STARTED time, so a crash in
+        the written-but-not-confirmed window is provably complete."""
+        from haven.domain.digest import sha256_text
+
+        repo = make_repo(tmp_path)
+        (repo / "src" / "new_module.py").write_text("intended content\n")
+        h = Harness(repo, [])
+        run_id, recovery = await crash_setup_for(
+            repo,
+            h,
+            tool_name="repo.create",
+            path="src/new_module.py",
+            preimage="",
+            postimage=sha256_text("intended content\n"),
+        )
+        report = await recovery.inspect(run_id)
+        assert report.can_resume
+        assert report.findings[0].classification == "confirmed"
+
+    async def test_create_with_a_different_file_than_expected_is_unknown(
+        self, tmp_path: Path
+    ) -> None:
+        from haven.domain.digest import sha256_text
+
+        repo = make_repo(tmp_path)
+        (repo / "src" / "new_module.py").write_text("something else\n")
+        h = Harness(repo, [])
+        run_id, recovery = await crash_setup_for(
+            repo,
+            h,
+            tool_name="repo.create",
+            path="src/new_module.py",
+            preimage="",
+            postimage=sha256_text("intended content\n"),
         )
         report = await recovery.inspect(run_id)
         assert not report.can_resume
@@ -177,7 +231,9 @@ class TestCreateDeleteClassification:
         assert not report.can_resume
         assert report.findings[0].classification == "unknown"
 
-    async def test_move_stays_unknown(self, tmp_path: Path) -> None:
+    async def test_move_without_a_recorded_dest_stays_unknown(self, tmp_path: Path) -> None:
+        """A legacy record carrying only the source cannot distinguish
+        mid-move states, so it must stay ambiguous."""
         repo = make_repo(tmp_path)
         h = Harness(repo, [])
         facts = h.workspace.path_facts("src/calc.py")
@@ -187,6 +243,67 @@ class TestCreateDeleteClassification:
         )
         report = await recovery.inspect(run_id)
         assert report.findings[0].classification == "unknown"
+
+    async def test_move_with_source_intact_and_dest_absent_is_not_run(self, tmp_path: Path) -> None:
+        repo = make_repo(tmp_path)
+        h = Harness(repo, [])
+        facts = h.workspace.path_facts("src/calc.py")
+        assert facts.digest is not None
+        run_id, recovery = await crash_setup_for(
+            repo,
+            h,
+            tool_name="repo.move",
+            path="src/calc.py",
+            preimage=facts.digest,
+            dest_path="src/renamed.py",
+        )
+        report = await recovery.inspect(run_id)
+        assert report.can_resume
+        assert report.findings[0].classification == "not_run"
+
+    async def test_move_with_dest_holding_the_content_and_source_gone_is_confirmed(
+        self, tmp_path: Path
+    ) -> None:
+        repo = make_repo(tmp_path)
+        h = Harness(repo, [])
+        facts = h.workspace.path_facts("src/calc.py")
+        assert facts.digest is not None
+        (repo / "src" / "renamed.py").write_text((repo / "src" / "calc.py").read_text())
+        (repo / "src" / "calc.py").unlink()
+        run_id, recovery = await crash_setup_for(
+            repo,
+            h,
+            tool_name="repo.move",
+            path="src/calc.py",
+            preimage=facts.digest,
+            dest_path="src/renamed.py",
+        )
+        report = await recovery.inspect(run_id)
+        assert report.can_resume
+        assert report.findings[0].classification == "confirmed"
+
+    async def test_move_with_both_ends_present_is_unknown_not_replayed(
+        self, tmp_path: Path
+    ) -> None:
+        """Copy landed, unlink did not: completing it automatically would be a
+        replay, which recovery never does — it must block for reconciliation."""
+        repo = make_repo(tmp_path)
+        h = Harness(repo, [])
+        facts = h.workspace.path_facts("src/calc.py")
+        assert facts.digest is not None
+        (repo / "src" / "renamed.py").write_text((repo / "src" / "calc.py").read_text())
+        run_id, recovery = await crash_setup_for(
+            repo,
+            h,
+            tool_name="repo.move",
+            path="src/calc.py",
+            preimage=facts.digest,
+            dest_path="src/renamed.py",
+        )
+        report = await recovery.inspect(run_id)
+        assert not report.can_resume
+        assert report.findings[0].classification == "unknown"
+        assert "source was not removed" in report.findings[0].detail
 
 
 class TestEffectClassification:

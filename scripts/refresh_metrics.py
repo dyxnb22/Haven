@@ -76,6 +76,19 @@ def _eval_summary() -> dict[str, object]:
     return json.loads(report.read_text(encoding="utf-8"))
 
 
+def _live_summary() -> dict[str, object]:
+    """The committed record of the live real-repo suite (evals/real).
+
+    Live reports themselves are gitignored run artifacts; this file is updated
+    only from an actual measured run, so the rendered numbers cannot drift
+    from what was measured — the same discipline as every other row here.
+    """
+    results = ROOT / "evals" / "real" / "results.json"
+    if not results.is_file():
+        return {}
+    return json.loads(results.read_text(encoding="utf-8"))
+
+
 def _thousands(n: int) -> str:
     return f"~{n / 1000:.1f}k"
 
@@ -109,6 +122,22 @@ def render_block() -> str:
             )
         )
         rows.append(("Eval categories", cats))
+
+    live = _live_summary()
+    if live:
+        tiers = live.get("tiers", [])
+        assert isinstance(tiers, list)
+        passed = sum(int(t["passed"]) for t in tiers)
+        total = sum(int(t["total"]) for t in tiers)
+        parts = " + ".join(f"{t['passed']}/{t['total']}" for t in tiers)
+        rows.append(
+            (
+                f"Live real-repo suite ({live['model']})",
+                f"{passed}/{total} after fixes ({parts}); "
+                f"{live['security_violations']} security violations — "
+                "as-found runs and root causes in docs/EVAL_LIVE.md",
+            )
+        )
 
     lines = [BEGIN, "", "| Metric | Value |", "|---|---|"]
     lines += [f"| {label} | {value} |" for label, value in rows]

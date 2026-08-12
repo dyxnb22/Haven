@@ -110,11 +110,11 @@ def test_one_crashing_case_does_not_discard_the_rest(tmp_path: Path) -> None:
     calls = {"n": 0}
     real_run_case = runner_module.run_case
 
-    async def flaky_run_case(case, fixtures_dir, model_factory=None):  # type: ignore[no-untyped-def]
+    async def flaky_run_case(case, fixtures_dir, model_factory=None, events_path=None):  # type: ignore[no-untyped-def]
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("transport exploded")
-        return await real_run_case(case, fixtures_dir, model_factory)
+        return await real_run_case(case, fixtures_dir, model_factory, events_path)
 
     def factory() -> ScriptedModel:
         return ScriptedModel([[TextDelta(text="done"), StreamFinished()]])
@@ -137,6 +137,21 @@ def test_one_crashing_case_does_not_discard_the_rest(tmp_path: Path) -> None:
     crashed = report.results[0]
     assert not crashed.passed
     assert any("RuntimeError" in f for f in crashed.failures)
+
+
+def test_per_case_event_streams_are_persisted(tmp_path: Path) -> None:
+    """Failure forensics must be a read, not a re-run: each case leaves its
+    event envelopes (minus transient streaming chunks) as JSONL."""
+    import asyncio
+    import json
+
+    report = asyncio.run(run_suite(cases_dir=CASES_DIR, out_dir=tmp_path, categories=("task",)))
+    events_dir = tmp_path / "report-events"
+    written = sorted(events_dir.glob("*.jsonl"))
+    assert len(written) == len(report.results), "one event stream per case"
+    kinds = [json.loads(line)["event"]["kind"] for line in written[0].read_text().splitlines()]
+    assert "run.created" in kinds and "run.finished" in kinds
+    assert "assistant.delta" not in kinds, "streaming chunks are not forensic data"
 
 
 def test_live_mode_uses_the_injected_model_and_skips_scripted_expectations(

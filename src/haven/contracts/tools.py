@@ -196,12 +196,15 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "move never silently overwrites."
     ),
     "repo.exec": (
-        "Run a program inside an OS sandbox: no network, writes confined to the "
-        "workspace, your home directory unreadable. Requires user approval unless "
-        "the command is a well-known read-only one. Pass argv as separate items; "
-        "shell syntax is NOT interpreted, so name an interpreter explicitly if you "
-        "need it. Output is an observation only — it is never verification "
-        "evidence, so run repo.check when you need to prove a change works."
+        "Run a program inside an OS sandbox: no network, the workspace is "
+        "READ-ONLY (only a scratch directory is writable), your home directory "
+        "unreadable. A command that tries to write workspace files fails with a "
+        "permission error — change files through repo.edit/create/delete/move "
+        "instead. Requires user approval unless the command is a well-known "
+        "read-only one. Pass argv as separate items; shell syntax is NOT "
+        "interpreted, so name an interpreter explicitly if you need it. Output "
+        "is an observation only — it is never verification evidence, so run "
+        "repo.check when you need to prove a change works."
     ),
     "repo.diff": "Show the accumulated diff of the changes made in this run.",
     "repo.check": (

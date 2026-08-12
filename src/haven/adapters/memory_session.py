@@ -118,6 +118,7 @@ class MemorySessionStore:
             preimage_digest=old.preimage_digest,
             postimage_digest=postimage_digest or old.postimage_digest,
             path=old.path,
+            dest_path=old.dest_path,
         )
 
     async def load_executions(self, run_id: str) -> list[ExecutionRecord]:

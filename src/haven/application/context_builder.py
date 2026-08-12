@@ -140,8 +140,10 @@ class ContextBuilder:
         if self._sandbox_backend:
             exec_rule = (
                 "- repo.exec runs ONE program (argv array; shell syntax is not "
-                "interpreted) inside an OS sandbox: no network, writes confined to "
-                "the workspace, your home directory unreadable. Its output is an "
+                "interpreted) inside an OS sandbox: no network, the workspace "
+                "READ-ONLY (only scratch is writable), your home directory "
+                "unreadable. It cannot change workspace files — use "
+                "repo.edit/create/delete/move for that. Its output is an "
                 "observation, never verification evidence — only repo.check "
                 "produces that."
             )

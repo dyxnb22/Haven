@@ -675,6 +675,9 @@ class ToolPipeline:
         preview: EditPreview | None,
     ) -> ToolExecution:
         assert preview is not None  # facts collection always builds it for writes
+        # The preview's postimage is recorded *before* any byte lands: if the
+        # process dies inside the write, recovery can classify "file already
+        # matches the expected postimage" as confirmed instead of unknown.
         await self._store.record_execution(
             ExecutionRecord(
                 call_id=call.call_id,
@@ -683,7 +686,7 @@ class ToolPipeline:
                 tool_name=call.tool_name,
                 effect_state=EffectState.STARTED,
                 preimage_digest=preview.preimage_digest,
-                postimage_digest="",
+                postimage_digest=preview.postimage_digest,
                 path=preview.path,
             )
         )
@@ -806,6 +809,9 @@ class ToolPipeline:
         # if the source changed between approval and execution.
         assert preview is not None  # facts collection always builds it for a move
         preimage = preview.preimage_digest
+        # dest_path lets recovery inspect both ends of an interrupted move: the
+        # content is unchanged by a move, so src/dest presence plus the preimage
+        # digest classifies every crash point except the copy-then-crash gap.
         await self._store.record_execution(
             ExecutionRecord(
                 call_id=call.call_id,
@@ -816,6 +822,7 @@ class ToolPipeline:
                 preimage_digest=preimage,
                 postimage_digest="",
                 path=args.src,
+                dest_path=args.dest,
             )
         )
         try:
@@ -912,9 +919,18 @@ class ToolPipeline:
         await self._store.update_execution_state(call.call_id, EffectState.CONFIRMED)
         # Any file the command changed is attributed to it as edit evidence, so
         # a write through exec cannot escape the Evidence Gate (ADR 0012).
-        await self._record_process_writes(
+        tampered = await self._record_process_writes(
             ctx, call.tool_name, before, self._workspace.capture_snapshot()
         )
+        if tampered:
+            return ToolExecution(
+                _error(
+                    call,
+                    ToolErrorCode.PROTECTED_PATH_TAMPERED,
+                    "the command modified protected path(s) "
+                    f"{', '.join(tampered)}; this is a boundary violation",
+                )
+            )
         if outcome.timed_out:
             return ToolExecution(
                 _error(
@@ -943,13 +959,17 @@ class ToolPipeline:
         tool_name: str,
         before: WorkspaceSnapshot,
         after: WorkspaceSnapshot,
-    ) -> None:
+    ) -> list[str]:
         """Attribute any workspace change a process caused to the ledger.
 
         Only edit/create used to write evidence, so a file changed by a process
         was invisible to the Evidence Gate (ADR 0012). Here a before/after
         snapshot is diffed and every change becomes edit evidence, so a run that
         mutates the tree through any tool is held to the same evidence standard.
+
+        Returns the protected paths the process changed, so the caller can fail
+        the tool call outright (ADR 0018) — a control-plane mutation must be a
+        hard outcome, not an annotation.
         """
         # A protected path changing during a process is a tamper the OS sandbox
         # could not prevent (Landlock cannot protect `.git` in a writable
@@ -972,7 +992,7 @@ class ToolPipeline:
 
         changes = _detect_changes(before, after)
         if not changes:
-            return
+            return tampered
         summary = f"{len(changes)} file(s) changed by {tool_name}: " + ", ".join(
             change.path for change in changes[:5]
         )
@@ -990,6 +1010,7 @@ class ToolPipeline:
                     postimage_digest=change.postimage_digest,
                 )
             )
+        return tampered
 
     async def _execute_check(
         self, ctx: RunContext, call: ToolCallProposal, args: RepoCheckArgs, ticket_digest: str
@@ -1017,9 +1038,21 @@ class ToolPipeline:
         await self._store.update_execution_state(call.call_id, EffectState.CONFIRMED)
         # A check that mutates the tree (e.g. a formatter) is recorded like any
         # other write, before the check evidence, so the gate sees it.
-        await self._record_process_writes(
+        tampered = await self._record_process_writes(
             ctx, call.tool_name, before, self._workspace.capture_snapshot()
         )
+        if tampered:
+            # A check that rewrote the control plane is not a verification: no
+            # check evidence is recorded, so this run cannot use it to satisfy
+            # the Evidence Gate, and the call itself fails (ADR 0018).
+            return ToolExecution(
+                _error(
+                    call,
+                    ToolErrorCode.PROTECTED_PATH_TAMPERED,
+                    f"recipe {recipe.id!r} modified protected path(s) "
+                    f"{', '.join(tampered)}; the check does not count as verification",
+                )
+            )
         envelope = await self._emitter.emit(
             ctx.run_id,
             EvidenceRecorded(

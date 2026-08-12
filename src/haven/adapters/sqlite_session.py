@@ -23,7 +23,7 @@ from haven.domain.digest import sha256_bytes, sha256_text
 from haven.domain.enums import ApprovalDecision, EffectState, RunStatus
 from haven.ports.session import ExecutionRecord, RunRecord
 
-DB_SCHEMA_VERSION = 1
+DB_SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -77,10 +77,19 @@ CREATE TABLE IF NOT EXISTS executions (
     preimage_digest TEXT NOT NULL DEFAULT '',
     postimage_digest TEXT NOT NULL DEFAULT '',
     path TEXT NOT NULL DEFAULT '',
+    dest_path TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
 """
+
+#: In-place migrations, applied in order from the stored version. Each entry
+#: takes the schema from `version` to `version + 1`. Additive-only by policy:
+#: a migration that cannot be expressed as additive DDL gets a new store, not
+#: a destructive rewrite of this one.
+_MIGRATIONS: dict[int, tuple[str, ...]] = {
+    1: ("ALTER TABLE executions ADD COLUMN dest_path TEXT NOT NULL DEFAULT ''",),
+}
 
 
 class StoreError(Exception):
@@ -116,12 +125,21 @@ class SqliteSessionStore:
                 "INSERT INTO schema_meta (version, migrated_at) VALUES (?, ?)",
                 (DB_SCHEMA_VERSION, _now()),
             )
-        elif int(row["version"]) != DB_SCHEMA_VERSION:
-            await db.close()
-            raise StoreError(
-                f"database schema version {row['version']} != expected "
-                f"{DB_SCHEMA_VERSION}; migrate or back up explicitly"
-            )
+        else:
+            version = int(row["version"])
+            while version in _MIGRATIONS and version < DB_SCHEMA_VERSION:
+                for statement in _MIGRATIONS[version]:
+                    await db.execute(statement)
+                version += 1
+                await db.execute(
+                    "UPDATE schema_meta SET version = ?, migrated_at = ?", (version, _now())
+                )
+            if version != DB_SCHEMA_VERSION:
+                await db.close()
+                raise StoreError(
+                    f"database schema version {row['version']} != expected "
+                    f"{DB_SCHEMA_VERSION} and no migration path exists; back up explicitly"
+                )
         await db.commit()
         return cls(db, artifacts_dir)
 
@@ -264,8 +282,8 @@ class SqliteSessionStore:
         now = _now()
         await self._db.execute(
             "INSERT INTO executions (call_id, run_id, ticket_digest, tool_name, effect_state, "
-            "preimage_digest, postimage_digest, path, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "preimage_digest, postimage_digest, path, dest_path, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 record.call_id,
                 record.run_id,
@@ -275,6 +293,7 @@ class SqliteSessionStore:
                 record.preimage_digest,
                 record.postimage_digest,
                 record.path,
+                record.dest_path,
                 now,
                 now,
             ),
@@ -284,10 +303,14 @@ class SqliteSessionStore:
     async def update_execution_state(
         self, call_id: str, effect_state: EffectState, postimage_digest: str = ""
     ) -> None:
+        # An empty postimage must not erase one recorded at STARTED time (the
+        # expected postimage is what recovery classifies against) — matching
+        # the memory store's semantics.
         await self._db.execute(
-            "UPDATE executions SET effect_state = ?, postimage_digest = ?, updated_at = ? "
-            "WHERE call_id = ?",
-            (effect_state.value, postimage_digest, _now(), call_id),
+            "UPDATE executions SET effect_state = ?, "
+            "postimage_digest = CASE WHEN ? = '' THEN postimage_digest ELSE ? END, "
+            "updated_at = ? WHERE call_id = ?",
+            (effect_state.value, postimage_digest, postimage_digest, _now(), call_id),
         )
         await self._db.commit()
 
@@ -306,6 +329,7 @@ class SqliteSessionStore:
                 preimage_digest=str(row["preimage_digest"]),
                 postimage_digest=str(row["postimage_digest"]),
                 path=str(row["path"]),
+                dest_path=str(row["dest_path"]),
             )
             for row in rows
         ]

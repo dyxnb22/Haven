@@ -108,6 +108,21 @@ class TestExecRule:
         request, _ = builder(sandbox_backend="").build([], BudgetUsage())
         assert "UNAVAILABLE" in request.messages[0].content
 
+    def test_rule_matches_the_read_only_profile(self) -> None:
+        """ADR 0017 made exec workspace-read-only; a prompt that still claims
+        writes are 'confined to the workspace' invites the model to attempt
+        writes that policy will deny, burning steps. Pin both the system rule
+        and the tool description to the profile that actually runs."""
+        from haven.contracts.tools import TOOL_DESCRIPTIONS
+
+        request, _ = builder(sandbox_backend="seatbelt").build([], BudgetUsage())
+        system = request.messages[0].content
+        assert "READ-ONLY" in system
+        assert "writes confined to the workspace" not in system
+        description = TOOL_DESCRIPTIONS["repo.exec"]
+        assert "READ-ONLY" in description
+        assert "writes confined to the workspace" not in description
+
     def test_the_rule_lives_in_the_stable_head(self) -> None:
         """It must not move the cacheable prefix (ADR 0008)."""
         b = builder(sandbox_backend="seatbelt")

@@ -51,32 +51,33 @@ drifts from the sources, so no number here is hand-maintained.
 
 | Metric | Value |
 |---|---|
-| Automated tests | 592 |
+| Automated tests | 604 |
 | Line coverage (`src/`) | 89% |
-| Source / test size | ~10.8k / ~7.7k lines |
+| Source / test size | ~10.9k / ~8.0k lines |
 | Typed modules (`mypy --strict`) | 66 |
-| Architecture decision records | 17 |
+| Architecture decision records | 18 |
 | Offline eval | 36/36 passed, 0 security violations |
 | Eval categories | security 14 · task 9 · robustness 6 · injection 3 · budget 2 · recovery 2 |
+| Live real-repo suite (deepseek-v4-flash) | 65/65 after fixes (31/31 + 9/9 + 5/5 + 20/20); 0 security violations — as-found runs and root causes in docs/EVAL_LIVE.md |
 
 <!-- END GENERATED METRICS -->
 
-Beyond the generated table: the live eval (DeepSeek `deepseek-v4-flash`) passed
-**6/8 task cases** (5–6 across three runs — model non-determinism, not a
-regression) at **0 security violations** and **89% prompt-cache hit** (up from
-71%); cost is billed with a cache-aware rate card (ADR 0011); sandbox
-enforcement — writes outside the workspace, reads of `$HOME`, and TCP all
-refused by the OS — is asserted by running real commands on macOS and Linux;
-and the golden trace is stable across runs, with TUI and headless producing
-identical traces.
+Beyond the generated table: the live real-repo row above is measured on
+unmodified third-party projects with each project's own test suite as the
+oracle — a run counts only when the Evidence Gate saw a diff and a green
+registered check. Prompt-cache hit is **87–89%** across the live suites (up
+from 71% before the ADR 0008 reordering); cost is billed with a cache-aware
+rate card (ADR 0011); sandbox enforcement — writes outside the workspace,
+reads of `$HOME`, and TCP all refused by the OS — is asserted by running real
+commands on macOS and Linux; and the golden trace is stable across runs, with
+TUI and headless producing identical traces.
 
-The live figures come from repeated runs of eight cases against one model and are
-**not** a benchmark; they are an existence proof plus a cost figure. Task success
-at scale is not measured and therefore not claimed. See `docs/EVAL_LIVE.md`,
-which documents the six defects only a real model exposed — including a
-cache-defeating context layout whose fix raised the prompt-cache hit rate from
-71% to 89% on the same suite — and `eval_report/prompt-comparison.md` for the
-measured cost of the last context change.
+The live figures come from one model and a small number of runs per tier and
+are **not** a benchmark. Each tier's as-found failure distribution — and the
+harness bugs those failures exposed, every one converted into a fix with a
+regression test — is documented in `docs/EVAL_LIVE.md`;
+`eval_report/prompt-comparison.md` has the measured cost of the last context
+change.
 
 ## Trade-offs I chose, and why
 
