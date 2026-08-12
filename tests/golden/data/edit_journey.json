@@ -4,7 +4,8 @@
     "goal": "Fix the bug in add()",
     "mode": "interactive",
     "model_name": "scripted",
-    "max_steps": 24
+    "max_steps": 24,
+    "sandbox_backend": "recording"
   },
   {
     "kind": "step.started",
@@ -17,7 +18,7 @@
       {
         "source": "system_rules",
         "trust": "trusted",
-        "size_bytes": 1439,
+        "size_bytes": 1707,
         "reason": "fixed operating rules"
       },
       {
@@ -33,7 +34,7 @@
         "reason": "live budget counters, kept last so the prefix stays cacheable"
       }
     ],
-    "total_bytes": 1505
+    "total_bytes": 1773
   },
   {
     "kind": "model.completed",
@@ -64,7 +65,8 @@
   {
     "kind": "execution.started",
     "call_id": "c1",
-    "tool_name": "repo.search"
+    "tool_name": "repo.search",
+    "sandbox_backend": "recording"
   },
   {
     "kind": "tool.completed",
@@ -86,7 +88,7 @@
       {
         "source": "system_rules",
         "trust": "trusted",
-        "size_bytes": 1439,
+        "size_bytes": 1707,
         "reason": "fixed operating rules"
       },
       {
@@ -114,7 +116,7 @@
         "reason": "live budget counters, kept last so the prefix stays cacheable"
       }
     ],
-    "total_bytes": 1711
+    "total_bytes": 1979
   },
   {
     "kind": "model.completed",
@@ -145,7 +147,8 @@
   {
     "kind": "execution.started",
     "call_id": "c2",
-    "tool_name": "repo.read"
+    "tool_name": "repo.read",
+    "sandbox_backend": "recording"
   },
   {
     "kind": "tool.completed",
@@ -167,7 +170,7 @@
       {
         "source": "system_rules",
         "trust": "trusted",
-        "size_bytes": 1439,
+        "size_bytes": 1707,
         "reason": "fixed operating rules"
       },
       {
@@ -207,7 +210,7 @@
         "reason": "live budget counters, kept last so the prefix stays cacheable"
       }
     ],
-    "total_bytes": 1965
+    "total_bytes": 2233
   },
   {
     "kind": "model.completed",
@@ -250,7 +253,8 @@
   {
     "kind": "execution.started",
     "call_id": "c3",
-    "tool_name": "repo.edit"
+    "tool_name": "repo.edit",
+    "sandbox_backend": "recording"
   },
   {
     "kind": "evidence.recorded",
@@ -277,7 +281,7 @@
       {
         "source": "system_rules",
         "trust": "trusted",
-        "size_bytes": 1439,
+        "size_bytes": 1707,
         "reason": "fixed operating rules"
       },
       {
@@ -329,7 +333,7 @@
         "reason": "live budget counters, kept last so the prefix stays cacheable"
       }
     ],
-    "total_bytes": 2332
+    "total_bytes": 2600
   },
   {
     "kind": "model.completed",
@@ -360,7 +364,8 @@
   {
     "kind": "execution.started",
     "call_id": "c4",
-    "tool_name": "repo.diff"
+    "tool_name": "repo.diff",
+    "sandbox_backend": "recording"
   },
   {
     "kind": "diff.preview",
@@ -394,7 +399,7 @@
       {
         "source": "system_rules",
         "trust": "trusted",
-        "size_bytes": 1439,
+        "size_bytes": 1707,
         "reason": "fixed operating rules"
       },
       {
@@ -458,7 +463,7 @@
         "reason": "live budget counters, kept last so the prefix stays cacheable"
       }
     ],
-    "total_bytes": 2630
+    "total_bytes": 2898
   },
   {
     "kind": "model.completed",
@@ -501,7 +506,8 @@
   {
     "kind": "execution.started",
     "call_id": "c5",
-    "tool_name": "repo.check"
+    "tool_name": "repo.check",
+    "sandbox_backend": "recording"
   },
   {
     "kind": "evidence.recorded",
@@ -528,7 +534,7 @@
       {
         "source": "system_rules",
         "trust": "trusted",
-        "size_bytes": 1439,
+        "size_bytes": 1707,
         "reason": "fixed operating rules"
       },
       {
@@ -604,7 +610,7 @@
         "reason": "live budget counters, kept last so the prefix stays cacheable"
       }
     ],
-    "total_bytes": 2806
+    "total_bytes": 3074
   },
   {
     "kind": "model.completed",
@@ -625,7 +631,7 @@
     "gate_reason": "evidence_satisfied",
     "steps": 6,
     "tool_calls": 5,
-    "input_tokens": 3235,
+    "input_tokens": 3634,
     "output_tokens": 20,
     "cached_input_tokens": 0,
     "usage_estimated": true

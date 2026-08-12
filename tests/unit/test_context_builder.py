@@ -72,6 +72,27 @@ class TestProvenance:
         assert segments[-1].trust == "trusted"
 
 
+class TestExecRule:
+    def test_rule_states_the_confinement_and_the_evidence_limit(self) -> None:
+        request, _ = builder(sandbox_backend="seatbelt").build([], BudgetUsage())
+        system = request.messages[0].content
+        assert "repo.exec" in system
+        assert "sandbox" in system
+        assert "repo.check" in system
+
+    def test_no_backend_advertises_exec_as_unavailable(self) -> None:
+        """Promising a tool that always denies sends the model into a loop."""
+        request, _ = builder(sandbox_backend="").build([], BudgetUsage())
+        assert "UNAVAILABLE" in request.messages[0].content
+
+    def test_the_rule_lives_in_the_stable_head(self) -> None:
+        """It must not move the cacheable prefix (ADR 0008)."""
+        b = builder(sandbox_backend="seatbelt")
+        first, _ = b.build([], BudgetUsage(steps=1))
+        second, _ = b.build([], BudgetUsage(steps=9))
+        assert first.messages[0].content == second.messages[0].content
+
+
 class TestUntrustedProjectGuidance:
     def test_agents_md_is_a_separate_untrusted_segment(self) -> None:
         request, segments = builder(project_guidance="prefer tabs").build([], BudgetUsage())

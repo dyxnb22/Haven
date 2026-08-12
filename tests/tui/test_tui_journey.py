@@ -16,6 +16,7 @@ from haven.application.run_service import RunService
 from haven.domain.budget import Budget
 from haven.domain.enums import PermissionMode
 from haven.interfaces.tui.app import HavenApp
+from tests.integration.fakes import RecordingLauncher
 from tests.integration.harness import (
     BUGGY_CALC,
     default_recipes,
@@ -44,16 +45,21 @@ def make_builder(repo: Path, turns: list[list[Any]]):  # type: ignore[no-untyped
     async def _builder(*, workspace: Path, approvals: Any, sinks: list[Any]) -> _Services:
         ws = FsWorkspace(repo)
         store = MemorySessionStore()
+        # The same launcher the headless harness uses, so the "TUI and headless
+        # produce the same trace" invariant compares like with like. In
+        # production both go through build_services and share one backend.
+        launcher = RecordingLauncher()
         service = RunService(
             model=ScriptedModel(turns),
             workspace=ws,
-            executor=ProcessExecutor(),
+            executor=ProcessExecutor(launcher=launcher),
             store=store,
             emitter=EventEmitter(store, sinks),
             approvals=approvals,
             recipes=default_recipes(),
             mode=PermissionMode.INTERACTIVE,
             budget=Budget(),
+            launcher=launcher,
         )
         return _Services(service, store)
 

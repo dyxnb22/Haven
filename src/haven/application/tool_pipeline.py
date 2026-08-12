@@ -217,6 +217,7 @@ class ToolPipeline:
                 call_id=call.call_id,
                 tool_name=call.tool_name,
                 ticket_digest=ticket.ticket_digest,
+                sandbox_backend=self._launcher.backend if self._launcher is not None else "",
             ),
         )
 

@@ -187,6 +187,7 @@ class RunService:
                 git_branch=self._git_branch,
                 git_commit=self._git_commit,
                 max_steps=self._budget.max_steps,
+                sandbox_backend=(self._launcher.backend if self._launcher is not None else "none"),
             ),
         )
         return await self._drive(ctx)
@@ -208,6 +209,7 @@ class RunService:
             budget=ctx.budget,
             recipe_ids=tuple(self._recipes),
             project_guidance=self._project_guidance,
+            sandbox_backend=self._launcher.backend if self._launcher is not None else "",
         )
         stuck = StuckLoopDetector()
         started = time.monotonic()

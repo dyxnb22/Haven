@@ -31,6 +31,7 @@ class RunCreated(StrictModel):
     git_branch: str = ""
     git_commit: str = ""
     max_steps: int = 0
+    sandbox_backend: str = ""
 
 
 class StepStarted(StrictModel):
@@ -124,6 +125,8 @@ class ExecutionStarted(StrictModel):
     call_id: str
     tool_name: str
     ticket_digest: str
+    #: Which OS mechanism confined this execution; empty for non-process tools.
+    sandbox_backend: str = ""
 
 
 class ToolCompleted(StrictModel):
