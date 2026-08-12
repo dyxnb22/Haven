@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from haven.config import ConfigError, load_config
+from haven.config import ConfigError, explain, load_config
 from haven.domain.budget import Budget
 
 
@@ -30,6 +30,33 @@ def test_project_registers_recipes(tmp_path: Path) -> None:
     config = load_config(tmp_path)
     assert "tests" in config.recipes
     assert config.recipes["tests"].argv == ("pytest", "-q")
+
+
+def test_a_tier_selects_its_budget(tmp_path: Path) -> None:
+    assert load_config(tmp_path, "deep").budget.max_steps == 80
+    assert load_config(tmp_path, "quick").budget.max_steps == 8
+
+
+def test_no_tier_keeps_the_standard_default(tmp_path: Path) -> None:
+    assert load_config(tmp_path).budget == Budget()
+
+
+def test_unknown_tier_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="unknown budget tier"):
+        load_config(tmp_path, "unlimited")
+
+
+def test_a_project_can_tighten_a_tier_but_not_widen_it(tmp_path: Path) -> None:
+    """Tier is a user choice and may raise; a repository still may not."""
+    (tmp_path / ".haven.toml").write_text("[budget]\nmax_steps = 5\nmax_tool_calls = 9999\n")
+    budget = load_config(tmp_path, "deep").budget
+    assert budget.max_steps == 5
+    assert budget.max_tool_calls == 160
+
+
+def test_tier_is_reported_as_the_budget_source(tmp_path: Path) -> None:
+    rows = dict((key, source) for key, _, source in explain(load_config(tmp_path, "deep")))
+    assert rows["budget.max_steps"] == "tier:deep"
 
 
 def test_recipes_deny_network_by_default(tmp_path: Path) -> None:

@@ -19,7 +19,7 @@ import platformdirs
 
 from haven.application.run_service import Pricing
 from haven.contracts.tools import RecipeSpec
-from haven.domain.budget import Budget
+from haven.domain.budget import BUDGET_TIERS, Budget
 
 APP_NAME = "haven"
 
@@ -150,7 +150,7 @@ def _parse_recipes(raw: object, origin: str) -> dict[str, RecipeSpec]:
     return recipes
 
 
-def load_config(workspace: Path | None = None) -> ResolvedConfig:
+def load_config(workspace: Path | None = None, tier: str | None = None) -> ResolvedConfig:
     provider = ProviderConfig()
     budget = Budget()
     pricing = Pricing()
@@ -218,6 +218,14 @@ def load_config(workspace: Path | None = None) -> ResolvedConfig:
             base_url=provider.base_url, model=env_model, api_key_env=provider.api_key_env
         )
         sources["provider.model"] = "env"
+
+    # -- tier: a user-level choice, so it may raise; applied before the
+    # project file so a repository still cannot widen what it inherits -------
+    if tier is not None:
+        if tier not in BUDGET_TIERS:
+            raise ConfigError(f"unknown budget tier {tier!r}; choose one of {sorted(BUDGET_TIERS)}")
+        budget = BUDGET_TIERS[tier]
+        sources["budget"] = f"tier:{tier}"
 
     # -- project level: may only tighten budgets and register recipes --------
     if workspace is not None:

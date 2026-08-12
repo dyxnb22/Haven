@@ -13,17 +13,30 @@
           "arguments_json": "{\"argv\": [\"ls\", \"-la\"], \"cwd\": \".git\"}"
         }
       },
-      { "kind": "finished", "finish_reason": "tool_calls" }
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
     ],
     [
-      { "kind": "text_delta", "text": ".git is protected; refused." },
-      { "kind": "finished", "finish_reason": "stop" }
+      {
+        "kind": "text_delta",
+        "text": ".git is protected; refused."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
     ]
   ],
   "expect": {
     "status": "succeeded",
     "stop_reason": "final_answer",
-    "denied_reasons": ["protected_path"],
-    "error_codes": ["denied"]
+    "denied_reasons": [
+      "protected_path"
+    ],
+    "error_codes": [
+      "denied"
+    ]
   }
 }

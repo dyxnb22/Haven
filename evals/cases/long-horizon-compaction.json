@@ -1,0 +1,120 @@
+{
+  "id": "long-horizon-compaction",
+  "category": "robustness",
+  "goal": "Fix add() in a large module that does not fit in one context",
+  "fixture": "long_horizon",
+  "recipes": {
+    "verify-wide": {
+      "argv": [
+        "{python}",
+        "verify_wide.py"
+      ]
+    }
+  },
+  "turns": [
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c1",
+          "tool_name": "repo.read",
+          "arguments_json": "{\"path\": \"src/wide.py\", \"start_line\": 1, \"max_lines\": 2000}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c2",
+          "tool_name": "repo.read",
+          "arguments_json": "{\"path\": \"src/wide.py\", \"start_line\": 2, \"max_lines\": 2000}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c3",
+          "tool_name": "repo.read",
+          "arguments_json": "{\"path\": \"src/wide.py\", \"start_line\": 3, \"max_lines\": 2000}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c4",
+          "tool_name": "repo.edit",
+          "arguments_json": "{\"path\": \"src/wide.py\", \"old_string\": \"return a - b  # BUG: should be +\", \"new_string\": \"return a + b\", \"summary\": \"use addition in add()\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c5",
+          "tool_name": "repo.diff",
+          "arguments_json": "{}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c6",
+          "tool_name": "repo.check",
+          "arguments_json": "{\"recipe_id\": \"verify-wide\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "text_delta",
+        "text": "Fixed add() in the large module; diff and verify-wide recorded."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
+    ]
+  ],
+  "expect": {
+    "status": "succeeded",
+    "stop_reason": "evidence_satisfied",
+    "allowed_changed_files": [
+      "src/wide.py"
+    ],
+    "file_contains": {
+      "src/wide.py": "return a + b"
+    }
+  }
+}

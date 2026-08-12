@@ -31,6 +31,7 @@ from haven.contracts.events import (
     ToolCompleted,
     ToolProposed,
 )
+from haven.domain.budget import BUDGET_TIERS, DEFAULT_TIER
 from haven.domain.enums import PermissionMode, RunStatus, StopReason
 
 app = typer.Typer(
@@ -142,6 +143,14 @@ def run(
         help="Headless runs are always read-only; disabling this is refused.",
     ),
     json_output: bool = typer.Option(False, "--json", help="Print the outcome as JSON."),
+    tier: str = typer.Option(
+        DEFAULT_TIER,
+        "--tier",
+        help=(
+            f"Budget preset: {', '.join(sorted(BUDGET_TIERS))}. "
+            "A project file may still tighten it."
+        ),
+    ),
 ) -> None:
     """Run a goal headlessly (read-only; no approvals, no writes)."""
     if not read_only:
@@ -158,6 +167,7 @@ def run(
                 mode=PermissionMode.READ_ONLY,
                 approvals=AutoApprover("reject_all"),
                 sinks=[sink],
+                tier=tier,
             )
         except (BootstrapError, ConfigError) as exc:
             typer.echo(f"error: {exc}")

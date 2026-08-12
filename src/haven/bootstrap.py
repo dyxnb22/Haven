@@ -92,9 +92,10 @@ async def build_services(
     sinks: list[EventSinkPort],
     model: ModelPort | None = None,
     store_path: Path | None = None,
+    tier: str | None = None,
 ) -> AppServices:
     workspace_root = resolve_workspace(workspace_path)
-    config = load_config(workspace_root)
+    config = load_config(workspace_root, tier)
 
     workspace = FsWorkspace(workspace_root)
     store = await SqliteSessionStore.open(store_path or db_path(), artifacts_dir())

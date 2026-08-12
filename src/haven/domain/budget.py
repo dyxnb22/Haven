@@ -40,6 +40,28 @@ class Budget:
         )
 
 
+#: Named presets a user picks at the CLI. They live here as data so the ceiling
+#: stays a constant in the program: a run can select a tier, never invent one.
+#: `standard` is the historical default and is deliberately identical to it.
+BUDGET_TIERS: dict[str, Budget] = {
+    "quick": Budget(
+        max_steps=8,
+        max_tool_calls=16,
+        max_wall_time_seconds=180.0,
+        max_cost_usd=0.5,
+    ),
+    "standard": Budget(),
+    "deep": Budget(
+        max_steps=80,
+        max_tool_calls=160,
+        max_wall_time_seconds=1800.0,
+        max_cost_usd=5.0,
+    ),
+}
+
+DEFAULT_TIER = "standard"
+
+
 @dataclass(frozen=True, slots=True)
 class BudgetUsage:
     steps: int = 0

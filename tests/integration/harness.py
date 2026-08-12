@@ -118,6 +118,7 @@ class Harness:
         budget: Budget | None = None,
         repeat_last: bool = False,
         launcher: SandboxLauncher | None = _UNSET_LAUNCHER,
+        recipes: dict[str, RecipeSpec] | None = None,
     ) -> None:
         self.workspace = FsWorkspace(repo)
         self.store = MemorySessionStore()
@@ -137,7 +138,7 @@ class Harness:
             store=self.store,
             emitter=self.emitter,
             approvals=self.approver,
-            recipes=default_recipes(),
+            recipes=recipes if recipes is not None else default_recipes(),
             mode=mode,
             budget=budget if budget is not None else Budget(),
             launcher=resolved,

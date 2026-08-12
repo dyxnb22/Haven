@@ -1,4 +1,29 @@
 from haven.domain import Budget, BudgetUsage, StopReason, check_budget
+from haven.domain.budget import BUDGET_TIERS, DEFAULT_TIER
+
+
+class TestTiers:
+    def test_standard_is_the_default_and_unchanged(self) -> None:
+        """Adding tiers must not silently move the existing behavior."""
+        assert DEFAULT_TIER == "standard"
+        assert BUDGET_TIERS["standard"] == Budget()
+
+    def test_quick_is_tighter_and_deep_is_looser(self) -> None:
+        quick, standard, deep = (BUDGET_TIERS[name] for name in ("quick", "standard", "deep"))
+        assert quick.max_steps < standard.max_steps < deep.max_steps
+        assert quick.max_cost_usd < standard.max_cost_usd < deep.max_cost_usd
+
+    def test_every_tier_has_matching_tool_headroom(self) -> None:
+        """A step budget the tool budget cannot serve would end runs early for
+        the wrong reason."""
+        for name, budget in BUDGET_TIERS.items():
+            assert budget.max_tool_calls >= budget.max_steps, name
+
+    def test_a_project_can_still_only_tighten_a_tier(self) -> None:
+        deep = BUDGET_TIERS["deep"]
+        greedy = Budget(max_steps=10_000, max_cost_usd=999.0)
+        assert deep.tightened(greedy).max_steps == deep.max_steps
+        assert deep.tightened(greedy).max_cost_usd == deep.max_cost_usd
 
 
 def test_fresh_usage_within_budget() -> None:
