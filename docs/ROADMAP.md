@@ -3,6 +3,35 @@
 Written 2026-08-12, after three external gap analyses (against Reasonix, Codex
 CLI, and opencode) and a verification pass over their claims.
 
+## Progress (2026-08-12)
+
+All phases have been executed; each links to the ADR that records its decision.
+
+- **Phase 0 — claims made true again: done.** Process writes attributed to the
+  Evidence Gate (ADR 0012), exec/check sandbox scope decided (ADR 0013),
+  provider client closed, `reasoning_effort` wired, `doctor` side-effect free,
+  metrics generated with a CI drift guard (`scripts/refresh_metrics.py`), MIT
+  license added.
+- **Phase 1 — DeepSeek correctness: done.** Reasoning replay on tool-call turns
+  (ADR 0014); output-truncation continuation and the live 400-confirmation
+  documented as pending in `docs/EVAL_LIVE.md`.
+- **Phase 2 — sessions: core done (ADR 0015).** `continue_run`, `haven
+  continue`, and TUI follow-up. Live steering and rewind/fork UI deferred with
+  reasons.
+- **Phase 3 — real-repo survival: done.** Verification discovery (`haven
+  discover`) and `repo.delete` / `repo.move` through the full channel.
+  Grammar-based multi-file `apply_patch` deferred.
+- **Phase 4 — measuring task success: scaffolding done.** Report splits quality
+  from safety; a live 50–100 real-repo suite is the resource-gated path to a
+  real success rate (`docs/EVAL.md`).
+- **Phase 5 — extension boundary: decided (ADR 0016).** Guardrails documented;
+  MCP, LSP, plugins, and multi-agent stay deferred with unlock conditions,
+  consistent with the thesis.
+
+The sections below are the original plan, kept as written.
+
+---
+
 ## The ordering principle
 
 The three reviews largely agree on what Haven lacks, and reading them together
