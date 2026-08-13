@@ -74,6 +74,12 @@ class MemorySessionStore:
         return list(self.events.get(run_id, []))
 
     async def save_checkpoint(self, checkpoint: CheckpointV1) -> None:
+        # Keep the highest-seq snapshot, matching the SQLite store's
+        # `ORDER BY seq DESC LIMIT 1` read. An out-of-order save must not
+        # move resume backwards onto an older transcript.
+        existing = self.checkpoints.get(checkpoint.run_id)
+        if existing is not None and existing.last_seq > checkpoint.last_seq:
+            return
         self.checkpoints[checkpoint.run_id] = checkpoint
 
     async def load_checkpoint(self, run_id: str) -> CheckpointV1 | None:

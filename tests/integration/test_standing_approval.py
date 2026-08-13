@@ -26,10 +26,20 @@ class CountingApprover(ApprovalResponder):
 
 
 async def test_identical_check_reruns_ask_only_once(tmp_path: Path) -> None:
+    # repo.diff between the checks mirrors a real fix/verify loop — and is
+    # required for determinism: three *consecutive* identical calls with
+    # identical results is precisely the no-progress condition, so without
+    # something in between the stuck detector (threshold 3) stops the run.
+    # It only ever passed because the check result carries duration_ms and
+    # the milliseconds usually differed; that jitter was the 1-in-8 flake
+    # recorded on 2026-08-13. The interleaved call resets the counter, so
+    # this now tests standing approvals rather than the clock.
     repo = make_repo(tmp_path)
     turns = [
         [tool("c1", "repo.check", recipe_id="always-pass"), finish("tool_calls")],
+        [tool("d1", "repo.diff"), finish("tool_calls")],
         [tool("c2", "repo.check", recipe_id="always-pass"), finish("tool_calls")],
+        [tool("d2", "repo.diff"), finish("tool_calls")],
         [tool("c3", "repo.check", recipe_id="always-pass"), finish("tool_calls")],
         [text("Ran the check three times."), finish()],
     ]

@@ -231,6 +231,18 @@ class SqliteSessionStore:
             "VALUES (?, ?, ?, ?, ?)",
             (checkpoint.run_id, checkpoint.last_seq, state_json, checkpoint.checksum(), _now()),
         )
+        # Drop what this row supersedes, in the same transaction. A checkpoint
+        # is a fast-resume snapshot of the whole transcript so far and one is
+        # written per tool batch, so retaining the chain costs O(run length^2)
+        # bytes — measured at 92% of a real store — while `load_checkpoint`
+        # only ever reads `ORDER BY seq DESC LIMIT 1`. The event journal, not
+        # this table, is the append-only history (ADR 0004).
+        # Strictly `<`: a higher-seq row, which load_checkpoint would still
+        # prefer, is never removed by an out-of-order save.
+        await self._db.execute(
+            "DELETE FROM checkpoints WHERE run_id = ? AND seq < ?",
+            (checkpoint.run_id, checkpoint.last_seq),
+        )
         await self._db.commit()
 
     async def load_checkpoint(self, run_id: str) -> CheckpointV1 | None:

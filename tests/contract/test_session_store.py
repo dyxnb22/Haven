@@ -132,6 +132,28 @@ async def test_execution_journal(store: SessionStorePort) -> None:
     assert loaded[0].postimage_digest == "post"
 
 
+async def test_successive_checkpoints_resolve_to_the_newest(store: SessionStorePort) -> None:
+    """A run checkpoints once per tool batch; resume must always land on the
+    latest snapshot, whichever store is underneath."""
+    for seq in (1, 5, 9):
+        await store.save_checkpoint(checkpoint(last_seq=seq))
+    loaded = await store.load_checkpoint("run-1")
+    assert loaded is not None
+    assert loaded.last_seq == 9
+
+
+async def test_an_out_of_order_save_does_not_lose_the_newer_checkpoint(
+    store: SessionStorePort,
+) -> None:
+    """Pruning superseded rows must never remove one that is *ahead* of the
+    row being written — resume would silently go backwards."""
+    await store.save_checkpoint(checkpoint(last_seq=9))
+    await store.save_checkpoint(checkpoint(last_seq=4))
+    loaded = await store.load_checkpoint("run-1")
+    assert loaded is not None
+    assert loaded.last_seq == 9
+
+
 async def test_update_with_empty_postimage_preserves_the_recorded_one(
     store: SessionStorePort,
 ) -> None:
@@ -258,6 +280,22 @@ class TestSqliteSpecific:
         env = await reopened.append_event("run-1", StepStarted(run_id="run-1", step=2))
         assert env.seq == 2
         await reopened.close()
+
+    async def test_superseded_checkpoint_rows_are_pruned(self, tmp_path: Path) -> None:
+        """Storage claim behind the behavioral contract above: one live row
+        per run, not one per tool batch. Measured before this: superseded
+        rows were 92% of a real store and grew with run length squared."""
+        store = await SqliteSessionStore.open(tmp_path / "haven.db", tmp_path / "artifacts")
+        for seq in range(1, 11):
+            await store.save_checkpoint(checkpoint(last_seq=seq))
+        await store.save_checkpoint(checkpoint(run_id="other-run", last_seq=3))
+
+        cursor = await store._db.execute(  # type: ignore[attr-defined]  # noqa: SLF001
+            "SELECT run_id, seq FROM checkpoints ORDER BY run_id, seq"
+        )
+        rows = [(str(r["run_id"]), int(r["seq"])) for r in await cursor.fetchall()]
+        assert rows == [("other-run", 3), ("run-1", 10)]
+        await store.close()
 
     async def test_corrupted_event_fails_closed(self, tmp_path: Path) -> None:
         db, art = tmp_path / "haven.db", tmp_path / "artifacts"
