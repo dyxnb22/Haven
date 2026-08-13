@@ -172,11 +172,22 @@ Read confinement matters because `repo.exec` validates `cwd`, not the paths
 inside `argv`: without it, `["cat", "~/.ssh/id_rsa"]` would succeed and quietly
 undo the boundary `repo.read` enforces.
 
+Because that confinement is coarse, approval friction is calibrated to the
+**operands**, not only the program (ADR 0026). A command from the read-only
+table is auto-allowed while every operand stays inside the workspace; an
+operand that is absolute, `~`-rooted, `..`-traversing, or hidden behind
+`--flag=/path` re-classifies the call as ordinary exec and it goes to
+approval. Without that rule an auto-allowed `cat` of an absolute path would
+read a file the human never approved and return it into the transcript — and
+therefore to the model provider. On Linux it also closes the specific hole
+where `/proc/<parent-pid>/environ` reaches the **parent** process's
+environment, around the child's `ENV_ALLOWLIST` scrub.
+
 **What this does not stop**, stated plainly:
 
-- Secrets stored outside `$HOME` (under `/opt`, say) remain readable. The
-  confinement is coarse; it defeats the obvious credential paths, not a
-  determined search.
+- Secrets stored outside `$HOME` (under `/opt`, say) remain readable *once the
+  human approves the call*. The confinement is coarse; what the operand rule
+  above adds is that such a read is never silent.
 - IPC. The macOS profile allows `mach-lookup` and POSIX shared memory so
   ordinary interpreters run; process isolation is not a goal here.
 - UDP and DNS on Linux: Landlock ABI 4 governs TCP only.

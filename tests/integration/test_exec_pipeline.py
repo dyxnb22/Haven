@@ -40,6 +40,22 @@ class TestApprovalFlow:
         assert completed(h)[0].status == "ok"
         assert h.sink.events_of("approval.requested") == []
 
+    async def test_a_read_reaching_outside_the_workspace_asks_first(self, tmp_path: Path) -> None:
+        """The same `cat` that is silent on a workspace file must prompt when
+        it points outside — otherwise an unapproved file's contents reach the
+        transcript, and with it the model provider (on Linux this shape reads
+        /proc/<parent>/environ, around the child's scrubbed environment)."""
+        turns = [
+            [tool("c1", "repo.exec", argv=["cat", "/etc/hosts"]), finish("tool_calls")],
+            [text("Read it."), finish()],
+        ]
+        h = Harness(make_repo(tmp_path), turns, approver=AutoApprover("reject_all"))
+        await h.service.run("Show me the hosts file")
+
+        assert h.sink.events_of("approval.requested"), "an escaping read must be approved"
+        assert completed(h)[0].error_code == "approval_rejected"
+        assert "execution.started" not in h.sink.kinds()
+
     async def test_other_command_requests_approval_before_running(self, tmp_path: Path) -> None:
         turns = [
             [tool("c1", "repo.exec", argv=[sys.executable, "-V"]), finish("tool_calls")],

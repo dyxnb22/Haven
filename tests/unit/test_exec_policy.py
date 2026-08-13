@@ -29,6 +29,64 @@ class TestSafeRead:
         assert classify_argv(("/bin/ls",)) is ExecClass.SAFE_READ
 
 
+class TestOperandsMustStayInTheWorkspace:
+    """A read is friction-free only while it reads the workspace.
+
+    The sandbox blocks writes and hides $HOME but leaves the rest of the
+    filesystem readable, and repo.exec validates cwd rather than the paths in
+    argv — so an auto-allowed `cat /abs/path` would read an unapproved file
+    and feed it back to the model provider. On Linux that includes
+    /proc/<parent>/environ, i.e. the parent process's whole environment,
+    around the child's scrubbed one.
+    """
+
+    def test_absolute_operands_require_approval(self) -> None:
+        for argv in (
+            ("cat", "/proc/self/environ"),
+            ("cat", "/etc/passwd"),
+            ("head", "-n", "1", "/etc/shadow"),
+            ("grep", "-r", "secret", "/var"),
+            ("tail", "/opt/app/config.yml"),
+            ("wc", "-l", "/etc/hosts"),
+            ("find", "/etc", "-name", "*.conf"),
+        ):
+            assert classify_argv(argv) is ExecClass.OTHER, argv
+
+    def test_parent_traversal_requires_approval(self) -> None:
+        for argv in (
+            ("cat", "../../etc/passwd"),
+            ("cat", "../sibling-repo/.env"),
+            ("find", "..", "-name", "id_rsa"),
+        ):
+            assert classify_argv(argv) is ExecClass.OTHER, argv
+
+    def test_home_shorthand_requires_approval(self) -> None:
+        assert classify_argv(("cat", "~/.ssh/id_rsa")) is ExecClass.OTHER
+
+    def test_a_path_hidden_behind_a_flag_value_requires_approval(self) -> None:
+        assert classify_argv(("grep", "--file=/etc/passwd", "x")) is ExecClass.OTHER
+
+    def test_workspace_relative_reads_stay_friction_free(self) -> None:
+        """The common case must not regress into a prompt."""
+        for argv in (
+            ("cat", "README.md"),
+            ("cat", "./src/haven/config.py"),
+            ("head", "-n", "20", "src/a.py"),
+            ("grep", "-rn", "pattern", "src"),
+            ("rg", "--json", "needle"),
+            ("ls", "-la"),
+            ("find", ".", "-name", "*.py"),
+            ("git", "log", "--oneline", "-n", "5"),
+            ("git", "show", "HEAD~2"),
+        ):
+            assert classify_argv(argv) is ExecClass.SAFE_READ, argv
+
+    def test_the_program_path_itself_is_not_an_operand(self) -> None:
+        """/bin/ls is how the program is named, not what it reads."""
+        assert classify_argv(("/bin/ls",)) is ExecClass.SAFE_READ
+        assert classify_argv(("/usr/bin/cat", "README.md")) is ExecClass.SAFE_READ
+
+
 class TestArity:
     def test_bare_git_is_not_safe(self) -> None:
         """A longer prefix must not be inferred from a shorter one."""
