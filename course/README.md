@@ -58,7 +58,7 @@ Recommended setup:
 ```bash
 uv sync --locked
 uv run pytest -q                 # 342 tests, ~30s, fully offline
-uv run haven eval --offline      # 27 cases, 0 security violations
+uv run haven eval --offline      # all cases pass, 0 security violations
 ```
 
 Read a module, open the files it names in one pane and the module in another, run

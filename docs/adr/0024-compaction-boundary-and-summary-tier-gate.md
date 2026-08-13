@@ -48,7 +48,8 @@ unexamined default.
   load-bearing fact (reads + digests, edits + postimages, checks + exit
   codes) survives into the digest, that repository bytes never do, and that
   the digest is byte-identical across calls (prefix cache, ADR 0008). Live
-  prompt-cache hit stayed at 87–89% with compaction in the loop.
+  prompt-cache hit stayed at 86–93% across recent runs with compaction in
+  the loop (the full miss decomposition is in EVAL_LIVE.md).
 - **The ceiling is real**: the builder asserts the assembled request fits,
   and the offline `long-horizon-compaction` case exercises overflow
   end to end.

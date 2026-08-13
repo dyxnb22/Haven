@@ -59,14 +59,15 @@ three, so a reverse import fails CI rather than review.
 - `contracts/` — strict Pydantic v2 DTOs for every boundary (model wire-neutral
   types, tool args/results, application events, versioned checkpoint).
 - `ports/` — `typing.Protocol` interfaces owned by the core: `ModelPort`,
-  `WorkspacePort`, `ExecutorPort`, `SessionStorePort`, `EventSinkPort`,
-  `ClockPort`.
+  `WorkspacePort`, `ExecutorPort`, `SandboxLauncher`, `SessionStorePort`,
+  `EventSinkPort`, `ClockPort`.
 - `application/` — use cases: `ContextBuilder`, `ToolPipeline`, `RunService`
   (the agent loop), `RecoveryService`, `ReplayService`, `EventEmitter`. Depends
   only on `domain`, `ports`, and `contracts`.
 - `adapters/` — concrete implementations: filesystem workspace, subprocess
-  executor, OpenAI-compatible + scripted providers, SQLite/in-memory session
-  stores, Git baseline.
+  executor, OS sandbox launchers (Seatbelt on macOS, Landlock on Linux),
+  OpenAI-compatible + scripted providers, SQLite/in-memory session stores,
+  Git baseline, and the single-writer workspace lease (ADR 0020).
 - `interfaces/` — Typer CLI and Textual TUI. Never import adapters directly.
 - `bootstrap.py` — the only composition root; it is the single place that knows
   both concrete adapters and use cases. Tests substitute `ScriptedModel` and

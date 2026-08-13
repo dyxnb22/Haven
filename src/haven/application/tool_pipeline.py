@@ -122,11 +122,12 @@ class ToolPipeline:
 
     The numbered comments inside `execute` mirror the stage order in the
     module docstring (1-2 registry/schema, 3 facts, 4 policy, 5 approval,
-    6 ticket, 7 execute + evidence). Read tools return early at stage 7;
-    write tools journal STARTED -> CONFIRMED/FAILED around the actual I/O so
-    a crash between the two is classifiable; `repo.exec` / `repo.check`
-    additionally snapshot the tree before/after to attribute process writes
-    (ADR 0012) and fail the call on protected-path tamper (ADR 0018).
+    6 ticket, 7 execute + evidence). At stage 7, read tools execute without
+    an execution journal entry (no effect to recover); write tools journal
+    STARTED -> CONFIRMED/FAILED around the actual I/O so a crash between the
+    two is classifiable; `repo.exec` / `repo.check` additionally snapshot the
+    tree before/after to attribute process writes (ADR 0012) and fail the
+    call on protected-path tamper (ADR 0018).
     """
 
     def __init__(

@@ -42,7 +42,8 @@ Commands:
   /export    write a markdown report of the current run
   /quit      exit Haven
 Input:
-  @path      mention a file — its contents are read into your next message
+  @path      mention a file — the agent is pointed at it explicitly (it
+             still reads the file itself through repo.read)
 Keys:
   Enter      submit a task
   a / r      approve / reject (in the approval dialog)

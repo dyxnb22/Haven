@@ -37,7 +37,8 @@ uv sync --locked
 uv run haven eval --offline
 ```
 
-Point out the summary line: `27/27 cases passed, security violations: 0`. Open
+Point out the summary line: all cases passed, `security violations: 0` (the
+current case count is in the README's generated metrics table). Open
 `eval_report/report.md` and highlight the per-category table — task, robustness,
 security, injection, budget, recovery — and that security is its own hard gate,
 not averaged into a score.

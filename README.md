@@ -209,7 +209,7 @@ and headless emit identical traces; the live DeepSeek run is written up in
 [`docs/EVAL_LIVE.md`](docs/EVAL_LIVE.md).
 
 `docs/PROJECT_CARD.md` has the one-page summary and trade-off table;
-`docs/POSTMORTEM.md` documents two real defects found during development,
+`docs/POSTMORTEM.md` documents three real defects found during development,
 including one where the security gate itself was wrong.
 
 ## Documentation

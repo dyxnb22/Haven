@@ -66,9 +66,10 @@ drifts from the sources, so no number here is hand-maintained.
 Beyond the generated table: the live real-repo row above is measured on
 unmodified third-party projects with each project's own test suite as the
 oracle — a run counts only when the Evidence Gate saw a diff and a green
-registered check. Prompt-cache hit is **87–89%** across the live suites (up
-from 71% before the ADR 0008 reordering); cost is billed with a cache-aware
-rate card (ADR 0011); sandbox enforcement — writes outside the workspace,
+registered check. Prompt-cache hit is **86–93%** across the live suites (up
+from 71% before the ADR 0008 reordering, and measured to be at the structural
+ceiling — the remaining misses decompose to 85% first-time content, see
+EVAL_LIVE.md); cost is billed with a cache-aware rate card (ADR 0011); sandbox enforcement — writes outside the workspace,
 reads of `$HOME`, and TCP all refused by the OS — is asserted by running real
 commands on macOS and Linux; and the golden trace is stable across runs, with
 TUI and headless producing identical traces.
