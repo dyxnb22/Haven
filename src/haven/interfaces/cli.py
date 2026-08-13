@@ -445,6 +445,51 @@ def sessions_show(run_id: str) -> None:
 
 
 @app.command()
+def gc(
+    keep: int = typer.Option(20, help="Newest runs to keep regardless of age."),
+    older_than_days: int | None = typer.Option(
+        None,
+        "--older-than-days",
+        help="Additionally keep any run younger than this many days.",
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Actually delete. Default is a dry run."),
+) -> None:
+    """Prune old runs and unreferenced artifacts from the local store.
+
+    Dry run by default: prints what would be removed and touches nothing
+    until --yes. Active runs are always kept; artifacts survive as long as
+    any surviving run's checkpoint still references them.
+    """
+
+    async def _gc() -> None:
+        from haven.application.maintenance import collect_garbage
+        from haven.bootstrap import open_store
+
+        store = await open_store()
+        try:
+            report = await collect_garbage(
+                store, keep=keep, older_than_days=older_than_days, apply=yes
+            )
+        finally:
+            await store.close()
+
+        verb = "would delete" if report.dry_run else "deleted"
+        typer.echo(
+            f"{verb} {len(report.deleted)} run(s) and "
+            f"{report.artifacts_deleted} unreferenced artifact(s); "
+            f"keeping {len(report.kept)} run(s)"
+        )
+        for note in report.notes:
+            typer.echo(f"note: {note}")
+        for run_id in report.deleted:
+            typer.echo(f"  {run_id}")
+        if report.dry_run and (report.deleted or report.artifacts_deleted):
+            typer.echo("re-run with --yes to apply")
+
+    asyncio.run(_gc())
+
+
+@app.command()
 def replay(run_id: str) -> None:
     """Replay a run's journal to the console (no model, no tools)."""
 
@@ -627,32 +672,10 @@ def discover(
     `.haven.toml` (the model still never supplies a command — you authorize
     it once, and it becomes a normal registered recipe).
     """
-    from haven.domain.discovery import KNOWN_FILES, discover_recipes
+    from haven.domain.discovery import discover_recipes
 
     ws = workspace.resolve()
-    files: dict[str, str] = {}
-    for name in KNOWN_FILES:
-        candidate = ws / name
-        if candidate.is_file():
-            try:
-                files[name] = candidate.read_text(encoding="utf-8", errors="replace")[:65536]
-            except OSError:
-                continue
-    # A shallow listing is all the structural signals need: the tests/test
-    # directories' entries and any src/<pkg>/__init__.py.
-    paths: list[str] = []
-    for sub in ("tests", "test", "src"):
-        directory = ws / sub
-        if not directory.is_dir():
-            continue
-        try:
-            for child in directory.iterdir():
-                paths.append(f"{sub}/{child.name}")
-                if sub == "src" and child.is_dir() and (child / "__init__.py").is_file():
-                    paths.append(f"src/{child.name}/__init__.py")
-        except OSError:
-            continue
-
+    files, paths = _discovery_inputs(ws)
     recipes = discover_recipes(files, paths)
     if not recipes:
         typer.echo(
@@ -677,6 +700,108 @@ def discover(
         typer.echo(f"[recipes.{recipe.id}]  # {recipe.rationale}")
         typer.echo(f"argv = [{argv}]\n")
     typer.echo("re-run with --accept to write these into .haven.toml")
+    raise typer.Exit(EXIT_OK)
+
+
+def _discovery_inputs(ws: Path) -> tuple[dict[str, str], list[str]]:
+    """The file contents and shallow tree listing recipe discovery reads.
+
+    Shared by `discover` and `init` so both see identical signals. Reads only
+    the known project files plus one directory level; runs nothing.
+    """
+    from haven.domain.discovery import KNOWN_FILES
+
+    files: dict[str, str] = {}
+    for name in KNOWN_FILES:
+        candidate = ws / name
+        if candidate.is_file():
+            try:
+                files[name] = candidate.read_text(encoding="utf-8", errors="replace")[:65536]
+            except OSError:
+                continue
+    # A shallow listing is all the structural signals need: the tests/test
+    # directories' entries and any src/<pkg>/__init__.py.
+    paths: list[str] = []
+    for sub in ("tests", "test", "src"):
+        directory = ws / sub
+        if not directory.is_dir():
+            continue
+        try:
+            for child in directory.iterdir():
+                paths.append(f"{sub}/{child.name}")
+                if sub == "src" and child.is_dir() and (child / "__init__.py").is_file():
+                    paths.append(f"src/{child.name}/__init__.py")
+        except OSError:
+            continue
+    return files, paths
+
+
+@app.command()
+def init(
+    workspace: Path = typer.Option(Path("."), "--workspace", "-w"),
+    accept: bool = typer.Option(
+        False, "--accept", help="Also persist the suggested recipes into .haven.toml."
+    ),
+) -> None:
+    """One-step onboarding: environment summary + recipe discovery.
+
+    The condensed equivalent of `haven doctor` followed by
+    `haven discover [--accept]`: shows what Haven will run with (model,
+    sandbox backend, API key presence) and which check recipes the project's
+    own files imply. Runs nothing from the repository, and writing recipes
+    still requires --accept — the model never supplies a command either way.
+    """
+    from haven.bootstrap import sandbox_backend_name, select_launcher
+    from haven.domain.discovery import discover_recipes
+
+    ws = workspace.resolve()
+    if not ws.is_dir():
+        typer.echo(f"error: workspace does not exist: {ws}")
+        raise typer.Exit(EXIT_USAGE)
+
+    try:
+        config = load_config(ws)
+    except ConfigError as exc:
+        typer.echo(f"error: {exc}")
+        raise typer.Exit(EXIT_USAGE) from None
+
+    key_state = (
+        "present" if config.provider.api_key() else f"missing (${config.provider.api_key_env})"
+    )
+    typer.echo(f"workspace:  {ws}")
+    typer.echo(f"model:      {config.provider.model} @ {config.provider.base_url}")
+    typer.echo(f"api key:    {key_state}")
+    typer.echo(f"sandbox:    {sandbox_backend_name(select_launcher())}")
+    typer.echo(f"recipes:    {len(config.recipes)} registered in .haven.toml")
+    typer.echo("")
+
+    files, paths = _discovery_inputs(ws)
+    suggestions = discover_recipes(files, paths)
+    fresh = [s for s in suggestions if s.id not in config.recipes]
+    if not fresh:
+        if config.recipes:
+            typer.echo("verification is configured; nothing further to suggest.")
+        else:
+            typer.echo(
+                "no verification commands detected; add a [recipes] block to "
+                ".haven.toml by hand so the Evidence Gate has an oracle."
+            )
+        raise typer.Exit(EXIT_OK)
+
+    if accept:
+        added, skipped = _persist_recipes(ws / ".haven.toml", fresh)
+        for recipe_id in added:
+            typer.echo(f"added [recipes.{recipe_id}] to .haven.toml")
+        for recipe_id in skipped:
+            typer.echo(f"kept existing [recipes.{recipe_id}] (not overwritten)")
+        typer.echo("\nready: `haven` opens the TUI in this workspace.")
+        raise typer.Exit(EXIT_OK)
+
+    typer.echo("suggested recipes (review, then re-run with --accept to write them):\n")
+    for recipe in fresh:
+        argv = ", ".join(f'"{item}"' for item in recipe.argv)
+        typer.echo(f"[recipes.{recipe.id}]  # {recipe.rationale}")
+        typer.echo(f"argv = [{argv}]\n")
     raise typer.Exit(EXIT_OK)
 
 

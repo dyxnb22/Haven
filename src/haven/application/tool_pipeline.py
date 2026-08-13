@@ -654,7 +654,10 @@ class ToolPipeline:
         elif isinstance(args, RepoCheckArgs):
             recipe = self._recipes[args.recipe_id]
             preview_text = "$ " + " ".join(recipe.argv)
-            summary = f"run check recipe {args.recipe_id!r}"
+            summary = (
+                f"run check recipe {args.recipe_id!r} "
+                "(approving also covers identical re-runs for the rest of this run)"
+            )
 
         digest = compute_approval_digest(
             workspace_digest=self._workspace.workspace_digest,
@@ -664,6 +667,44 @@ class ToolPipeline:
             preimage_digest=facts.preimage_digest,
             preview_digest=sha256_text(preview_text) if preview_text else None,
         )
+
+        if isinstance(args, RepoCheckArgs) and digest in ctx.standing_check_grants:
+            # Standing grant (ADR 0025): the human already approved this
+            # byte-identical check in this run (same recipe id and argv, same
+            # workspace, same tool version — the digest pins all of it). Mint
+            # and consume a fresh single-use approval so the journal still
+            # carries one approval row per execution, announce the grant, and
+            # skip the modal. Only repo.check is ever eligible: it runs a
+            # user-registered recipe and its repeat is the verify loop's
+            # normal shape; writes and exec always re-ask.
+            approval_id = new_approval_id()
+            await self._store.record_approval(approval_id, ctx.run_id, digest)
+            await self._store.decide_approval(approval_id, ApprovalDecision.APPROVED)
+            await self._emitter.emit(
+                ctx.run_id,
+                Notice(
+                    run_id=ctx.run_id,
+                    level="info",
+                    message=(
+                        f"standing approval: check recipe {args.recipe_id!r} was "
+                        "approved earlier in this run; re-running without asking"
+                    ),
+                ),
+            )
+            await self._emitter.emit(
+                ctx.run_id,
+                ApprovalDecided(
+                    run_id=ctx.run_id,
+                    approval_id=approval_id,
+                    decision=ApprovalDecision.APPROVED.value,
+                ),
+            )
+            if not await self._store.consume_approval(approval_id, digest):
+                ctx.move_to(RunStatus.RUNNING_MODEL)
+                return False, None, "approval could not be consumed (stale or reused)"
+            ctx.move_to(RunStatus.EXECUTING_TOOL)
+            return True, str(approval_id), ""
+
         approval_id = new_approval_id()
         await self._store.record_approval(approval_id, ctx.run_id, digest)
         request = ApprovalRequest(
@@ -707,6 +748,11 @@ class ToolPipeline:
         if not await self._store.consume_approval(approval_id, digest):
             ctx.move_to(RunStatus.RUNNING_MODEL)
             return False, None, "approval could not be consumed (stale or reused)"
+        if isinstance(args, RepoCheckArgs):
+            # The first human approval of this exact check arms the run-scoped
+            # standing grant announced on the card (ADR 0025). A rejection
+            # never arms anything — this line is only reached on approval.
+            ctx.standing_check_grants.add(digest)
         ctx.move_to(RunStatus.EXECUTING_TOOL)
         return True, str(approval_id), ""
 

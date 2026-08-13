@@ -79,4 +79,17 @@ class SessionStorePort(Protocol):
 
     async def get_artifact(self, digest: str) -> bytes | None: ...
 
+    # -- maintenance (haven gc) ------------------------------------------------
+
+    async def delete_run(self, run_id: str) -> None:
+        """Remove one run and everything recorded under it: events,
+        checkpoints, approvals, and execution journal rows. Artifacts are
+        content-addressed and possibly shared, so they are swept separately
+        against the set still referenced by surviving checkpoints."""
+        ...
+
+    async def list_artifacts(self) -> list[str]: ...
+
+    async def delete_artifact(self, digest: str) -> None: ...
+
     async def close(self) -> None: ...

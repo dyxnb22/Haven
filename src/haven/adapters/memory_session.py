@@ -132,5 +132,26 @@ class MemorySessionStore:
     async def get_artifact(self, digest: str) -> bytes | None:
         return self.artifacts.get(digest)
 
+    async def delete_run(self, run_id: str) -> None:
+        self.runs.pop(run_id, None)
+        self.events.pop(run_id, None)
+        self.checkpoints.pop(run_id, None)
+        self.approvals = {
+            approval_id: record
+            for approval_id, record in self.approvals.items()
+            if record["run_id"] != run_id
+        }
+        self.executions = {
+            call_id: record
+            for call_id, record in self.executions.items()
+            if record.run_id != run_id
+        }
+
+    async def list_artifacts(self) -> list[str]:
+        return sorted(self.artifacts)
+
+    async def delete_artifact(self, digest: str) -> None:
+        self.artifacts.pop(digest, None)
+
     async def close(self) -> None:
         return None

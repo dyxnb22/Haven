@@ -349,6 +349,25 @@ class SqliteSessionStore:
         target = self._artifacts_dir / digest
         return target.read_bytes() if target.exists() else None
 
+    async def delete_run(self, run_id: str) -> None:
+        # One implicit transaction: either the run and all its rows go, or
+        # none do (the connection commits once at the end).
+        for table in ("events", "checkpoints", "approvals", "executions"):
+            await self._db.execute(f"DELETE FROM {table} WHERE run_id = ?", (run_id,))  # noqa: S608
+        await self._db.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+        await self._db.commit()
+        self._next_seq.pop(run_id, None)
+
+    async def list_artifacts(self) -> list[str]:
+        if not self._artifacts_dir.is_dir():
+            return []
+        return sorted(p.name for p in self._artifacts_dir.iterdir() if p.is_file())
+
+    async def delete_artifact(self, digest: str) -> None:
+        if not digest or "/" in digest or "." in digest:
+            return
+        (self._artifacts_dir / digest).unlink(missing_ok=True)
+
 
 def _row_to_run(row: aiosqlite.Row) -> RunRecord:
     return RunRecord(

@@ -56,7 +56,16 @@ workspace + tool + args + preimage + preview and is single-use (a conditional
 SQL `UPDATE`), so it cannot be replayed or reused for a different action. Every
 tool that pins a file's content at approval — edit, delete, and the source of a
 move — re-verifies that content on disk before executing, so a change between
-approval and execution fails closed with `stale_preimage`. A unit test asserts that every registered tool is
+approval and execution fails closed with `stale_preimage`.
+
+One narrow, disclosed exception to per-invocation asking (ADR 0025): after a
+human approves a `repo.check`, byte-identical re-runs of that exact check
+(same digest, so same recipe, argv, workspace, and tool version) are covered
+for the remainder of that run — the card says so at consent time, a
+rejection arms nothing, the grant is memory-only (a resumed run asks again),
+and every skipped ask still mints and consumes its own single-use approval
+row so the journal stays one-to-one. Writes, `repo.exec`, and patches always
+re-ask. A unit test asserts that every registered tool is
 classified by the policy and that no side-effecting tool is ever auto-allowed,
 so adding a tool cannot silently create an unguarded path.
 

@@ -194,6 +194,55 @@ async def test_artifact_roundtrip(store: SessionStorePort) -> None:
     assert await store.get_artifact("missing" * 8) is None
 
 
+async def test_delete_run_removes_every_trace(store: SessionStorePort) -> None:
+    """gc's primitive: one call removes the run row, its events, checkpoint,
+    approvals, and execution journal — and leaves other runs untouched."""
+    for run_id in ("run-1", "run-2"):
+        await store.create_run(run_id, "/tmp/ws", "d", "goal", "interactive")
+        await store.append_event(run_id, StepStarted(run_id=run_id, step=1))
+        await store.save_checkpoint(checkpoint(run_id=run_id))
+        await store.record_approval(f"apr-{run_id}", run_id, "digest")
+        await store.record_execution(
+            ExecutionRecord(
+                call_id=f"c-{run_id}",
+                run_id=run_id,
+                ticket_digest="t",
+                tool_name="repo.edit",
+                effect_state=EffectState.STARTED,
+                preimage_digest="pre",
+                postimage_digest="post",
+                path="src/a.py",
+            )
+        )
+
+    await store.delete_run("run-1")
+
+    assert await store.get_run("run-1") is None
+    assert await store.load_events("run-1") == []
+    assert await store.load_checkpoint("run-1") is None
+    assert await store.load_executions("run-1") == []
+    # the other run is fully intact
+    assert await store.get_run("run-2") is not None
+    assert len(await store.load_events("run-2")) == 1
+    assert await store.load_checkpoint("run-2") is not None
+    assert len(await store.load_executions("run-2")) == 1
+
+
+async def test_artifact_listing_and_deletion(store: SessionStorePort) -> None:
+    d1 = await store.put_artifact(b"one")
+    d2 = await store.put_artifact(b"two")
+    listed = await store.list_artifacts()
+    assert d1 in listed and d2 in listed
+
+    await store.delete_artifact(d1)
+    assert await store.get_artifact(d1) is None
+    assert d1 not in await store.list_artifacts()
+    # deleting a missing digest is a no-op, and path-shaped names are refused
+    await store.delete_artifact(d1)
+    await store.delete_artifact("../escape")
+    assert await store.get_artifact(d2) == b"two"
+
+
 class TestSqliteSpecific:
     async def test_events_survive_reopen(self, tmp_path: Path) -> None:
         db, art = tmp_path / "haven.db", tmp_path / "artifacts"

@@ -33,6 +33,12 @@ class RunContext:
     #: The agent's current plan. Lives in State, not the transcript, so it is
     #: re-rendered into Context every turn and cannot be truncated away.
     plan: tuple[PlanStep, ...] = ()
+    #: Approval digests of repo.check calls the human already approved in
+    #: THIS run (ADR 0025). A byte-identical re-run of such a check is
+    #: auto-approved with a journal trail instead of re-asking. Run-scoped in
+    #: memory only — deliberately not checkpointed, so a resumed run asks
+    #: once again before re-arming.
+    standing_check_grants: set[str] = field(default_factory=set)
     nudges: int = 0
     last_seq: int = 0
 

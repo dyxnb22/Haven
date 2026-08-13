@@ -491,7 +491,7 @@
     "kind": "approval.requested",
     "call_id": "c5",
     "tool_name": "repo.check",
-    "summary": "run check recipe 'verify-calc'",
+    "summary": "run check recipe 'verify-calc' (approving also covers identical re-runs for the rest of this run)",
     "preview": "<preview>",
     "risk": "medium"
   },

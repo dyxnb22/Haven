@@ -175,6 +175,36 @@ def test_discover_says_nothing_for_a_bare_directory(tmp_path: Path) -> None:
     assert "no verification commands detected" in result.stdout
 
 
+def test_init_summarizes_environment_and_suggests_recipes(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\ntestpaths = ['tests']\n")
+    result = runner.invoke(app, ["init", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "workspace:" in result.stdout
+    assert "sandbox:" in result.stdout
+    assert "api key:" in result.stdout
+    assert "[recipes.pytest]" in result.stdout
+    assert "--accept" in result.stdout
+
+
+def test_init_accept_writes_recipes_then_reports_configured(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\ntestpaths = ['tests']\n")
+    result = runner.invoke(app, ["init", "--workspace", str(tmp_path), "--accept"])
+    assert result.exit_code == 0
+    assert "added [recipes.pytest]" in result.stdout
+    assert "[recipes.pytest]" in (tmp_path / ".haven.toml").read_text()
+
+    # Second run: the recipe is registered now, so there is nothing to add.
+    again = runner.invoke(app, ["init", "--workspace", str(tmp_path)])
+    assert again.exit_code == 0
+    assert "verification is configured" in again.stdout
+
+
+def test_init_missing_workspace_is_usage_error(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["init", "--workspace", str(tmp_path / "nope")])
+    assert result.exit_code == 2
+    assert "does not exist" in result.stdout
+
+
 def test_continue_missing_run_is_usage_error(tmp_path: Path) -> None:
     result = runner.invoke(
         app, ["continue", "run-nope", "a follow up", "--workspace", str(tmp_path)]
