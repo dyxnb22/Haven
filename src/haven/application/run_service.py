@@ -224,6 +224,10 @@ class RunService:
             if supports_prefix_continuation is None
             else supports_prefix_continuation
         )
+        # A/B control (docs/notes/implemented/0002): the nudge is an unproven
+        # convergence intervention, so an eval arm must be able to switch it
+        # off without a second build. Default on; only the eval turns it off.
+        self._repeat_nudge = repeat_nudge
         # Configured rates win; otherwise fall back to the model's published
         # rate card. Reporting a documented price for the model actually in use
         # beats reporting $0.00, but it is a published figure and not an
@@ -778,7 +782,7 @@ class RunService:
                 call.tool_name, call.arguments_json, result.to_model_text()
             )
             verdict = stuck.observe(fingerprint)
-            if verdict == "nudge":
+            if verdict == "nudge" and self._repeat_nudge:
                 # Warn while the model can still act on it. The note is
                 # program-written and lands as a trusted message, so it names
                 # only the tool (a registry fact) — never the model's own

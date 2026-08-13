@@ -780,9 +780,9 @@ class TestBudgetsAndStops:
         outcome = await h.service.run("Search twice")
 
         assert outcome.status is RunStatus.SUCCEEDED
-        assert not any(
-            "identical" in m.content for m in h.model.requests_seen[-1].messages
-        ), "the control arm must see no harness note"
+        assert not any("identical" in m.content for m in h.model.requests_seen[-1].messages), (
+            "the control arm must see no harness note"
+        )
 
     async def test_disabling_the_nudge_leaves_the_stop_behaviour_intact(
         self, tmp_path: Path

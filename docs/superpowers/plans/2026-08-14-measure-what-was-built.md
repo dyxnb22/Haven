@@ -71,21 +71,21 @@ knobs being explicit.
 In `tests/integration/test_agent_journeys.py`, inside `class TestBudgetsAndStops`:
 
 ```python
-    async def test_the_nudge_can_be_disabled_for_an_ab_arm(self, tmp_path: Path) -> None:
-        """The A/B needs a control arm. Disabling the nudge must remove the
-        note from the transcript while leaving the stop behaviour intact."""
-        repeat: list[ModelEvent] = [
-            tool("c1", "repo.search", pattern="nothing_here", path="."),
-            finish("tool_calls"),
-        ]
-        turns: list[list[ModelEvent]] = [repeat, list(repeat), [text("Done."), finish()]]
-        h = Harness(make_repo(tmp_path), turns, repeat_nudge=False)
-        outcome = await h.service.run("Search twice")
+async def test_the_nudge_can_be_disabled_for_an_ab_arm(self, tmp_path: Path) -> None:
+    """The A/B needs a control arm. Disabling the nudge must remove the
+    note from the transcript while leaving the stop behaviour intact."""
+    repeat: list[ModelEvent] = [
+        tool("c1", "repo.search", pattern="nothing_here", path="."),
+        finish("tool_calls"),
+    ]
+    turns: list[list[ModelEvent]] = [repeat, list(repeat), [text("Done."), finish()]]
+    h = Harness(make_repo(tmp_path), turns, repeat_nudge=False)
+    outcome = await h.service.run("Search twice")
 
-        assert outcome.status is RunStatus.SUCCEEDED
-        assert not any(
-            "identical" in m.content for m in h.model.requests_seen[-1].messages
-        ), "the control arm must see no harness note"
+    assert outcome.status is RunStatus.SUCCEEDED
+    assert not any("identical" in m.content for m in h.model.requests_seen[-1].messages), (
+        "the control arm must see no harness note"
+    )
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -98,7 +98,7 @@ Expected: FAIL with `TypeError: Harness.__init__() got an unexpected keyword arg
 In `src/haven/application/run_service.py`, add to `RunService.__init__` signature after `supports_prefix_continuation`:
 
 ```python
-        repeat_nudge: bool = True,
+repeat_nudge: bool = (True,)
 ```
 
 and in the body, after `self._supports_prefix = ...`:
@@ -127,13 +127,13 @@ In `tests/integration/harness.py`, add to `Harness.__init__` after
 `supports_prefix_continuation`:
 
 ```python
-        repeat_nudge: bool = True,
+repeat_nudge: bool = (True,)
 ```
 
 and pass it in the `RunService(...)` call:
 
 ```python
-            repeat_nudge=repeat_nudge,
+repeat_nudge = (repeat_nudge,)
 ```
 
 - [ ] **Step 6: Run test to verify it passes**
@@ -153,7 +153,7 @@ In `src/haven/evalkit/runner.py`, add to the case dataclass beside
 and at the `RunService(...)` construction beside `context_chars_override=`:
 
 ```python
-        repeat_nudge=case.repeat_nudge,
+repeat_nudge = (case.repeat_nudge,)
 ```
 
 - [ ] **Step 8: Verify the full suite and gates**
@@ -311,7 +311,10 @@ def compare(control: list[dict[str, Any]], treatment: list[dict[str, Any]]) -> s
         lines.append(f"| {case_id} | {cs} | {ts} | {delta:+d} |")
 
     mean_delta = round(statistics.fmean(deltas), 1) if deltas else 0.0
-    lines += ["", f"Mean paired delta: **{mean_delta:+.1f} steps** (negative = nudge converged sooner)."]
+    lines += [
+        "",
+        f"Mean paired delta: **{mean_delta:+.1f} steps** (negative = nudge converged sooner).",
+    ]
     if mean_delta >= 0 and t_sum.passed <= c_sum.passed:
         lines.append("")
         lines.append(
@@ -570,7 +573,7 @@ Expected: FAIL — `AttributeError: 'RecipeSpec' object has no attribute 'readab
 `config.py`, in the recipe parsing beside `allow_network`:
 
 ```python
-            readable_roots=tuple(str(r) for r in spec.get("readable_roots", ())),
+readable_roots = (tuple(str(r) for r in spec.get("readable_roots", ())),)
 ```
 
 - [ ] **Step 4: Thread it into the recipe sandbox**
@@ -578,10 +581,12 @@ Expected: FAIL — `AttributeError: 'RecipeSpec' object has no attribute 'readab
 `adapters/process_executor.py`, in the `SandboxSpec(...)` at line ~51:
 
 ```python
-                extra_readable_roots=(
-                    *default_readable_roots(),
-                    *(Path(r).expanduser().resolve() for r in recipe.readable_roots),
-                ),
+extra_readable_roots = (
+    (
+        *default_readable_roots(),
+        *(Path(r).expanduser().resolve() for r in recipe.readable_roots),
+    ),
+)
 ```
 
 - [ ] **Step 5: Run the tests**
@@ -703,9 +708,9 @@ difficulty range. Write them as:
 @dataclass(frozen=True)
 class LocalizationTask:
     id: str
-    goal: str                 # what the agent is asked
-    answer_files: tuple[str, ...]   # repo-relative; reading any one counts as found
-    kind: str                 # "unique-name" | "overloaded" | "interface-impl" | "di-wiring"
+    goal: str  # what the agent is asked
+    answer_files: tuple[str, ...]  # repo-relative; reading any one counts as found
+    kind: str  # "unique-name" | "overloaded" | "interface-impl" | "di-wiring"
 ```
 
 Cover, at minimum: 3 `unique-name` (grep should win), 3 `interface-impl`
@@ -844,14 +849,23 @@ def score_run(
 def render(scores: list[RunScore]) -> str:
     """Markdown, grouped by task kind — the unique-name vs interface-impl
     split is the finding this benchmark exists to produce."""
-    lines = ["# Java localization benchmark", "", "| Kind | n | found | median steps to hit |", "|---|---|---|---|"]
+    lines = [
+        "# Java localization benchmark",
+        "",
+        "| Kind | n | found | median steps to hit |",
+        "|---|---|---|---|",
+    ]
     kinds = sorted({s.kind for s in scores})
     for kind in kinds:
         group = [s for s in scores if s.kind == kind]
         hits = [s.steps_to_hit for s in group if s.steps_to_hit is not None]
         median = statistics.median(hits) if hits else float("nan")
         lines.append(f"| {kind} | {len(group)} | {len(hits)}/{len(group)} | {median} |")
-    lines += ["", "| Task | kind | found | steps to hit | total steps | files read | searches |", "|---|---|---|---|---|---|---|"]
+    lines += [
+        "",
+        "| Task | kind | found | steps to hit | total steps | files read | searches |",
+        "|---|---|---|---|---|---|---|",
+    ]
     for s in sorted(scores, key=lambda s: (s.kind, s.task_id)):
         lines.append(
             f"| {s.task_id} | {s.kind} | {'yes' if s.found else 'NO'} | {s.steps_to_hit} | "
