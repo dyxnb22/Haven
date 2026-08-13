@@ -158,6 +158,50 @@ def test_short_env_values_are_not_treated_as_secrets(monkeypatch: pytest.MonkeyP
     assert "id column" in render_jsonl([env])
 
 
+def test_foreign_credentials_are_masked_by_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The env sweep only knows secrets this process holds. A key pasted into
+    a goal, or one a tool read out of a file, is invisible to it — so
+    well-known credential shapes are masked too."""
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    leaks = (
+        "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+        "AKIAIOSFODNN7EXAMPLE",
+        "sk-ant-api03-abcdefghijklmnopqrstuvwxyz",
+        "xoxb-1234567890-abcdefghij",
+        "-----BEGIN OPENSSH PRIVATE KEY-----",
+    )
+    for leak in leaks:
+        env = EventEnvelope(
+            seq=1,
+            at="2026-01-01T00:00:00+00:00",
+            event=ToolProposed(
+                run_id="run-1", step=1, call_id="c1", tool_name="repo.read", args_summary=leak
+            ),
+        )
+        assert leak not in render_jsonl([env]), leak
+        assert leak not in render_markdown(run_record(), [env]), leak
+
+
+def test_ordinary_report_content_is_not_mangled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A redactor that eats digests and paths makes reports untrustworthy, so
+    the patterns must not fire on the content every report is full of."""
+    keep = (
+        "sha256:3f58fbff3344719cad673dd17b497a3673fa28b3",
+        "src/haven/adapters/workspace_fs.py",
+        "run-140663c9e45c",
+        "exit=0 in 143ms",
+    )
+    for value in keep:
+        env = EventEnvelope(
+            seq=1,
+            at="2026-01-01T00:00:00+00:00",
+            event=ToolProposed(
+                run_id="run-1", step=1, call_id="c1", tool_name="repo.read", args_summary=value
+            ),
+        )
+        assert value in render_jsonl([env]), value
+
+
 def test_jsonl_redacts_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-leak-me-please")
     env = EventEnvelope(

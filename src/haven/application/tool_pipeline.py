@@ -1374,7 +1374,15 @@ class ToolPipeline:
     async def _execute_exec(
         self, ctx: RunContext, call: ToolCallProposal, args: RepoExecArgs, ticket_digest: str
     ) -> ToolExecution:
-        assert self._launcher is not None  # policy denies exec without a launcher
+        if self._launcher is None:
+            # Unreachable: policy denies exec when no backend is available
+            # (`sandbox_available` fact). It raises rather than asserts because
+            # `python -O` strips assertions, and the executor runs a command
+            # unwrapped when it has no launcher — so a stripped guard would not
+            # fail here, it would run one unconfined process and only crash
+            # afterwards. "No sandbox means no exec, and no config can override
+            # that" (ADR 0009) has to hold under every interpreter flag.
+            raise RuntimeError("refusing to exec without a sandbox backend")
         await self._store.record_execution(
             ExecutionRecord(
                 call_id=call.call_id,

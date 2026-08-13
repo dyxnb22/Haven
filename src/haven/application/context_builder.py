@@ -283,12 +283,17 @@ class ContextBuilder:
         fitted = selected
         # The hard budget is real: assembled messages must never exceed the
         # message budget. The backstop above guarantees the transcript's share;
-        # the head is fixed and small. This assertion turns any future regression
-        # (a new always-present segment that overflows) into a loud failure
-        # rather than a silent over-budget request.
-        assert sum(len(item.message.content) for item in fitted) <= self._max_context_chars, (
-            "context builder produced an over-budget request"
-        )
+        # the head is fixed and small. This turns any future regression (a new
+        # always-present segment that overflows) into a loud failure rather
+        # than a silent over-budget request — and it raises rather than
+        # asserts, because `python -O` strips assertions and would remove
+        # exactly the guard this comment promises.
+        assembled = sum(len(item.message.content) for item in fitted)
+        if assembled > self._max_context_chars:
+            raise RuntimeError(
+                f"context builder produced an over-budget request: "
+                f"{assembled} > {self._max_context_chars} chars"
+            )
         request = ModelRequest(
             messages=tuple(item.message for item in fitted),
             tools=self._tools,

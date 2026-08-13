@@ -42,6 +42,14 @@ _RUNS_ENV = os.environ.get("HAVEN_H2H_RUNS", "")
 RUNS = Path(_RUNS_ENV) if _RUNS_ENV else Path(tempfile.gettempdir()) / "haven-h2h-runs"
 
 sys.path.insert(0, str(REAL))
+from materialize import (  # noqa: E402
+    IGNORE as _IGNORE,
+)
+from materialize import (  # noqa: E402
+    apply_once,
+    copy_clone,
+    write_src_layout_shim,
+)
 from tasks import REFACTORS, REPOS, TASKS, RefactorTask, Task  # noqa: E402
 
 # Reuse Haven's own sandboxed recipe runner so the grader confines a tool's
@@ -54,8 +62,6 @@ from haven.ports.sandbox import (  # noqa: E402
     default_private_roots,
     default_readable_roots,
 )
-
-_IGNORE = shutil.ignore_patterns(".git", "__pycache__", "*.pyc", ".pytest_cache", ".tox", ".venv")
 
 #: A cross-tier, cross-repo, cross-difficulty slice for the distribution runs.
 #: Deliberately small so N>=5 per tool stays affordable.
@@ -108,11 +114,14 @@ def _spec(task: Task | RefactorTask) -> CaseSpec:
 def _materialize(task: Task | RefactorTask, dest: Path) -> None:
     """A git-initialised checkout, buggy (injection) or as-built (refactor task
     test added), with a clean initial commit so `git diff` shows exactly what a
-    tool changed."""
+    tool changed.
+
+    Copy, injection, and the src-layout shim come from the same helper
+    `build.py` uses, so the tree a peer tool is handed is the tree Haven's own
+    suite grades — the whole comparison rests on that.
+    """
     repo = REPOS[task.repo]
-    if dest.exists():
-        shutil.rmtree(dest)
-    shutil.copytree(REAL / "repos" / repo.dir, dest, ignore=_IGNORE)
+    copy_clone(REAL / "repos" / repo.dir, dest)
     if isinstance(task, RefactorTask):
         for rel, content in task.add_files:
             target = dest / rel
@@ -122,16 +131,9 @@ def _materialize(task: Task | RefactorTask, dest: Path) -> None:
         for rel, old, new in task.inject:
             target = dest / rel
             text = target.read_text(encoding="utf-8")
-            count = text.count(old)
-            if count != 1:
-                raise SystemExit(f"{task.id}:{rel}: snippet must appear once, found {count}")
-            target.write_text(text.replace(old, new), encoding="utf-8")
+            target.write_text(apply_once(text, old, new, f"{task.id}:{rel}"), encoding="utf-8")
     if repo.src_path:
-        (dest / "conftest.py").write_text(
-            "import sys, pathlib\n"
-            f"sys.path.insert(0, str(pathlib.Path(__file__).parent / {repo.src_path!r}))\n",
-            encoding="utf-8",
-        )
+        write_src_layout_shim(dest, repo.src_path)
     subprocess.run(["git", "init", "-q"], cwd=dest, check=True)
     subprocess.run(["git", "add", "-A"], cwd=dest, check=True)
     subprocess.run(

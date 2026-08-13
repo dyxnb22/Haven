@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,28 +31,21 @@ FIXTURES_DIR = HERE / "fixtures"
 CASES_DIR = HERE / "cases"
 
 sys.path.insert(0, str(HERE))
+from materialize import (  # noqa: E402
+    apply_once as _apply,
+)
+from materialize import (  # noqa: E402
+    copy_clone,
+    write_src_layout_shim,
+)
 from tasks import REFACTORS, REPOS, TASKS, RefactorTask, Repo, Task  # noqa: E402
-
-# .venv: uv creates one inside a clone if `uv run` is ever invoked there (the
-# larger tier-3 repos ship their own pyproject/uv.lock); copying it into every
-# fixture would be huge and meaningless.
-_IGNORE = shutil.ignore_patterns(".git", "__pycache__", "*.pyc", ".pytest_cache", ".tox", ".venv")
-
-
-def _apply(text: str, old: str, new: str, where: str) -> str:
-    count = text.count(old)
-    if count != 1:
-        raise SystemExit(f"{where}: snippet must appear exactly once, found {count}:\n  {old!r}")
-    return text.replace(old, new)
 
 
 def _materialize(
     task: Task, repo: Repo, dest: Path, *, reverted: bool, write_conftest: bool = True
 ) -> None:
     """Copy the clone to dest and apply (or, if reverted, do not apply) the bug."""
-    if dest.exists():
-        shutil.rmtree(dest)
-    shutil.copytree(REPOS_DIR / repo.dir, dest, ignore=_IGNORE)
+    copy_clone(REPOS_DIR / repo.dir, dest)
     for rel, old, new in task.inject:
         target = dest / rel
         text = target.read_text(encoding="utf-8")
@@ -63,16 +55,7 @@ def _materialize(
             continue
         target.write_text(_apply(text, old, new, f"{task.id}:{rel}"), encoding="utf-8")
     if repo.src_path and write_conftest:
-        # src-layout projects are not installed in the fixture; a root conftest
-        # puts the package on sys.path so `python -m pytest` can import it.
-        # Zero-config fixtures skip this: the shim is pre-configuration, and the
-        # discovered command must solve the import path on its own.
-        conftest = dest / "conftest.py"
-        conftest.write_text(
-            "import sys, pathlib\n"
-            f"sys.path.insert(0, str(pathlib.Path(__file__).parent / {repo.src_path!r}))\n",
-            encoding="utf-8",
-        )
+        write_src_layout_shim(dest, repo.src_path)
 
 
 #: Tiers on 10k+ line repositories get a doubled input-token ceiling. The
@@ -110,9 +93,7 @@ def _case_json(task: Task | RefactorTask, repo: Repo) -> dict:
 
 def _materialize_refactor(task: RefactorTask, repo: Repo, dest: Path, *, reference: bool) -> None:
     """Clean clone + the task test; with `reference`, the solution applied."""
-    if dest.exists():
-        shutil.rmtree(dest)
-    shutil.copytree(REPOS_DIR / repo.dir, dest, ignore=_IGNORE)
+    copy_clone(REPOS_DIR / repo.dir, dest)
     for rel, content in task.add_files:
         target = dest / rel
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -127,12 +108,7 @@ def _materialize_refactor(task: RefactorTask, repo: Repo, dest: Path, *, referen
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
     if repo.src_path:
-        conftest = dest / "conftest.py"
-        conftest.write_text(
-            "import sys, pathlib\n"
-            f"sys.path.insert(0, str(pathlib.Path(__file__).parent / {repo.src_path!r}))\n",
-            encoding="utf-8",
-        )
+        write_src_layout_shim(dest, repo.src_path)
 
 
 #: Zero-config variants: one task per repo, no authored recipe, no conftest

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 from haven.contracts.events import (
     ApprovalDecided,
@@ -25,6 +26,25 @@ from haven.ports.session import RunRecord
 _SECRET_ENV_SUFFIXES = ("_API_KEY", "_KEY", "_TOKEN", "_SECRET", "_PASSWORD")
 _MIN_SECRET_LENGTH = 8
 
+#: Backstop for credentials this process never held, so the env sweep above
+#: cannot see them: a key pasted into a goal, one read out of a file by a
+#: tool, or another service's token quoted in model output. Matching is by
+#: the issuer's own published shape, which keeps false positives low —
+#: prose does not accidentally look like `ghp_` + 36 base62 characters.
+#: Deliberately not a general "high entropy string" heuristic: that would
+#: redact digests and diffs, and an export nobody trusts gets read past.
+_SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bsk-ant-[A-Za-z0-9_-]{16,}"),  # Anthropic
+    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"),  # OpenAI and compatibles
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),  # AWS access key id
+    re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}"),  # GitHub
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"),  # Slack
+    re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),  # Google
+    re.compile(r"\bSG\.[A-Za-z0-9_-]{16,}"),  # SendGrid
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),  # PEM/OpenSSH block
+)
+
 
 def _secret_values() -> list[str]:
     values = [
@@ -37,9 +57,20 @@ def _secret_values() -> list[str]:
 
 
 def _redact(text: str) -> str:
+    """Mask credentials in a rendered report.
+
+    Two passes, because they fail differently: the env sweep catches this
+    process's own secrets exactly (no false positives, but blind to anything
+    it never held), and the pattern sweep catches well-known credential
+    shapes from anywhere (a key pasted into a goal, one a tool read out of a
+    file). Neither is complete, and this is a redaction pass on an artifact —
+    not a reason to put secrets in front of the agent.
+    """
     for value in _secret_values():
         if value in text:
             text = text.replace(value, "[redacted]")
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub("[redacted]", text)
     return text
 
 
