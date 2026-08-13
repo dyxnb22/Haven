@@ -1,6 +1,9 @@
 """Run every Java localization task against the live model, read-only.
 
-    uv run python evals/java/run_benchmark.py [--tier deep] [--only TASK_ID]
+    uv run python -m evals.java.run_benchmark [--tier deep] [--only TASK_ID]
+
+Run as a module, not as a path: the tasks and the answer key are imported from
+`evals.java`, which is only on the path when the repository root is the cwd.
 
 Each task is one `haven run` in read-only mode against a copy of the benchmark
 repository, streaming its events to `evals/java/events/<task-id>.jsonl` for
@@ -66,7 +69,7 @@ def main() -> int:
         last = tail[-1] if tail else ""
         print(f"    rc={completed.returncode} {elapsed:.0f}s {last}", flush=True)
 
-    print(f"\ntraces in {EVENTS}. Score with: uv run python evals/java/score.py {EVENTS}")
+    print(f"\ntraces in {EVENTS}. Score with: uv run python -m evals.java.score {EVENTS}")
     return 0
 
 

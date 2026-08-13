@@ -70,8 +70,8 @@ cases where a name-based search cannot succeed by luck.
 ```bash
 export HAVEN_API_KEY_ENV=DEEPSEEK_API_KEY \
        HAVEN_BASE_URL=https://api.deepseek.com/beta HAVEN_MODEL=deepseek-chat
-uv run python evals/java/run_benchmark.py            # one run per task
-uv run python evals/java/score.py evals/java/events  # writes report.md
+uv run python -m evals.java.run_benchmark               # one run per task
+uv run python -m evals.java.score evals/java/events     # writes report.md
 ```
 
 ## Reading the result

@@ -1,6 +1,6 @@
 """Score Java localization runs from the tool trace.
 
-    uv run python evals/java/score.py evals/java/events
+    uv run python -m evals.java.score evals/java/events
 
 Grading the final prose would be a keyword probe: an agent that lists ten
 candidate files scores like one that knew the answer. The trace answers the
@@ -167,7 +167,7 @@ def main() -> int:
     if missing:
         report += "\n\nNo trace for: " + ", ".join(missing) + "\n"
     print(report)
-    out = events_dir.parent / "report.md"
+    out = Path(__file__).resolve().parent / "report.md"
     out.write_text(report + "\n", encoding="utf-8")
     print(f"\nwritten to {out}")
     return 0
