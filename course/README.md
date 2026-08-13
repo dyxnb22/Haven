@@ -57,17 +57,36 @@ Recommended setup:
 
 ```bash
 uv sync --locked
-uv run pytest -q                 # 342 tests, ~30s, fully offline
+uv run pytest -q                 # the whole suite, ~50s, fully offline
 uv run haven eval --offline      # all cases pass, 0 security violations
 ```
 
 Read a module, open the files it names in one pane and the module in another, run
 its exercises, then check yourself against the linked test.
 
+## Two tracks
+
+The course has two ways in, and they teach different things:
+
+**Track A — derive it (start here).** [Module 00 — Build it from
+scratch](00-from-scratch.md) starts with the twenty-line agent everyone
+writes first and breaks it, eleven times. Each stage is *the naive version →
+what breaks → the fix and its cost → where it lives now*, so every mechanism
+arrives with the failure that motivates it — several of them failures this
+project actually hit. Read this for **why the system has the shape it has**.
+
+**Track B — study each layer.** Modules 01–10 tour the finished system one
+layer at a time, with the files, ADRs, tests, and exercises for each. Read
+these for **how each part is actually built**.
+
+Do Track A once, then Track B in order. Track A is one sitting; Track B is
+ten.
+
 ## Module map
 
 | # | Module | Haven layer | Governing ADR |
 |---|---|---|---|
+| 00 | [Build it from scratch (derivation)](00-from-scratch.md) | whole system, in build order | 0002–0026 |
 | 01 | [Mental models: proposal vs. authority](01-mental-models.md) | whole system | 0002 |
 | 02 | [The provider contract and streaming](02-provider-contract.md) | `contracts`, `ports`, `adapters/providers` | 0001 |
 | 03 | [Tools and the single execution channel](03-tools-and-the-execution-channel.md) | `application/tool_pipeline`, `domain/ticket` | 0002 |
