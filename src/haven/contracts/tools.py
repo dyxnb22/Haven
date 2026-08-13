@@ -321,6 +321,12 @@ class RecipeSpec(StrictModel):
     #: needs the network (an integration suite) can opt in, because the recipe
     #: comes from user-authored config rather than from the model.
     allow_network: bool = False
+    #: Extra roots this recipe may READ, on top of the interpreter prefixes
+    #: every recipe already gets. A toolchain keeps its dependency cache under
+    #: $HOME (`~/.m2`, `~/.gradle`), which the sandbox hides by default. Only a
+    #: check recipe may declare these, because only its argv is user-authored
+    #: (ADR 0029); never writable, and never available to `repo.exec`.
+    readable_roots: tuple[str, ...] = ()
 
 
 def tool_schemas() -> tuple[ToolSchema, ...]:

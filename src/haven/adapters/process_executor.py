@@ -54,7 +54,14 @@ class ProcessExecutor:
                 writable=True,
                 allow_network=recipe.allow_network,
                 private_roots=default_private_roots(),
-                extra_readable_roots=default_readable_roots(),
+                # Additive to the interpreter prefixes, never a replacement,
+                # and read-only. Resolved from a RecipeSpec that was fixed on
+                # disk at config load, so no model-supplied string reaches
+                # here (ADR 0029).
+                extra_readable_roots=(
+                    *default_readable_roots(),
+                    *(Path(root).expanduser().resolve() for root in recipe.readable_roots),
+                ),
             ),
         )
         return CheckOutcome(

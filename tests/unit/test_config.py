@@ -72,6 +72,24 @@ def test_a_recipe_may_opt_into_network(tmp_path: Path) -> None:
     assert load_config(tmp_path).recipes["itest"].allow_network is True
 
 
+def test_a_recipe_may_declare_a_readable_toolchain_root(tmp_path: Path) -> None:
+    """A Maven or Gradle check needs its dependency cache under $HOME, the same
+    exception the interpreter prefixes already get (ports/sandbox.py)."""
+    (tmp_path / ".haven.toml").write_text(
+        '[recipes.mvn]\nargv = ["mvn", "-o", "test"]\nreadable_roots = ["~/.m2"]\n',
+        encoding="utf-8",
+    )
+    config = load_config(tmp_path)
+    assert config.recipes["mvn"].readable_roots == ("~/.m2",)
+
+
+def test_a_recipe_declares_no_readable_roots_by_default(tmp_path: Path) -> None:
+    """The absent case has to stay empty, or every existing recipe silently
+    gains a grant it never asked for."""
+    (tmp_path / ".haven.toml").write_text('[recipes.tests]\nargv = ["pytest", "-q"]\n')
+    assert load_config(tmp_path).recipes["tests"].readable_roots == ()
+
+
 def test_project_cannot_weaken_the_sandbox(tmp_path: Path) -> None:
     """No project file may turn confinement off, not even by naming a table."""
     (tmp_path / ".haven.toml").write_text('[sandbox]\nbackend = "none"\n')

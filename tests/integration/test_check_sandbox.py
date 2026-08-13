@@ -10,8 +10,21 @@ accident.
 
 from pathlib import Path
 
+from haven.contracts.tools import RecipeSpec
 from haven.domain import PermissionMode, PolicyDecision, ToolFacts, evaluate_policy
+from haven.ports.sandbox import SandboxSpec, default_readable_roots
 from tests.integration.harness import Harness, default_recipes, finish, make_repo, text, tool
+
+
+async def _spec_for(tmp_path: Path, recipe: RecipeSpec) -> SandboxSpec:
+    """Run one check and hand back the SandboxSpec the launcher was given."""
+    turns = [
+        [tool("c1", "repo.check", recipe_id=recipe.id), finish("tool_calls")],
+        [text("Checked."), finish()],
+    ]
+    h = Harness(make_repo(tmp_path), turns, recipes={recipe.id: recipe})
+    await h.service.run("Run the check")
+    return next(spec for argv, spec in h.launcher.calls if argv == recipe.argv)
 
 
 class TestCheckIsWrappedWhenABackendExists:
@@ -25,6 +38,34 @@ class TestCheckIsWrappedWhenABackendExists:
 
         recipe_argv = default_recipes()["always-pass"].argv
         assert any(argv == recipe_argv for argv, _ in h.launcher.calls)
+
+
+class TestDeclaredToolchainRoots:
+    """ADR 0029: a check may name the dependency cache it needs to read."""
+
+    async def test_a_declared_root_reaches_the_sandbox_spec(self, tmp_path: Path) -> None:
+        cache = tmp_path / "m2"
+        cache.mkdir()
+        recipe = RecipeSpec(id="mvn", argv=("true",), readable_roots=(str(cache),))
+        spec = await _spec_for(tmp_path, recipe)
+
+        assert cache.resolve() in spec.extra_readable_roots
+
+    async def test_the_interpreter_prefixes_are_still_granted(self, tmp_path: Path) -> None:
+        """A declaration adds to the existing carve-out; it does not replace it,
+        or declaring `~/.m2` would break the Python recipe that ran before."""
+        recipe = RecipeSpec(id="mvn", argv=("true",), readable_roots=(str(tmp_path),))
+        spec = await _spec_for(tmp_path, recipe)
+
+        granted = set(spec.extra_readable_roots)
+        assert set(default_readable_roots()) <= granted
+
+    async def test_a_recipe_that_declares_nothing_is_unchanged(self, tmp_path: Path) -> None:
+        """The profile for every recipe written before ADR 0029 must be
+        byte-identical to what it was."""
+        spec = await _spec_for(tmp_path, RecipeSpec(id="plain", argv=("true",)))
+
+        assert spec.extra_readable_roots == default_readable_roots()
 
 
 class TestPolicyAsymmetry:

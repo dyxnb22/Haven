@@ -24,17 +24,26 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _spec(tmp_path: Path, private: Path | None = None, *, writable: bool = True) -> SandboxSpec:
+def _spec(
+    tmp_path: Path,
+    private: Path | None = None,
+    *,
+    writable: bool = True,
+    granted: Path | None = None,
+) -> SandboxSpec:
     workspace = tmp_path / "ws"
     workspace.mkdir(exist_ok=True)
     scratch = tmp_path / "scratch"
     scratch.mkdir(exist_ok=True)
+    extra = [Path(sys.base_prefix), Path(sys.prefix)]
+    if granted is not None:
+        extra.append(granted)
     return SandboxSpec(
         workspace_root=workspace,
         scratch_dir=scratch,
         writable=writable,
         private_roots=(private,) if private is not None else (),
-        extra_readable_roots=(Path(sys.base_prefix), Path(sys.prefix)),
+        extra_readable_roots=tuple(extra),
     )
 
 
@@ -45,8 +54,9 @@ async def run(
     private: Path | None = None,
     timeout: float = 30.0,
     writable: bool = True,
+    granted: Path | None = None,
 ) -> tuple[int, str]:
-    spec = _spec(tmp_path, private, writable=writable)
+    spec = _spec(tmp_path, private, writable=writable, granted=granted)
     outcome = await ProcessExecutor(launcher=LAUNCHER).run_exec(
         ExecSpec(
             argv=(sys.executable, "-c", code),
@@ -118,6 +128,42 @@ class TestReadConfinement:
         )
         assert exit_code != 0
         assert "SECRET-KEY-MATERIAL" not in output
+
+    async def test_a_declared_root_is_readable_and_its_sibling_is_not(self, tmp_path: Path) -> None:
+        """ADR 0029: the widened boundary must be exactly as wide as declared.
+        The granted directory opens, the one beside it stays shut — the two
+        probes differ in one variable, which is the whole assertion.
+
+        The private root here is a stand-in home under tmp_path rather than the
+        real one. Both backends treat it identically (seatbelt denies the root
+        then re-allows the grant; Landlock never lists the root at all), so this
+        exercises the same rule ordering without writing into a user's `$HOME`.
+        """
+        home = tmp_path / "home"
+        granted = home / ".m2"
+        withheld = home / ".ssh"
+        granted.mkdir(parents=True)
+        withheld.mkdir(parents=True)
+        (granted / "f.txt").write_text("GRANTED-MARKER", encoding="utf-8")
+        (withheld / "f.txt").write_text("WITHHELD-MARKER", encoding="utf-8")
+
+        ok_code, ok_output = await run(
+            tmp_path,
+            f"print(open({str(granted / 'f.txt')!r}).read())",
+            private=home,
+            granted=granted,
+        )
+        nope_code, nope_output = await run(
+            tmp_path,
+            f"print(open({str(withheld / 'f.txt')!r}).read())",
+            private=home,
+            granted=granted,
+        )
+
+        assert ok_code == 0, ok_output
+        assert "GRANTED-MARKER" in ok_output
+        assert nope_code != 0
+        assert "WITHHELD-MARKER" not in nope_output
 
     async def test_ordinary_programs_still_run(self, tmp_path: Path) -> None:
         """An over-tight profile is as much a bug as a leaky one."""

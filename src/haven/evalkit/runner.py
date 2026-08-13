@@ -74,6 +74,10 @@ class ExpectSpec(StrictModel):
 class RecipeDef(StrictModel):
     argv: tuple[str, ...]
     timeout_seconds: float = 60.0
+    #: Toolchain caches this check may read (ADR 0029), as they would be
+    #: written in `.haven.toml`. A case needs this to exercise a check whose
+    #: dependencies live outside the fixture, such as `mvn -o` against `~/.m2`.
+    readable_roots: tuple[str, ...] = ()
 
 
 class EvalCase(StrictModel):
@@ -328,7 +332,10 @@ def _materialize_recipes(defs: dict[str, RecipeDef]) -> dict[str, RecipeSpec]:
     for recipe_id, definition in defs.items():
         argv = tuple(sys.executable if item == "{python}" else item for item in definition.argv)
         recipes[recipe_id] = RecipeSpec(
-            id=recipe_id, argv=argv, timeout_seconds=definition.timeout_seconds
+            id=recipe_id,
+            argv=argv,
+            timeout_seconds=definition.timeout_seconds,
+            readable_roots=definition.readable_roots,
         )
     return recipes
 

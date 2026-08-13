@@ -146,6 +146,7 @@ def _parse_recipes(raw: object, origin: str) -> dict[str, RecipeSpec]:
             argv=tuple(argv),
             timeout_seconds=timeout,
             allow_network=bool(spec.get("allow_network", False)),
+            readable_roots=tuple(str(root) for root in spec.get("readable_roots", ())),
         )
     return recipes
 
