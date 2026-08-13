@@ -55,6 +55,13 @@ build-backend = "uv_build"
 line-length = 100
 target-version = "py312"
 
+[tool.ruff.format]
+# Ruff formats fenced Python inside Markdown. That is right for prose that
+# ships, but a plan's snippets are deliberate fragments — a lone argument
+# line, a partial call — and formatting them as whole modules corrupts the
+# instruction: `flag: bool = True,` came back as `flag: bool = (True,)`.
+exclude = ["docs/superpowers/plans/*.md"]
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
