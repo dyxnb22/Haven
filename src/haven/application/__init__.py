@@ -11,8 +11,9 @@ supported by: context_builder (what the model sees), compaction (dropped
 history becomes recorded facts), approvals (broker between pipeline and
 human/auto policies), registry (static tool lookup + strict validation),
 recovery_service (crash recovery + user rewind), replay_service (journal
-projection), profiles (per-model defaults), emitter (persist + fan out
-events), state (the mutable per-run RunContext).
+projection), maintenance (haven gc: prune runs + sweep artifacts),
+profiles (per-model defaults), emitter (persist + fan out events),
+state (the mutable per-run RunContext).
 
 This layer knows domain, ports, and contracts - never a concrete adapter;
 bootstrap.py injects those.

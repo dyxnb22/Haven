@@ -58,7 +58,11 @@ Crash recovery        `resume` -> application/recovery_service.py
                       unprovable blocks until `reconcile`. User-level undo
                       is `rewind` (fail-closed compensation).
 Recipe discovery      `discover [--accept]` -> domain/discovery.py
-                      proposes verify commands from the repo's own files.
+                      proposes verify commands from the repo's own files;
+                      `init` bundles it with an environment summary for
+                      first contact with a repository.
+Store maintenance     `gc` -> application/maintenance.py prunes old runs
+                      and unreferenced artifacts (dry run by default).
 Offline eval          `eval --offline` -> evalkit/runner.py; live suites
                       live in evals/ (see docs/EVAL_LIVE.md).
 
