@@ -73,3 +73,7 @@ evals/real/soak/
 evals/real/compaction-ab/
 evals/real/dist/
 evals/headtohead/runs/
+
+# Raw output of the codebase-scan script; the seven docs beside it are the
+# reviewed artifact, this is the machine dump they were derived from.
+docs/codebase/.codebase-scan.txt

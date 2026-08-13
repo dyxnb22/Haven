@@ -10,6 +10,7 @@ There is no other path from a model proposal to a side effect.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import shlex
 import tempfile
@@ -809,6 +810,22 @@ class ToolPipeline:
 
     # -- execution -----------------------------------------------------------------
 
+    async def _snapshot(self) -> WorkspaceSnapshot:
+        """Digest the whole tree, off the event loop.
+
+        Process-write attribution (ADR 0012) brackets every exec/check with a
+        snapshot, so this runs twice per process call and costs O(repo):
+        measured at ~150ms each on a 128k-line checkout. Run inline it froze
+        the loop for ~300ms per check — no streaming, no rendering, no
+        approval modal — so it goes to a worker thread. The work itself is
+        unchanged: every file is still fully hashed, because the digest is
+        what makes a write through a process detectable (and, for protected
+        paths, what makes tampering detectable at all on Linux, ADR 0018).
+        Cheapening it with size caps or mtime stats would trade a measured
+        non-problem for an evadable gate.
+        """
+        return await asyncio.to_thread(self._workspace.capture_snapshot)
+
     async def _run_ticketed(
         self,
         ctx: RunContext,
@@ -1376,7 +1393,7 @@ class ToolPipeline:
             timeout_seconds=args.timeout_seconds,
             sandbox=self._sandbox_spec(),
         )
-        before = self._workspace.capture_snapshot()
+        before = await self._snapshot()
         try:
             outcome = await self._executor.run_exec(spec)
         except BaseException:
@@ -1388,7 +1405,7 @@ class ToolPipeline:
         # Any file the command changed is attributed to it as edit evidence, so
         # a write through exec cannot escape the Evidence Gate (ADR 0012).
         tampered = await self._record_process_writes(
-            ctx, call.tool_name, before, self._workspace.capture_snapshot()
+            ctx, call.tool_name, before, await self._snapshot()
         )
         if tampered:
             return ToolExecution(
@@ -1496,7 +1513,7 @@ class ToolPipeline:
                 path="",
             )
         )
-        before = self._workspace.capture_snapshot()
+        before = await self._snapshot()
         try:
             outcome = await self._executor.run_recipe(recipe, self._workspace.root)
         except BaseException:
@@ -1507,7 +1524,7 @@ class ToolPipeline:
         # A check that mutates the tree (e.g. a formatter) is recorded like any
         # other write, before the check evidence, so the gate sees it.
         tampered = await self._record_process_writes(
-            ctx, call.tool_name, before, self._workspace.capture_snapshot()
+            ctx, call.tool_name, before, await self._snapshot()
         )
         if tampered:
             # A check that rewrote the control plane is not a verification: no
