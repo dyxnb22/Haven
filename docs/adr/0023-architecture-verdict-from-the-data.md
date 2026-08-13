@@ -60,6 +60,30 @@ that binds at that scale: three tier-3 cases already died `token_budget_exhauste
 on a ceiling calibrated for small repos, so context selection and budget
 calibration bind before localization does.
 
+*Amended 2026-08-14 (second) — the experiment above was run, and the verdict
+holds at the harder difficulty.* Ten read-only localization tasks against
+`big-market-ai-platform` at `d6d675d`: 534 Java files, 18 Maven modules, Spring
+dependency injection, and the three regimes the amendment above named as
+untested — an implementation behind an interface in another module, a method
+name shared by fifty files, and a bean chosen by a `@Configuration`. Method and
+answer key in `evals/java/`, numbers and attribution in `docs/EVAL_LIVE.md`.
+
+Every task localized correctly. Median steps to the first read of the answer
+file, by kind: `overloaded` 2, `interface-impl` 2.5, `di-wiring` 3.5,
+`unique-name` 5. The regimes predicted to be hardest were the *fastest*: the
+two `overloaded` tasks, whose naive queries return 51 and 14 files, were solved
+in 2 steps each, because `repo.search` returns matching lines with context and
+a model reads a ranked list the way a person reads grep output. The gate
+therefore stays unmet — semantic-localization failures at this difficulty are
+**0**, against a bar of ≥5 — and the LSP deferral is now confirmed on a large
+multi-module Java service rather than only on mid-size Python libraries, which
+is the stronger claim the amendment above said was missing.
+
+What this still does not settle: ten tasks is a small sample, all ten were
+localization *questions* rather than edits requiring an exact reference set,
+and find-all-references before a rename — where an index does not merely rank
+better but is *correct* where text search is not — remains untested.
+
 **Planner / goal FSM: do not build.** The dominant failure is the model not
 *stopping*, not the harness failing to *plan*. A planner does not fix "hunts
 too long"; the step budget already bounds it, and the `task.plan` tool plus

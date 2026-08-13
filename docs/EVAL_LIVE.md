@@ -5,6 +5,200 @@ driven by `ScriptedModel`, so this run is what validated that the provider
 adapter, the policy stack, and the Evidence Gate work against a model that was
 not written to cooperate.
 
+## The repetition nudge, measured (2026-08-14)
+
+`docs/notes/implemented/0002` shipped a convergence intervention and said in
+writing that its effect was unproven: on the second identical (tool, args,
+result) observation the harness appends one message telling the model the call
+produced nothing new. The note pre-committed to deleting it if an A/B showed no
+improvement. This is that A/B.
+
+**Design.** Seven tier-3 cases chosen in advance (the ones that hit the step
+ceiling in earlier reports), three repetitions, two arms: n=21 per arm. The
+arms differ in exactly one JSON field, `repeat_nudge`, added for this purpose
+(`evals/real/make_ab_cases.py` generates both directories from the same
+sources). The stop-on-third-repetition behaviour is identical in both arms, so
+the arms differ in one thing and not two. Step count is the primary metric
+because the failure being targeted is a variance tail, not a wall — pass/fail
+at this sample size cannot separate the two. Model `deepseek-chat` on the beta
+endpoint; both arms ran concurrently, so neither got a quieter API.
+
+| Arm | n | median steps | mean steps | worst run | passed |
+|---|---|---|---|---|---|
+| control (nudge off) | 21 | 11 | 13.8 | 24 | 19 / 21 |
+| treatment (nudge on) | 21 | 11 | 11.2 | 18 | **21 / 21** |
+
+Per case, median across the three repetitions:
+
+| Case | control | treatment | delta |
+|---|---|---|---|
+| t3-click-bool-onoff | 14 (14,10,19) | 12 (12,12,10) | −2 |
+| t3-click-echo-stderr | 8 (8,8,8) | 10 (8,10,10) | +2 |
+| t3-click-nargs-order | 17 (17,10,19) | 12 (12,14,11) | −5 |
+| t3-click-range-clamp | 7 (7,7,7) | 7 (7,7,7) | ±0 |
+| t3-click-show-default | 21 (20,24,21) | 15 (14,15,18) | −6 |
+| t3-jinja-default-filter | 9 (9,9,11) | 12 (12,17,11) | +3 |
+| t3-rich-truncate-ellipsis | 21 (24,21,16) | 9 (11,9,9) | −12 |
+
+**Verdict: keep.** The pre-registered rule was "mean paired delta ≤ −2 steps,
+or treatment pass count higher → keep". The delta is **−2.9** and the treatment
+passed more cases, so both conditions are met and the mechanism stays.
+
+**Every non-passing run, attributed.** Two, both in the control arm and both
+the same case, `t3-rich-truncate-ellipsis`: one `step_budget_exhausted` at 24
+steps, one `evidence_missing` at 21 steps. In both the hidden grader found
+`verify` red after completion — the run reported success on a broken tree. The
+treatment arm's three runs of that case took 11, 9 and 9 steps and all passed.
+No run in either arm failed for a provider, sandbox, or harness reason.
+
+**What keeps this from being a strong result.** Three things, none of which
+change the decision but all of which bound it:
+
+- **The medians are identical, 11 and 11.** The nudge does not make a
+  converging run converge faster. What it does is cut the tail: the control's
+  five worst runs were 24, 24, 21, 21, 20, and the treatment's worst was 18.
+  That is the mechanism's predicted signature and is why the distribution is
+  more persuasive here than the mean.
+- **One case carries the point estimate.** Leave `t3-rich-truncate-ellipsis`
+  out and the mean delta is −1.3, which falls in the band the plan labelled
+  inconclusive. An exact paired sign-flip permutation test over the seven
+  per-case deltas gives p = 0.125 one-sided — not significant, and with seven
+  cases the smallest attainable p is 0.008, so this design could not have
+  produced significance from a modest effect.
+- **Two cases got worse** (`t3-jinja-default-filter` +3,
+  `t3-click-echo-stderr` +2). The effect is not uniform.
+
+The one number that needs no significance test: the same seven cases cost
+**3.71M input tokens** in the control arm and **2.34M** in the treatment, a 37%
+reduction for identical work.
+
+**Measurement gap found.** Reported cost is `$0.0000` for every run in both
+arms, because `application/profiles.py` carries a rate card for
+`deepseek-v4-flash` and none for `deepseek-chat`, and an unknown model gets the
+default empty card. Token counts are real; the dollar figures in this section
+are not, and are therefore stated in tokens.
+
+## Java localization: does grep hold up where an index should win? (2026-08-14)
+
+ADR 0023 deferred the read-only LSP because semantic localization accounted for
+≈1 failure against a gate of ≥5 — then amended itself to say the corpus was
+mid-size Python libraries with grep-friendly names, the regime where ripgrep is
+*most* competitive, and that the verdict was therefore narrower than it looked.
+This benchmark is the experiment that amendment asked for.
+
+**Design.** Ten read-only localization tasks against `big-market-ai-platform`
+at commit `d6d675d` — 534 Java files, ~32k lines, 18 Maven modules, Spring DI
+throughout — run against a copy at `/tmp/bigmarket-bench`, never the working
+tree. Tasks span four kinds chosen to isolate the regimes where an index should
+beat text search. Answer key and per-task naive hit counts in
+`evals/java/README.md`; scoring in `evals/java/score.py`.
+
+Scoring is from the **tool trace**, not the answer text: the metric is the step
+at which the agent first *reads* an answer file. Grading prose would be a
+keyword probe — an agent that lists ten candidates would score like one that
+knew.
+
+| Kind | n | found | median steps to hit | naive hits (range) |
+|---|---|---|---|---|
+| overloaded | 2 | 2/2 | **2.0** | 14–51 |
+| interface-impl | 3 | 2/3 | **2.5** | 4–20 |
+| di-wiring | 2 | 2/2 | **3.5** | 6–7 |
+| unique-name | 3 | 3/3 | **5.0** | 2–13 |
+
+| Task | kind | steps to hit | total steps | files read | searches |
+|---|---|---|---|---|---|
+| o1-award-record-insert | overloaded | 2 | 3 | 1 | 2 |
+| o2-weight-rule-chain | overloaded | 2 | 3 | 1 | 2 |
+| i1-strategy-repository-impl | interface-impl | — | 4 | 0 | 5 |
+| i2-activity-repository-impl | interface-impl | 2 | 3 | 1 | 2 |
+| i3-credit-random-award | interface-impl | 3 | 6 | 2 | 5 |
+| d1-token-revocation-bean | di-wiring | 5 | 6 | 3 | 6 |
+| d2-thread-pool-bean | di-wiring | 2 | 3 | 2 | 2 |
+| u1-ratelimit-fallback | unique-name | 11 | 14 | 3 | 1 |
+| u2-dynamic-table-name | unique-name | 5 | 7 | 5 | 1 |
+| u3-response-http-status | unique-name | 2 | 3 | 1 | 2 |
+
+**Result: all ten localized correctly, and the ordering is backwards from the
+prediction.** The two `overloaded` tasks — naive queries returning 51 and 14
+files — were the *fastest* at 2 steps each. `unique-name` was the slowest. The
+reason is visible in the traces: `repo.search` returns matching lines with
+context, so a query with fifty hits is a ranked list the model reads the way a
+person reads grep output, and one good line beats a short candidate set.
+
+**The one `found = —`, attributed honestly.** `i1-strategy-repository-impl`
+scores as not-found because the agent **never read a file**. It issued five
+searches, the third being `implements IStrategyRepository`, and answered
+correctly at step 3 from the search output alone. So it localized in 3 steps
+and the metric recorded nothing, because the metric counts reads. That is a
+limitation of the scorer, not a failure of the agent — and it is left in the
+table as a `—` rather than repaired after the fact, because redefining a
+pre-registered metric once the data is in is how a null result becomes a win.
+
+**A second limitation, in the same direction.** The metric is sensitive to how
+much explanation a task's goal demands. `u1-ratelimit-fallback` took 11 steps
+not because the file was hard to find but because the goal also asked *how* the
+fallback is invoked, so the agent kept reading. Steps-to-hit conflates
+localization with the reading the answer requires.
+
+**Consequence for ADR 0023.** Semantic-localization failures at this difficulty
+are **0** against a bar of ≥5, so the LSP deferral is confirmed on a large
+multi-module Java service rather than only on mid-size Python libraries. What
+is still untested: find-all-references before a rename, where an index is not
+merely better-ranked but *correct* where text search is not.
+
+## Maven as the Evidence Gate's oracle, confined (2026-08-14)
+
+ADR 0029 lets a check recipe declare the toolchain roots it needs to read. The
+claim it has to earn: a Maven build that could not run inside Haven's sandbox
+now can, and the declaration is what makes the difference.
+
+**The A/B on the mechanism itself.** The same recipe, the same repository, run
+twice through `ProcessExecutor.run_recipe` under the seatbelt backend:
+
+| `readable_roots` | exit | outcome |
+|---|---|---|
+| `["~/.m2"]` | 0 | `Tests run: 4, Failures: 0, Errors: 0` — `BUILD SUCCESS` |
+| `()` | 1 | `Non-readable POM /Users/…/.m2/repository/…/spring-boot-starter-parent-3.5.16.pom` |
+
+So the ADR's pre-registered metric — Maven modules runnable as a confined Haven
+check — moves from **0 to 1**, and the undeclared case still fails closed.
+
+**A second obstacle the ADR did not anticipate.** The first attempt failed with
+*"The JAVA_HOME environment variable is not defined correctly"* in **both**
+arms. `ProcessExecutor.ENV_ALLOWLIST` is `PATH, HOME, LANG, LC_ALL, TERM,
+TMPDIR, VIRTUAL_ENV`, so a JDK-based toolchain cannot find its runtime even
+with its cache readable. The workaround is to supply it through the recipe
+argv, which is user-authored config and therefore no new authority:
+
+```toml
+[recipes.verify]
+argv = ["/bin/sh", "-c", "JAVA_HOME=/opt/homebrew/… exec mvn -o -pl big-market-types test"]
+readable_roots = ["~/.m2"]
+timeout_seconds = 300
+```
+
+This works but is a papercut, and it is a second thing a non-Python toolchain
+must discover by hitting it. Widening `ENV_ALLOWLIST` is a separate decision
+with its own security argument and was deliberately not made here.
+
+**The full loop, end to end.** With that recipe registered, one bug was
+injected into a module covered by real unit tests (`ResponseHttpStatusMapper`
+mapping business code `0003` to `BAD_REQUEST` instead of `CONFLICT`) and the
+agent was given only *"the `verify` check is failing in the big-market-types
+module"*:
+
+| | |
+|---|---|
+| Status | `succeeded`, `evidence_satisfied` |
+| Steps | 16 (27 tool calls) |
+| Wall clock | 58 s |
+| Input tokens | 183,341 (161,408 cached) |
+| Files changed | 1 — exactly the injected one, restored to its committed state |
+| Check | `Tests run: 4, Failures: 0` inside the sandbox |
+
+This is the first time Haven's Evidence Gate has been closed by a non-Python
+toolchain, on a 534-file repository it had never seen, with the build confined.
+
 ## Real-repository success rate (2026-08-12)
 
 The eight-fixture run below was an existence proof on Haven's own toy fixtures.
