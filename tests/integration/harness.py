@@ -122,6 +122,7 @@ class Harness:
         recipes: dict[str, RecipeSpec] | None = None,
         model_name: str = "scripted",
         pricing: Pricing | None = None,
+        supports_prefix_continuation: bool | None = None,
     ) -> None:
         self.workspace = FsWorkspace(repo)
         self.store = MemorySessionStore()
@@ -146,4 +147,5 @@ class Harness:
             budget=budget if budget is not None else Budget(),
             launcher=resolved,
             pricing=pricing,
+            supports_prefix_continuation=supports_prefix_continuation,
         )

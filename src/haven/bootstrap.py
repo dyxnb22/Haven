@@ -148,13 +148,13 @@ async def build_services(
                 f"no API key found in ${config.provider.api_key_env}; "
                 "set it or run offline commands only"
             )
+        _profile = profile_for(config.provider.model)
         model = OpenAICompatibleModel(
             base_url=config.provider.base_url,
             api_key=api_key,
             model=config.provider.model,
-            requires_tool_call_reasoning=profile_for(
-                config.provider.model
-            ).requires_tool_call_reasoning,
+            requires_tool_call_reasoning=_profile.requires_tool_call_reasoning,
+            idle_timeout=_profile.stream_idle_timeout_s,
         )
 
     baseline = await capture_git_baseline(workspace_root)
@@ -176,6 +176,11 @@ async def build_services(
         git_commit=baseline.commit,
         project_guidance=guidance,
         launcher=launcher,
+        # Prefix continuation needs both the capability and the endpoint that
+        # honours it; this is the one place that knows the configured base URL.
+        supports_prefix_continuation=profile_for(model.model_name).prefix_continuation_enabled(
+            config.provider.base_url
+        ),
     )
     return AppServices(
         config=config,
@@ -274,13 +279,13 @@ def build_provider(config: ResolvedConfig) -> OpenAICompatibleModel:
     api_key = config.provider.api_key()
     if api_key is None:
         raise BootstrapError(f"no API key found in ${config.provider.api_key_env}")
+    profile = profile_for(config.provider.model)
     return OpenAICompatibleModel(
         base_url=config.provider.base_url,
         api_key=api_key,
         model=config.provider.model,
-        requires_tool_call_reasoning=profile_for(
-            config.provider.model
-        ).requires_tool_call_reasoning,
+        requires_tool_call_reasoning=profile.requires_tool_call_reasoning,
+        idle_timeout=profile.stream_idle_timeout_s,
     )
 
 

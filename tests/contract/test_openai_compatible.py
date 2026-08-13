@@ -371,6 +371,79 @@ async def test_error_status_mapping(status: int, code: str) -> None:
     assert exc.value.code == code
 
 
+class TestRetryAfter:
+    """A 429/503 may carry a `Retry-After` header naming when to try again.
+    Honoring it beats a fixed backoff that hammers a provider asking for a
+    longer pause. The adapter surfaces the hint; RunService decides the wait."""
+
+    async def test_a_429_surfaces_retry_after_seconds(self) -> None:
+        model = make_model(
+            lambda req: httpx.Response(429, headers={"retry-after": "5"}, json={"error": "slow"})
+        )
+        with pytest.raises(ProviderError) as exc:
+            await collect(model)
+        assert exc.value.retry_after_s == 5.0
+
+    async def test_a_retry_after_http_date_is_converted_to_seconds(self) -> None:
+        from datetime import UTC, datetime, timedelta
+        from email.utils import format_datetime
+
+        when = format_datetime(datetime.now(tz=UTC) + timedelta(seconds=30))
+        model = make_model(
+            lambda req: httpx.Response(503, headers={"retry-after": when}, json={"error": "x"})
+        )
+        with pytest.raises(ProviderError) as exc:
+            await collect(model)
+        assert exc.value.retry_after_s is not None
+        # Allow a little slack for the second that elapses during the request.
+        assert 20.0 <= exc.value.retry_after_s <= 30.0
+
+    async def test_no_retry_after_header_leaves_the_hint_unset(self) -> None:
+        model = make_model(lambda req: httpx.Response(429, json={"error": "x"}))
+        with pytest.raises(ProviderError) as exc:
+            await collect(model)
+        assert exc.value.retry_after_s is None
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "This model's maximum context length is 65536 tokens. However, you requested 70000.",
+        "context_length_exceeded: please reduce the length of the messages",
+    ],
+)
+async def test_a_context_length_400_maps_to_context_overflow(message: str) -> None:
+    """A provider 400 that means 'the prompt is too long' must be a distinct,
+    recoverable signal — RunService can force compaction and retry — not the
+    generic terminal `protocol` error every other malformed request gets."""
+    model = make_model(lambda req: httpx.Response(400, json={"error": {"message": message}}))
+    with pytest.raises(ProviderError) as exc:
+        await collect(model)
+    assert exc.value.code == "context_overflow"
+
+
+async def test_an_unrelated_400_stays_a_protocol_error() -> None:
+    model = make_model(
+        lambda req: httpx.Response(400, json={"error": {"message": "invalid temperature"}})
+    )
+    with pytest.raises(ProviderError) as exc:
+        await collect(model)
+    assert exc.value.code == "protocol"
+
+
+async def test_insufficient_balance_maps_to_a_non_retryable_quota_error() -> None:
+    """DeepSeek returns 402 when the account is out of credit. Retrying cannot
+    add balance, so it must surface as a distinct, terminal `quota` code rather
+    than the opaque `protocol` bucket a user cannot act on."""
+    model = make_model(
+        lambda req: httpx.Response(402, json={"error": {"message": "Insufficient Balance"}})
+    )
+    with pytest.raises(ProviderError) as exc:
+        await collect(model)
+    assert exc.value.code == "quota"
+    assert exc.value.retryable is False
+
+
 async def test_error_messages_never_contain_api_key() -> None:
     model = make_model(lambda req: httpx.Response(401, json={"error": "bad key"}))
     with pytest.raises(ProviderError) as exc:
@@ -477,6 +550,49 @@ class TestTransportErrorClassification:
 
         with pytest.raises(KeyError):
             await collect(make_model(handler))
+
+
+class TestIdleTimeout:
+    """The post-TTFT timeout bounds the gap *between* events, not the whole
+    stream. A reasoning model that streams steadily for minutes must not be
+    killed by a total deadline; only a genuine stall should time out."""
+
+    async def test_a_slow_but_steady_stream_outlasts_the_idle_bound(self) -> None:
+        # Five events 0.1s apart span 0.5s total — well past a 0.3s idle bound —
+        # but no single gap exceeds it, so the stream must complete. A total
+        # deadline (the old behavior) would kill this mid-stream.
+        class SteadyStream(httpx.AsyncByteStream):
+            async def __aiter__(self) -> AsyncIterator[bytes]:
+                for i in range(5):
+                    await asyncio.sleep(0.1)
+                    yield chunk({"content": str(i)})
+                yield chunk({}, finish="stop")
+                yield b"data: [DONE]\n\n"
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, stream=SteadyStream())
+
+        model = make_model(handler, idle_timeout=0.3)
+        events = await collect(model)
+        text = "".join(e.text for e in events if isinstance(e, TextDelta))
+        assert text == "01234"
+        assert isinstance(events[-1], StreamFinished)
+
+    async def test_a_stalled_stream_times_out_on_the_gap(self) -> None:
+        class StallingStream(httpx.AsyncByteStream):
+            async def __aiter__(self) -> AsyncIterator[bytes]:
+                yield chunk({"content": "one"})
+                await asyncio.sleep(30)
+                yield chunk({}, finish="stop")
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, stream=StallingStream())
+
+        model = make_model(handler, idle_timeout=0.2)
+        with pytest.raises(ProviderError) as exc:
+            await collect(model)
+        assert exc.value.code == "timeout"
+        assert exc.value.retryable is True
 
 
 async def test_first_event_timeout() -> None:

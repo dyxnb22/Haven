@@ -39,9 +39,33 @@ class ModelProfile:
     context_window_tokens: int = 0  # 0 = unknown; the safety check is skipped
     #: Whether the provider can continue a truncated assistant message from its
     #: own prefix (DeepSeek's beta prefix-completion). When false, Haven's
-    #: conversational continuation shim is used instead. Off until confirmed
-    #: live, since a half-built continuation is worse than the working shim.
+    #: conversational continuation shim is used instead.
     supports_assistant_prefix: bool = False
+    #: The endpoint that prefix continuation requires, if any. DeepSeek accepts
+    #: `prefix: true` only on its beta base URL and 400s on the stable one, so a
+    #: run pointed elsewhere must fall back to the shim rather than fail every
+    #: truncated turn. Empty means the capability needs no special endpoint.
+    prefix_beta_base_url: str = ""
+    #: Maximum idle gap between streamed events before the adapter times out,
+    #: reset on every event (not a total-stream deadline; ADR 0014 targets a
+    #: reasoning model whose thinking streams steadily for minutes). The overall
+    #: run stays bounded by the wall-clock budget, so this only needs to be long
+    #: enough to tell a genuine stall from a slow-but-live generation.
+    stream_idle_timeout_s: float = 120.0
+
+    def prefix_continuation_enabled(self, base_url: str) -> bool:
+        """Whether native prefix continuation may be used against `base_url`.
+
+        True only when the model supports it *and* the configured endpoint is
+        the one it requires (if any). This is the guard that keeps a truncated
+        turn on the stable DeepSeek endpoint from sending `prefix: true` and
+        earning a guaranteed 400 — it falls back to the shim there instead.
+        """
+        if not self.supports_assistant_prefix:
+            return False
+        if not self.prefix_beta_base_url:
+            return True
+        return base_url.rstrip("/") == self.prefix_beta_base_url.rstrip("/")
 
 
 #: Densest chars-per-token ratio observed across the live eval corpus
@@ -79,6 +103,17 @@ DEEPSEEK_V4_FLASH = ModelProfile(
     # cost/latency choice (ADR 0011), not a safety limit; this window makes
     # that provable rather than asserted.
     context_window_tokens=1_000_000,
+    # Thinking mode (`high`/`max` effort) can stream reasoning for minutes; a
+    # total deadline would kill a healthy generation, so the bound is a generous
+    # inter-event idle gap instead. The wall-clock budget still caps the run.
+    stream_idle_timeout_s=300.0,
+    # Confirmed live 2026-08-13 (ADR 0022's pending gate): against the beta
+    # endpoint a trailing assistant message with `prefix: true` is extended in
+    # place; the stable endpoint rejects it with an explicit 400 naming the beta
+    # base URL. The capability is therefore real but endpoint-bound, so it is
+    # declared with the endpoint that satisfies it rather than as a bare flag.
+    supports_assistant_prefix=True,
+    prefix_beta_base_url="https://api.deepseek.com/beta",
 )
 
 _PROFILES: dict[str, ModelProfile] = {

@@ -51,3 +51,39 @@ class TestFlashProfile:
     def test_it_leaves_reasoning_effort_to_the_provider(self) -> None:
         """No default is changed on a guess; the A/B harness measures it first."""
         assert DEEPSEEK_V4_FLASH.reasoning_effort is None
+
+    def test_it_allows_a_longer_idle_stream_gap_than_the_default(self) -> None:
+        """Thinking mode can pause between streamed tokens longer than a
+        non-reasoning model would, so the idle bound is more generous here."""
+        assert DEEPSEEK_V4_FLASH.stream_idle_timeout_s > DEFAULT_PROFILE.stream_idle_timeout_s
+
+    def test_it_supports_native_prefix_continuation_on_the_beta_endpoint(self) -> None:
+        """Confirmed live 2026-08: the beta endpoint extends an assistant
+        `prefix: true` message in place; the stable endpoint 400s on it. So the
+        capability is real but only when pointed at the beta endpoint."""
+        assert DEEPSEEK_V4_FLASH.supports_assistant_prefix is True
+        assert DEEPSEEK_V4_FLASH.prefix_continuation_enabled("https://api.deepseek.com/beta")
+        assert DEEPSEEK_V4_FLASH.prefix_continuation_enabled("https://api.deepseek.com/beta/")
+        assert not DEEPSEEK_V4_FLASH.prefix_continuation_enabled("https://api.deepseek.com")
+
+
+class TestPrefixEndpointGuard:
+    """A profile that needs a specific endpoint for prefix continuation only
+    enables it there, so a truncated turn on the wrong endpoint falls back to
+    the shim instead of a guaranteed 400."""
+
+    def test_a_profile_without_a_required_endpoint_enables_prefix_anywhere(self) -> None:
+        from haven.application.profiles import ModelProfile
+
+        p = ModelProfile(name="anyendpoint", supports_assistant_prefix=True)
+        assert p.prefix_continuation_enabled("https://example.com/v1")
+
+    def test_a_profile_without_the_capability_never_enables_prefix(self) -> None:
+        from haven.application.profiles import ModelProfile
+
+        p = ModelProfile(
+            name="off",
+            supports_assistant_prefix=False,
+            prefix_beta_base_url="https://api.deepseek.com/beta",
+        )
+        assert not p.prefix_continuation_enabled("https://api.deepseek.com/beta")

@@ -33,6 +33,10 @@ _VOLATILE = {
     "approval_id",
     "request_digest",
     "ticket_digest",
+    # Opaque by design: it exists so the runtime can notice the envelope moved,
+    # and it says nothing readable about *what* moved. `system_prompt_chars`
+    # deliberately stays in the golden, so a prompt edit shows up as a diff.
+    "system_prompt_digest",
     "duration_ms",
     "ttft_ms",
     "at",

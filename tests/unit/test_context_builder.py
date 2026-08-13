@@ -344,3 +344,37 @@ class TestPrefixStability:
         head_b = [m.content for m in req_b.messages[:-1]]
         assert head_a == head_b  # everything but the trailing run-status is identical
         assert req_a.messages[-1].content != req_b.messages[-1].content
+
+
+class TestBudgetReduction:
+    """A provider 400 on context length means the char budget overshot the real
+    token window. RunService recovers by shrinking the budget and rebuilding, so
+    a reduced budget must drop more history on the next build."""
+
+    def test_reducing_the_budget_shrinks_the_assembled_request(self) -> None:
+        transcript = [bulky_tool_message(f"f{i}.py", f"c{i}") for i in range(6)]
+        b = builder(max_context_chars=MAX_CONTEXT_CHARS)
+        before, _ = b.build(transcript, BudgetUsage())
+        before_size = sum(len(m.content) for m in before.messages)
+
+        b.reduce_budget(0.5)
+        after, _ = b.build(transcript, BudgetUsage())
+        after_size = sum(len(m.content) for m in after.messages)
+
+        assert after_size < before_size
+
+    def test_the_reduction_sticks_for_later_turns(self) -> None:
+        """One overflow should not have to be rediscovered every turn."""
+        b = builder(max_context_chars=MAX_CONTEXT_CHARS)
+        reduced = b.reduce_budget(0.5)
+        assert reduced == MAX_CONTEXT_CHARS // 2
+        assert b.reduce_budget(0.5) == MAX_CONTEXT_CHARS // 4
+
+    def test_reduction_floors_so_the_head_always_fits(self) -> None:
+        """Repeated shrinking must never drive the budget below the fixed head,
+        or build() would trip its own over-budget guard."""
+        b = builder(max_context_chars=MAX_CONTEXT_CHARS)
+        for _ in range(50):
+            b.reduce_budget(0.5)
+        request, _ = b.build([], BudgetUsage())
+        assert "You are Haven" in request.messages[0].content

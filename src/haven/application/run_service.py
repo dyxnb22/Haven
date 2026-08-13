@@ -64,6 +64,7 @@ from haven.contracts.events import (
     ContextBuilt,
     ModelCompleted,
     Notice,
+    RequestEnvelope,
     RunCreated,
     RunFinished,
     SteerQueued,
@@ -84,6 +85,7 @@ from haven.contracts.model import (
 )
 from haven.contracts.tools import RecipeSpec, tool_schemas
 from haven.domain.budget import Budget, check_budget
+from haven.domain.digest import digest_of
 from haven.domain.enums import PermissionMode, RunStatus, StopReason
 from haven.domain.evidence import evaluate_evidence_gate
 from haven.domain.ids import RunId, new_run_id
@@ -106,6 +108,15 @@ MAX_OUTPUT_CONTINUATIONS = 2
 #: re-prompted this many times before the run stops for lack of progress.
 MAX_EMPTY_REPLIES = 2
 
+#: A provider `context_overflow` (the char budget overshot the real token
+#: window) is recovered by shrinking the budget and rebuilding this many times
+#: before the run fails, so a genuinely un-fitting transcript still stops.
+MAX_CONTEXT_OVERFLOW_RETRIES = 2
+#: How much of the budget survives each overflow retry. Aggressive enough that
+#: a couple of shrinks clear a real overshoot; the builder floors it so the
+#: fixed head always fits.
+CONTEXT_OVERFLOW_SHRINK = 0.6
+
 #: Transient provider failures are common enough on real networks that losing a
 #: whole run to one is the wrong default. Measured: 3 of 8 live runs hit a
 #: ConnectError before any token arrived, and 2 of 31 real-repo cases later died
@@ -113,6 +124,21 @@ MAX_EMPTY_REPLIES = 2
 #: as good as that classification.
 MODEL_RETRY_ATTEMPTS = 2
 MODEL_RETRY_BASE_DELAY = 1.0
+#: A provider may ask (via `Retry-After`) for a wait longer than this, but a
+#: bounded retry loop honoring an arbitrary value could block a run for minutes
+#: past its wall-clock budget (checked only between turns, not during a sleep).
+#: Beyond this ceiling the run should fail and be resumed, not hang.
+MODEL_RETRY_MAX_DELAY = 60.0
+
+
+def _retry_delay(attempt: int, retry_after_s: float | None) -> float:
+    """The wait before the next model retry: the longer of exponential backoff
+    and any provider-requested `Retry-After`, capped at `MODEL_RETRY_MAX_DELAY`.
+    Obeying `Retry-After` stops a fixed backoff from hammering a provider that
+    asked for a longer pause; the cap stops one header from blocking a run."""
+    backoff: float = MODEL_RETRY_BASE_DELAY * (2**attempt)
+    wait = backoff if retry_after_s is None else max(backoff, retry_after_s)
+    return min(wait, MODEL_RETRY_MAX_DELAY)
 
 
 @dataclass(slots=True)
@@ -173,6 +199,8 @@ class RunService:
         project_guidance: str = "",
         launcher: SandboxLauncher | None = None,
         context_chars_override: int = 0,
+        supports_prefix_continuation: bool | None = None,
+        repeat_nudge: bool = True,
     ) -> None:
         self._model = model
         self._workspace = workspace
@@ -187,6 +215,15 @@ class RunService:
         # profile). Lets the compaction A/B force compaction early by shrinking
         # the budget without inventing a fake model.
         self._context_chars = context_chars_override or self._profile.max_context_chars
+        # Native prefix continuation is a model capability *and* an endpoint
+        # fact: DeepSeek accepts `prefix: true` only on its beta base URL. The
+        # composition root resolves both and passes the verdict here; None means
+        # "no deployment opinion", so the profile's own flag decides.
+        self._supports_prefix = (
+            self._profile.supports_assistant_prefix
+            if supports_prefix_continuation is None
+            else supports_prefix_continuation
+        )
         # Configured rates win; otherwise fall back to the model's published
         # rate card. Reporting a documented price for the model actually in use
         # beats reporting $0.00, but it is a published figure and not an
@@ -367,6 +404,9 @@ class RunService:
             reasoning_effort=self._profile.reasoning_effort,
         )
         stuck = StuckLoopDetector()
+        # Digest of the last logged request envelope, so an unchanged one is not
+        # re-logged every step.
+        envelope_digest = ""
         started = time.monotonic()
         elapsed_base = ctx.usage.wall_time_seconds
         # Output-truncation and empty-reply recovery state (a truncated answer
@@ -403,31 +443,60 @@ class RunService:
                         ),
                     )
 
-                request, segments = builder.build(ctx.transcript, ctx.usage, ctx.plan)
-                await self._emitter.emit(
-                    ctx.run_id,
-                    ContextBuilt(
-                        run_id=ctx.run_id,
-                        step=step,
-                        segments=segments,
-                        total_bytes=sum(s.size_bytes for s in segments),
-                    ),
-                )
-
-                try:
-                    result = await self._stream_model(ctx, step, request)
-                except ProviderError as exc:
+                # Build + stream, with bounded recovery from a provider context
+                # overflow: a 400 there means the char budget overshot the real
+                # token window, so shrink the budget (forcing more compaction)
+                # and rebuild rather than failing the run.
+                overflow_retries = 0
+                while True:
+                    request, segments = builder.build(ctx.transcript, ctx.usage, ctx.plan)
+                    envelope_digest = await self._record_envelope(
+                        ctx, step, request, envelope_digest
+                    )
                     await self._emitter.emit(
                         ctx.run_id,
-                        Notice(
+                        ContextBuilt(
                             run_id=ctx.run_id,
-                            level="error",
-                            message=f"provider error ({exc.code}): {exc}",
+                            step=step,
+                            segments=segments,
+                            total_bytes=sum(s.size_bytes for s in segments),
                         ),
                     )
-                    return await self._finish(
-                        ctx, RunStatus.FAILED, StopReason.PROVIDER_ERROR, answer.final_text
-                    )
+
+                    try:
+                        result = await self._stream_model(ctx, step, request)
+                        break
+                    except ProviderError as exc:
+                        if (
+                            exc.code == "context_overflow"
+                            and overflow_retries < MAX_CONTEXT_OVERFLOW_RETRIES
+                        ):
+                            overflow_retries += 1
+                            new_budget = builder.reduce_budget(CONTEXT_OVERFLOW_SHRINK)
+                            await self._emitter.emit(
+                                ctx.run_id,
+                                Notice(
+                                    run_id=ctx.run_id,
+                                    level="warning",
+                                    message=(
+                                        "context overflow; forcing compaction "
+                                        f"(budget -> {new_budget} chars), retry "
+                                        f"{overflow_retries}/{MAX_CONTEXT_OVERFLOW_RETRIES}"
+                                    ),
+                                ),
+                            )
+                            continue
+                        await self._emitter.emit(
+                            ctx.run_id,
+                            Notice(
+                                run_id=ctx.run_id,
+                                level="error",
+                                message=f"provider error ({exc.code}): {exc}",
+                            ),
+                        )
+                        return await self._finish(
+                            ctx, RunStatus.FAILED, StopReason.PROVIDER_ERROR, answer.final_text
+                        )
 
                 self._charge_usage(ctx, request, result)
                 await self._emitter.emit(
@@ -511,7 +580,7 @@ class RunService:
                     ),
                 ),
             )
-            if self._profile.supports_assistant_prefix:
+            if self._supports_prefix:
                 # Native prefix continuation (ADR 0022): re-issue with the
                 # partial answer as an assistant *prefix* the model extends in
                 # place — no seam duplication, no extra user turn. The adapter
@@ -708,7 +777,37 @@ class RunService:
             fingerprint = call_fingerprint(
                 call.tool_name, call.arguments_json, result.to_model_text()
             )
-            if stuck.observe(fingerprint):
+            verdict = stuck.observe(fingerprint)
+            if verdict == "nudge":
+                # Warn while the model can still act on it. The note is
+                # program-written and lands as a trusted message, so it names
+                # only the tool (a registry fact) — never the model's own
+                # argument JSON, which would smuggle untrusted text into
+                # trusted context.
+                ctx.transcript.append(
+                    ModelMessage(
+                        role="user",
+                        content=(
+                            f"Note from the harness: your last two {call.tool_name} calls used "
+                            "identical arguments and returned an identical result. Repeating it "
+                            "will not produce new information. Change approach — different "
+                            "arguments, a different tool, or state the conclusion you can "
+                            "already support."
+                        ),
+                    )
+                )
+                await self._emitter.emit(
+                    ctx.run_id,
+                    Notice(
+                        run_id=ctx.run_id,
+                        level="info",
+                        message=(
+                            f"repeated call: {call.tool_name} produced an identical result; "
+                            "nudging the model to change approach"
+                        ),
+                    ),
+                )
+            elif verdict == "stuck":
                 await self._emitter.emit(
                     ctx.run_id,
                     Notice(
@@ -722,6 +821,44 @@ class RunService:
                 )
                 return await self._finish(ctx, RunStatus.STOPPED, StopReason.NO_PROGRESS, "")
         return None
+
+    async def _record_envelope(
+        self, ctx: RunContext, step: int, request: ModelRequest, previous: str
+    ) -> str:
+        """Journal the model-visible request envelope when it changes.
+
+        Returns the current digest so the caller can compare on the next step.
+        The system prompt and the tool set are stable across a run by design
+        (ADR 0008), so in practice this writes one event per run — and writes a
+        second one precisely when something that shapes the model's behaviour
+        moved, which is the case worth seeing in a trace.
+        """
+        system = next((m.content for m in request.messages if m.role == "system"), "")
+        tool_names = tuple(tool.name for tool in request.tools)
+        digest = digest_of(
+            {
+                "system": system,
+                "tools": list(tool_names),
+                "reasoning_effort": request.reasoning_effort or "",
+                "max_output_tokens": request.max_output_tokens or 0,
+            }
+        )
+        if digest == previous:
+            return digest
+        await self._emitter.emit(
+            ctx.run_id,
+            RequestEnvelope(
+                run_id=ctx.run_id,
+                step=step,
+                reason="initial" if not previous else "changed",
+                system_prompt_digest=digest,
+                system_prompt_chars=len(system),
+                tool_names=tool_names,
+                reasoning_effort=request.reasoning_effort or "",
+                max_output_tokens=request.max_output_tokens or 0,
+            ),
+        )
+        return digest
 
     # -- model streaming ---------------------------------------------------------
 
@@ -747,7 +884,7 @@ class RunService:
                     await self._emitter.emit(
                         ctx.run_id, StreamRestarted(run_id=ctx.run_id, step=step)
                     )
-                delay = MODEL_RETRY_BASE_DELAY * (2**attempt)
+                delay = _retry_delay(attempt, exc.retry_after_s)
                 await self._emitter.emit(
                     ctx.run_id,
                     Notice(

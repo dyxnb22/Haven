@@ -25,6 +25,11 @@ from haven.domain.budget import Budget, BudgetUsage
 
 MAX_CONTEXT_CHARS = 96_000
 
+#: Overflow recovery never shrinks the budget below this, so the fixed head
+#: (system rules + goal) and volatile tail always fit and `build()` cannot trip
+#: its over-budget guard from shrinking alone.
+MIN_CONTEXT_CHARS = 16_000
+
 Trust = Literal["trusted", "untrusted"]
 
 
@@ -109,6 +114,20 @@ class ContextBuilder:
         self._sandbox_backend = sandbox_backend
         self._max_context_chars = max_context_chars
         self._reasoning_effort = reasoning_effort
+
+    def reduce_budget(self, factor: float) -> int:
+        """Shrink the char budget for every subsequent build, flooring at
+        `MIN_CONTEXT_CHARS`.
+
+        Recovery from a provider `context_overflow`: a 400 there means the char
+        budget overshot the model's real token window (the char→token ratio was
+        denser than the profile assumed), so the next build must drop more
+        history. The reduction sticks on the instance, so a run that overflowed
+        once keeps the tighter budget rather than rediscovering it every turn.
+        Returns the new budget.
+        """
+        self._max_context_chars = max(MIN_CONTEXT_CHARS, int(self._max_context_chars * factor))
+        return self._max_context_chars
 
     def _build_tail(self, plan: tuple[PlanStep, ...], usage: BudgetUsage) -> list[_Selected]:
         """The volatile tail: the plan (if any) and the live run-status line,

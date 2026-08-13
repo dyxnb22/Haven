@@ -10,6 +10,14 @@ Amended by ADR 0017: the exec profile described here originally left the
 workspace writable; it is now workspace-read-only (scratch stays writable),
 because Landlock cannot carve the protected paths out of a writable workspace.
 
+**Amended by ADR 0026: two security claims below are wrong as written and are
+annotated in place.** The premise that "a misclassification costs a skipped
+prompt, not an escape" holds for *writes* and fails for *reads*; and denying the
+network does not close exfiltration, because exec output is returned to the
+model. Read ADR 0026 before relying on either paragraph. The original text is
+kept because the reasoning that produced a real gap is worth being able to
+re-read.
+
 ## Gate: problem
 
 Haven could run exactly one kind of process: a `repo.check` recipe whose argv
@@ -72,6 +80,14 @@ the process can actually do is bounded by the OS profile either way. This is
 the one auto-allow exception in the whole policy, and a test pins it so it
 cannot widen silently.
 
+> **Corrected by ADR 0026 (2026-08-13).** The claim in the previous paragraph is
+> true for writes and **false for reads**. The sandbox deliberately leaves
+> non-`$HOME` paths readable so ordinary interpreters start, `repo.exec`
+> validates `cwd` rather than the paths inside `argv`, and exec `stdout` reaches
+> the model — so a misclassified read *is* an escape, for reading. `classify_argv`
+> now demotes a `SAFE_READ` match to `OTHER` when any operand leaves the
+> workspace, which is what makes the sentence above true again.
+
 **Fail closed with no override.** With no sandbox backend the policy returns
 `DENY sandbox_unavailable`, and it does so for an *absent* fact as well as a
 false one — an un-collected fact must never read as permission. There is no
@@ -100,6 +116,13 @@ claim this project already makes elsewhere. The sandbox keeps system paths
 readable and makes the user's home unreadable, and denies the network
 unconditionally, so a command cannot both obtain a credential and send it
 anywhere.
+
+> **Corrected by ADR 0026 (2026-08-13).** The last clause does not follow.
+> Denying the network closes one exit; it is not the only one. A command's
+> `stdout` is returned to the model and appended to the transcript, so the model
+> provider *is* an egress channel — `cat /proc/<parent-pid>/environ` reaches it
+> without a single packet leaving the sandbox. What actually closes this is the
+> operand check ADR 0026 added, plus the approval card the demotion now forces.
 
 **One wrapping site.** `ProcessExecutor` holds the launcher and wraps both
 `run_exec` and `run_recipe`; callers pass unwrapped argv and a `SandboxSpec`.

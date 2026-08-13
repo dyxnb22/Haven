@@ -1,7 +1,7 @@
 # ADR 0026: exec approval friction follows the operands, not just the program
 
 Date: 2026-08-13
-Status: Accepted
+Status: Accepted (corrects ADR 0009)
 
 ## Context
 

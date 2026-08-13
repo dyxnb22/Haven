@@ -45,8 +45,31 @@ def _count_tests() -> int:
     return int(match.group(1))
 
 
+def _coverage_data_is_stale(data: Path, inputs: list[Path]) -> bool:
+    """Whether `.coverage` predates any file it claims to measure.
+
+    A missing data file counts as stale: there is nothing to report from.
+    """
+    if not data.is_file():
+        return True
+    newest = max((p.stat().st_mtime for p in inputs if p.is_file()), default=0.0)
+    return data.stat().st_mtime < newest
+
+
 def _coverage_pct() -> int | None:
-    """The documented src-only figure, via the same command the docs cite."""
+    """The documented src-only figure, via the same command the docs cite.
+
+    `coverage report` reads whatever `.coverage` already holds — it never
+    re-runs the suite. Reporting from a stale data file silently publishes a
+    wrong number (lines added since the last run read as uncovered) into a
+    table CI then enforces, so staleness fails loudly instead.
+    """
+    data = ROOT / ".coverage"
+    if _coverage_data_is_stale(data, [*_src_files(), *_test_files()]):
+        raise SystemExit(
+            "coverage data is missing or older than the newest source/test file, so the "
+            "reported figure would be wrong. Run `uv run coverage run -m pytest` first."
+        )
     result = subprocess.run(
         [sys.executable, "-m", "coverage", "report", "--include=src/*"],
         cwd=ROOT,

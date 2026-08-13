@@ -35,14 +35,30 @@ opencode head-to-head, attributed:
 
 ## Decision
 
-**Read-only LSP (Phase 3 gate): do not build — gate not met.** The gate was
-≥5 failures attributable to semantic-localization limits; the corpus has
-**≈1**. Grep/read localization is not the bottleneck the data shows; the
-bottleneck is convergence/stopping. Building an LSP now would be adding a
-capability against an unproven need — exactly what the gate exists to
+**Read-only LSP (Phase 3 gate): do not build — gate not met *at the measured
+difficulty*.** The gate was ≥5 failures attributable to semantic-localization
+limits; the corpus has **≈1**. Grep/read localization is not the bottleneck the
+data shows; the bottleneck is convergence/stopping. Building an LSP now would be
+adding a capability against an unproven need — exactly what the gate exists to
 prevent. Revisit if a future tier (larger repos, deeper call graphs) pushes
 semantic-localization failures past the threshold; the tier-4/5 attribution
 format already isolates them.
+
+*Amended 2026-08-14 — the scope of this verdict, stated plainly.* The corpus's
+hardest tier is defined by `evals/real/repos.lock` as "larger repositories
+(**10k+ source lines**)": click, jinja, pygments, rich. That is the same order
+of magnitude as Haven itself, single-language, with grep-friendly public APIs —
+the regime where ripgrep plus read is *most* competitive with an index. So this
+verdict says "semantic localization is not the bottleneck on mid-size Python
+libraries", which is weaker than "an LSP would not help". Where an index wins
+decisively — overloaded symbol names, find-all-references versus
+all-textual-matches, dynamic dispatch and deep inheritance, cross-language —
+this corpus barely exercises. Settling the broader question needs a tier on a
+genuinely large repository; the attribution format makes that experiment cheap
+to design, and it has not been run. Note also that an LSP is not the first thing
+that binds at that scale: three tier-3 cases already died `token_budget_exhausted`
+on a ceiling calibrated for small repos, so context selection and budget
+calibration bind before localization does.
 
 **Planner / goal FSM: do not build.** The dominant failure is the model not
 *stopping*, not the harness failing to *plan*. A planner does not fix "hunts

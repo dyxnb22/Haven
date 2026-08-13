@@ -13,6 +13,28 @@
     "step": 1
   },
   {
+    "kind": "request.envelope",
+    "step": 1,
+    "reason": "initial",
+    "system_prompt_chars": 2050,
+    "tool_names": [
+      "repo.list",
+      "repo.search",
+      "repo.read",
+      "repo.edit",
+      "repo.create",
+      "repo.delete",
+      "repo.move",
+      "repo.apply_patch",
+      "repo.exec",
+      "repo.diff",
+      "repo.check",
+      "task.plan"
+    ],
+    "reasoning_effort": "",
+    "max_output_tokens": 4096
+  },
+  {
     "kind": "context.built",
     "step": 1,
     "segments": [

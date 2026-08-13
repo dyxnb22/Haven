@@ -97,6 +97,31 @@ class TestNativePrefixContinuation:
         assert last[-1].is_prefix and last[-1].content == "first half"
         assert not any("cut off" in m.content for m in last if m.role == "user")
 
+    async def test_the_endpoint_guard_falls_back_to_the_shim(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:  # type: ignore[no-untyped-def]
+        """DeepSeek accepts `prefix: true` only on its beta endpoint. When the
+        deployment is pointed elsewhere the capability must be forced off, or
+        every truncated turn would 400 — so an explicit override beats the
+        profile's own flag."""
+        import haven.application.run_service as rs
+        from haven.application.profiles import ModelProfile
+
+        capable = ModelProfile(name="scripted", supports_assistant_prefix=True)
+        monkeypatch.setattr(rs, "profile_for", lambda _name: capable)
+
+        turns = [
+            [text("first half"), finish("length")],
+            [text(" second half"), finish()],
+        ]
+        h = Harness(make_repo(tmp_path), turns, supports_prefix_continuation=False)
+        outcome = await h.service.run("Explain something long")
+
+        assert outcome.status is RunStatus.SUCCEEDED
+        last = h.model.requests_seen[-1].messages
+        assert not any(m.is_prefix for m in last), "the guard must suppress the prefix"
+        assert any("cut off" in m.content for m in last if m.role == "user")
+
 
 class TestEmptyReplies:
     async def test_an_empty_reply_is_reprompted_then_answered(self, tmp_path: Path) -> None:

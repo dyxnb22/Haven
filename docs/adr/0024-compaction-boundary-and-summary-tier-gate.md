@@ -96,6 +96,29 @@ produce.
   primary use, in which case the eval is built *first* and the tier only
   ships with a before/after measurement, in that order.
 
+*Amended 2026-08-14 — the first branch cannot currently fire, and that is now
+said out loud.* It requires evidence from a long-horizon eval that does not
+exist and whose construction this same ADR defers as not worth the cost. A gate
+whose evidence source is gated on the gate is not a gate; ADR 0007 rejected the
+Reviewer subagent for exactly this shape, on the grounds that its four required
+numbers "would be authored, not measured", so consistency demands naming the
+problem here rather than counting the first branch as a live criterion.
+
+Until the eval exists, the honest status of a summary tier is **undecided, not
+declined** — the difference between "we measured and it is not needed" (the LSP
+verdict, whatever its own scope limits) and "we have not looked". The second
+branch is the one that can actually fire, and it is a *product* trigger rather
+than a measurement, so it stays valid: if open-ended sessions become the primary
+use, the eval is built first and the tier ships only with a before/after.
+
+A third, cheaper trigger is added so the question is not purely hypothetical:
+**one observed instance** of the hard clamp dropping a user message in a real
+run is enough to take the clamp's protection-order fix (user messages last to
+drop) on its own, without the summary tier and without the eval. That fix is
+already sketched below; it is small, and one occurrence is sufficient evidence
+for it because the failure it prevents is silent loss of user intent rather than
+a quality regression that needs averaging.
+
 **The design, pre-sketched** (so the gate firing starts work, not debate):
 a second tier between `summarize_dropped` and `enforce_hard_limit` — one
 model-written summary of the span about to be clamped, wrapped in the same

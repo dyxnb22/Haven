@@ -11,8 +11,8 @@ from __future__ import annotations
 import asyncio
 import json
 import ssl
-import time
 from collections.abc import AsyncIterator, Sequence
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -58,13 +58,17 @@ class OpenAICompatibleModel:
         model: str,
         connect_timeout: float = 10.0,
         first_event_timeout: float = 30.0,
-        total_timeout: float = 120.0,
+        idle_timeout: float = 120.0,
         transport: httpx.AsyncBaseTransport | None = None,
         requires_tool_call_reasoning: bool = False,
     ) -> None:
         self._model = model
         self._first_event_timeout = first_event_timeout
-        self._total_timeout = total_timeout
+        # Bounds the gap *between* streamed events, reset on every one — not a
+        # total deadline. A reasoning model (DeepSeek `high`/`max`) can stream
+        # steadily for minutes; only a genuine stall should time out. The
+        # overall run stays bounded by RunService's wall-clock budget.
+        self._idle_timeout = idle_timeout
         # DeepSeek V4 rejects a tool-call assistant turn whose reasoning_content
         # is not replayed (ADR 0014); set per model profile at bootstrap.
         self._requires_tool_call_reasoning = requires_tool_call_reasoning
@@ -124,13 +128,12 @@ class OpenAICompatibleModel:
         payload = self._build_payload(request, replay_reasoning=replay_reasoning)
         # Exact reverse map for this request, so a wire name is never guessed.
         from_wire = {_to_wire_tool_name(t.name): t.name for t in request.tools}
-        deadline = time.monotonic() + self._total_timeout
 
         try:
             async with self._client.stream("POST", "/chat/completions", json=payload) as response:
                 if response.status_code != 200:
                     body = await response.aread()
-                    raise self._map_status(response.status_code, body)
+                    raise self._map_status(response.status_code, body, response.headers)
 
                 collector = _ToolCallCollector()
                 finish_reason: str = "stop"
@@ -140,17 +143,16 @@ class OpenAICompatibleModel:
 
                 lines = response.aiter_lines().__aiter__()
                 while True:
-                    timeout = (
-                        self._first_event_timeout
-                        if first
-                        else max(0.0, deadline - time.monotonic())
-                    )
+                    # First read bounds time-to-first-token; every read after it
+                    # bounds the idle gap and resets on arrival, so a long but
+                    # steady generation is never cut short.
+                    timeout = self._first_event_timeout if first else self._idle_timeout
                     try:
                         line = await asyncio.wait_for(anext(lines), timeout)
                     except StopAsyncIteration:
                         break
                     except TimeoutError:
-                        code = "provider_ttft_timeout" if first else "provider_total_timeout"
+                        code = "provider_ttft_timeout" if first else "provider_idle_timeout"
                         raise ProviderError(
                             "timeout", f"{code} after {timeout:.0f}s", retryable=True
                         ) from None
@@ -263,18 +265,39 @@ class OpenAICompatibleModel:
         return payload
 
     @staticmethod
-    def _map_status(status: int, body: bytes = b"") -> ProviderError:
+    def _map_status(
+        status: int, body: bytes = b"", headers: httpx.Headers | None = None
+    ) -> ProviderError:
         if status in (401, 403):
             # Never echo an auth failure body.
             return ProviderError("auth", "provider rejected credentials")
+        if status == 402:
+            # DeepSeek returns 402 "Insufficient Balance" when the account is out
+            # of credit. Retrying cannot add funds, so this is terminal and gets
+            # its own code — a user seeing `quota` knows to top up, where the
+            # generic `protocol` bucket would read as a Haven bug.
+            return ProviderError("quota", "provider account has insufficient balance")
+        retry_after = _parse_retry_after(headers.get("retry-after") if headers else None)
         if status == 429:
-            return ProviderError("rate_limited", "provider rate limit", retryable=True)
+            return ProviderError(
+                "rate_limited", "provider rate limit", retryable=True, retry_after_s=retry_after
+            )
         if status >= 500:
-            return ProviderError("server", f"provider server error ({status})", retryable=True)
+            return ProviderError(
+                "server",
+                f"provider server error ({status})",
+                retryable=True,
+                retry_after_s=retry_after,
+            )
         # A 4xx here is almost always our request being malformed. The body says
         # what is wrong and contains no credentials, so surfacing a bounded
         # snippet turns an opaque failure into a fixable one.
         detail = body.decode("utf-8", errors="replace").strip()[:300]
+        if status == 400 and _is_context_overflow(detail):
+            # The prompt is too long for the model's window. Unlike other 400s
+            # this is recoverable: RunService can force compaction and retry, so
+            # it gets a distinct code rather than the terminal `protocol` bucket.
+            return ProviderError("context_overflow", "provider context window exceeded")
         return ProviderError(
             "protocol",
             f"unexpected provider status ({status}): {detail}"
@@ -323,6 +346,46 @@ def _inline_refs(schema: dict[str, Any]) -> dict[str, Any]:
 
     inlined = resolve(schema)
     return inlined if isinstance(inlined, dict) else schema
+
+
+#: Substrings that identify a "prompt too long" 400 across OpenAI-compatible
+#: providers. DeepSeek and OpenAI phrase it as "maximum context length"; the
+#: canonical OpenAI error code is `context_length_exceeded`. Matching on the
+#: message keeps this at the wire boundary rather than leaking provider strings
+#: inward — the core only ever sees the `context_overflow` code.
+_CONTEXT_OVERFLOW_MARKERS = ("maximum context length", "context_length_exceeded", "context length")
+
+
+def _is_context_overflow(detail: str) -> bool:
+    lowered = detail.lower()
+    return any(marker in lowered for marker in _CONTEXT_OVERFLOW_MARKERS)
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Seconds to wait from a `Retry-After` header, or None.
+
+    The header is either a non-negative integer count of seconds or an HTTP
+    date; both forms appear in the wild. A past or unparseable date yields
+    None rather than a negative or bogus delay, so a malformed header can only
+    ever fall back to the retry loop's own backoff, never shorten it.
+    """
+    if value is None:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return float(value)
+    from email.utils import parsedate_to_datetime
+
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    delta = (when - datetime.now(tz=UTC)).total_seconds()
+    return delta if delta > 0 else None
 
 
 def _parse_sse_line(line: str) -> str | None:

@@ -153,6 +153,18 @@ ADR 0006 drew for planning.
   the next turn compacts again and the prefix moves again. Bounded in practice
   because the two protected outputs are the only large survivors; if this ever
   bites, the fix is a lower `MAX_CONTEXT_CHARS`, not a smarter summary.
+
+  > **Amended 2026-08-14 — this risk is obsolete, and its stated remedy was
+  > backwards.** Obsolete: roadmap v3 phase 5 added the hard clamp
+  > (`enforce_hard_limit`, via `ContextBuilder._fit_history`), which forces the
+  > kept history under the budget by dropping whole messages oldest-first and
+  > truncating the last one, so "the surviving transcript still exceeds the
+  > budget" is a state that can no longer persist. Backwards: *lowering*
+  > `MAX_CONTEXT_CHARS` would make survivors harder to fit and compaction more
+  > frequent, not less. Had the risk been real, the remedy would have been to
+  > raise the budget, or to cap individual tool outputs (a different constant).
+  > What the clamp costs instead is recorded honestly in ADR 0024: under extreme
+  > pressure it drops content regardless of role, including user messages.
 - **`deep` makes a bad run expensive.** It raises the cost ceiling to $5.00.
   It is opt-in per invocation, the counters are still enforced, and stuck-loop
   detection still fires on repetition regardless of remaining budget.

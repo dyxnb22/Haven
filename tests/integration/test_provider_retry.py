@@ -8,6 +8,7 @@ already streamed — must not be retried.
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+from haven.application.run_service import MODEL_RETRY_MAX_DELAY, _retry_delay
 from haven.contracts.model import ModelEvent, ModelRequest
 from haven.domain.enums import RunStatus, StopReason
 from haven.ports.model import ProviderError
@@ -41,6 +42,25 @@ class FlakyModel:
 
 def install(h: Harness, model: object) -> None:
     h.service._model = model  # type: ignore[attr-defined]  # noqa: SLF001
+
+
+class TestRetryDelay:
+    """The wait before a retry is the longer of exponential backoff and any
+    provider-requested `Retry-After`, capped so one hostile header cannot block
+    a run past all reason."""
+
+    def test_backoff_grows_when_no_hint_is_given(self) -> None:
+        assert _retry_delay(0, None) == 1.0
+        assert _retry_delay(1, None) == 2.0
+
+    def test_a_longer_retry_after_wins_over_backoff(self) -> None:
+        assert _retry_delay(0, 5.0) == 5.0
+
+    def test_backoff_wins_when_it_is_the_longer_wait(self) -> None:
+        assert _retry_delay(2, 1.0) == 4.0
+
+    def test_an_absurd_retry_after_is_capped(self) -> None:
+        assert _retry_delay(0, 9999.0) == MODEL_RETRY_MAX_DELAY
 
 
 class TestRetryableFailures:

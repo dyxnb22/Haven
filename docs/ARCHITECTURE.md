@@ -112,20 +112,30 @@ unclassified path. `repo.exec` is the single, explicitly pinned exception: a
 command classified as obviously read-only is auto-allowed, and a test asserts
 that exactly one class enjoys that exception.
 
-| Tool | Policy (interactive / read-only) | Key constraints |
-|---|---|---|
-| `repo.list` | allow / allow | workspace-confined, entry cap |
-| `repo.search` | allow / allow | ripgrep when available (honours `.gitignore`), Python fallback; result, line, and byte caps |
-| `repo.read` | allow / allow | regular UTF-8 files, line and byte caps; records the digest that later binds an edit |
-| `repo.edit` | ask / deny | existing files only, preimage-bound, unique match unless `occurrence` or `replace_all` is set |
-| `repo.create` | ask / deny | new paths only — fails on anything that exists, so it can never blank an unread file |
-| `repo.delete` | ask / deny | existing files only, content pinned at approval so a concurrent change fails closed |
-| `repo.move` | ask / deny | rename/move; fails if the destination exists, so it never silently overwrites |
-| `repo.apply_patch` | ask / deny | multi-file transaction: simulated first, one approval binds every file's preimage, applied atomically with journaled rollback (ADR 0019) |
-| `repo.diff` | allow / allow | shows only what *this run* changed, including created files |
-| `repo.exec` | allow if classified read-only, else ask / deny | argv array only (no shell string), OS sandbox with the workspace read-only (only scratch writable, ADR 0017), no network, `$HOME` unreadable; output is never evidence |
-| `repo.check` | ask / deny | registered recipe ids only, fixed argv, scrubbed env, timeout, bounded output, same sandbox |
-| `task.plan` | allow / allow | touches only run state; no path, no external effect (`STATE_TOOLS`) |
+<!-- BEGIN GENERATED TOOL TABLE (scripts/gen_tool_table.py; do not edit by hand) -->
+
+| Tool | Class | Interactive | Read-only | Key constraints |
+|---|---|---|---|---|
+| `repo.apply_patch` | effect | ask | deny | multi-file transaction: simulated first, one approval binds every file's preimage, applied atomically with journaled rollback (ADR 0019) |
+| `repo.check` | effect | ask | deny | registered recipe ids only, fixed argv, scrubbed env, timeout, bounded output |
+| `repo.create` | effect | ask | deny | new paths only — fails on anything that exists, so it can never blank a file |
+| `repo.delete` | effect | ask | deny | existing files only, content pinned at approval so a concurrent change fails |
+| `repo.diff` | read-only | allow | allow | shows only what *this run* changed, including created files |
+| `repo.edit` | effect | ask | deny | existing files only, preimage-bound, unique match unless `occurrence` or `replace_all` is set |
+| `repo.exec` | exec | ask | deny | argv array only (no shell string), OS sandbox with the workspace read-only, no network, `$HOME` unreadable; output is never evidence |
+| `repo.list` | read-only | allow | allow | workspace-confined, entry cap |
+| `repo.move` | effect | ask | deny | rename/move; fails if the destination exists, so it never silently overwrites |
+| `repo.read` | read-only | allow | allow | regular UTF-8 files, line and byte caps; records the digest that later binds an edit |
+| `repo.search` | read-only | allow | allow | ripgrep when available (honours `.gitignore`), Python fallback; result, line, and byte caps |
+| `task.plan` | state | allow | allow | touches only run state; no path, no external effect |
+
+*Decisions are computed by calling `evaluate_policy` itself, for a benign, well-formed proposal; a hard deny (outside the workspace, a protected path, no sandbox) overrides them in every mode.*
+
+<!-- END GENERATED TOOL TABLE -->
+
+`repo.exec` additionally auto-allows a command classified as obviously
+read-only whose operands stay inside the workspace (ADR 0026); everything else
+it runs asks first.
 
 ### Why the plan is a tool and not a message
 

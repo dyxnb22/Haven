@@ -2,7 +2,17 @@
 
 ## Status
 
-Accepted
+Accepted, and **superseded in part**. Two lines below were true of the MVP and
+are not true of the shipped system; the original text stays as the record of
+where the project started:
+
+- "six repo tools" — the surface is now **twelve** (the generated table in
+  `docs/ARCHITECTURE.md` is the current list, derived from `KNOWN_TOOLS`).
+- "OS-level sandboxing is out of scope" — **reversed by ADR 0009**, which put
+  every child process behind Seatbelt/Landlock and made confinement one of the
+  project's central claims. ADR 0013, 0017, and 0026 refine it further.
+
+The stack choices and the rejected alternatives below still hold.
 
 ## Context
 

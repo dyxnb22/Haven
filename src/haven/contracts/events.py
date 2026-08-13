@@ -174,6 +174,32 @@ class ContextBuilt(StrictModel):
     total_bytes: int
 
 
+class RequestEnvelope(StrictModel):
+    """Everything model-visible in a request that is not the messages.
+
+    `context.built` records what the model was *asked*; this records what it was
+    *told* — the system rules, the tools offered, and the sampling parameters.
+    Without it a replayed run reconstructs the conversation but not the
+    instructions that shaped it, and a prompt change between two runs leaves no
+    trace at all.
+
+    Logged on the first step and thereafter only when it changes (`reason`), so
+    a stable prefix — the thing ADR 0008 works to preserve — costs one event per
+    run rather than one per step. Content is carried as a digest plus a size:
+    the journal keeps identities and bounded summaries, never payloads.
+    """
+
+    kind: Literal["request.envelope"] = "request.envelope"
+    run_id: str
+    step: int
+    reason: Literal["initial", "changed"]
+    system_prompt_digest: str
+    system_prompt_chars: int
+    tool_names: tuple[str, ...]
+    reasoning_effort: str = ""
+    max_output_tokens: int = 0
+
+
 class PlanStepView(StrictModel):
     title: str
     status: str
@@ -248,6 +274,7 @@ ApplicationEvent = Annotated[
     | EvidenceRecorded
     | DiffPreview
     # context assembly + the agent's plan (rendered from State each turn)
+    | RequestEnvelope
     | ContextBuilt
     | PlanUpdated
     # session runtime and diagnostics

@@ -4,6 +4,11 @@ Real defects found while building Haven, what caused them, and what changed so
 they cannot come back. These are kept because a portfolio that only shows the
 happy path is not evidence of engineering.
 
+Each entry here ends in a durable rule rather than a resolution: the bug classes
+these produced are collected in [`DEFENSIVE_PATTERNS.md`](DEFENSIVE_PATTERNS.md),
+which is the page to read before writing policy, boundary, gate, or provider
+code. A postmortem that does not end in a rule, a guard, or a test is a story.
+
 ---
 
 ## 1. The security gate cried wolf on its first real run
