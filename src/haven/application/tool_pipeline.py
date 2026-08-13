@@ -625,12 +625,25 @@ class ToolPipeline:
         tools); `_card_handlers` is pinned against the ASK-able tool set by
         `tests/unit/test_policy.py`, so an ASK tool cannot silently reach the
         human with an empty summary.
+
+        Each handler opens with an isinstance guard returning empty strings.
+        That is mypy narrowing the `ToolArgs` union, not a real branch: the
+        registry validated the args against this exact tool name before the
+        pipeline got here, so the mismatch cannot happen. It fails to a blank
+        card rather than an exception because a rendering slip must never be
+        the thing that takes down a run mid-approval.
         """
         handler = self._card_handlers.get(call.tool_name)
         return handler(args, preview) if handler is not None else ("", "")
 
     @staticmethod
     def _intent(summary: str) -> str:
+        """The model's own one-line reason, appended to the card when given.
+
+        Untrusted text on an approval card, so it is suffixed to a summary the
+        program built rather than replacing it: the human always sees what
+        Haven determined the action to be, with the model's claim after it.
+        """
         return f": {summary}" if summary else ""
 
     def _card_patch(self, args: ToolArgs, preview: ToolPreview) -> tuple[str, str]:

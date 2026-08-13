@@ -210,14 +210,57 @@ re-resolved and confirmed to be inside the workspace before being returned. If
 ripgrep is missing or misbehaves, the tool silently falls back to the in-process
 Python scanner rather than failing.
 
+That fallback carries a wall-clock deadline, because the model's pattern is
+validated only for syntax and Python's backtracking engine has no timeout of
+its own: a pattern like `(a+)+b` costs exponential time per subject. The
+deadline bounds the walk — many files, many lines — and reports a truncated
+result. It cannot interrupt a single `re.search` already running: the regex
+engine holds the GIL (measured: a 0.68s match let the event loop run zero
+times), which is also why moving it to a thread does not help and was not
+done. Bounding one pathological subject would need a killable subprocess;
+ripgrep, the default backend, uses a linear engine and is unaffected.
+
 ### 7. Secret leakage
 
 The API key is read from an environment variable, never placed in CLI args, the
 session store, checkpoints, traces, or error text. Provider errors are mapped to
-stable codes without echoing payloads. Exports redact known secret-env values.
-Tests assert the key never appears in provider error strings, and that
-out-of-workspace file contents never enter the model transcript
-(`sec-absolute-path`, `inj-readme-ssh`).
+stable codes without echoing payloads. Tests assert the key never appears in
+provider error strings, and that out-of-workspace file contents never enter the
+model transcript (`sec-absolute-path`, `inj-readme-ssh`); reads that would leave
+the workspace are additionally forced through approval (ADR 0026).
+
+Exports redact in two passes, because they fail differently. The first masks the
+*values* of environment variables whose names end in `_API_KEY`/`_KEY`/`_TOKEN`/
+`_SECRET`/`_PASSWORD` — exact, no false positives, but blind to any secret this
+process never held. The second masks well-known credential *shapes* (`sk-`,
+`sk-ant-`, `AKIA…`, `ghp_`/`github_pat_`, `xox…`, `AIza…`, `SG.`, PEM blocks), so
+a key pasted into a goal or read out of a file by a tool is caught too. It is
+deliberately shape-based rather than an entropy heuristic: redacting every
+high-entropy string would eat digests and diffs, and an export nobody trusts
+gets read past. Neither pass is complete, and redaction of an artifact is not a
+reason to put secrets in front of the agent.
+
+### 7a. Untrusted text reaching a rendering surface
+
+Everything the model writes, and everything a tool read out of the repository,
+eventually gets displayed. Both are untrusted, so both are neutralized at the
+point of display rather than trusted to be plain:
+
+- **Control/ANSI sequences** are stripped in the TUI (`presenter.sanitize`) and
+  in the headless `ConsoleSink`. Without this, model output can clear the
+  screen, recolour, or forge a plausible prompt line in a terminal or a CI log.
+- **Rich console markup** is escaped by `sanitize`. The chat, diff, evidence,
+  and trace panels are `Static` widgets with markup enabled, so unescaped
+  `[red]`, `[/]`, or `[link=…]` in model output would be *rendered* — enough to
+  restyle or hide transcript text and fake a "succeeded" line. Escaped, the
+  tags stay visible as the literal characters they are. (The timeline
+  `RichLog` already runs with markup disabled.)
+- Every rendered field is length-bounded, so an oversized payload cannot push
+  the rest of the screen out of view.
+
+This is display integrity, not a sandbox: it stops the transcript from lying
+about itself. What the model may *do* is bounded by the policy and the OS
+sandbox, not by anything here.
 
 ### 8. Dangerous content in an otherwise valid change
 

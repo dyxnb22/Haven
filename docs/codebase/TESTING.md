@@ -11,7 +11,7 @@
 - Commands:
 
 ```bash
-uv run pytest                       # all 698 tests
+uv run pytest                       # the whole suite (count in README's metrics table)
 uv run pytest tests/unit -q        # one category
 uv run coverage run -m pytest && uv run coverage report --include="src/*"
 uv run haven eval --offline         # 38 scripted eval cases (security gate)
@@ -45,18 +45,22 @@ HAVEN_UPDATE_GOLDEN=1 uv run pytest tests/golden -q   # regenerate golden trace
   `MemorySessionStore`, `RecordingLauncher`; no global monkeypatching norm.
 - Isolation: every test gets a temp repo/store; eval cases run in disposable
   fixture copies; `HAVEN_DATA_DIR` redirects user data in CLI tests.
-- Common failure mode: TUI Pilot timing (mitigated with `_settle`/timeouts);
-  one non-reproducible standing-approval flake observed once on 2026-08-13
-  (diagnostics added to its asserts).
+- Common failure mode: TUI Pilot timing (mitigated with `_settle`/timeouts).
+  The one other flake seen — standing approvals, 1 in 8 runs — was root-caused
+  rather than retried away: the test issued three *consecutive* identical
+  checks, which is exactly the no-progress condition, and only passed because
+  check results carry `duration_ms` and the milliseconds usually differed. It
+  now interleaves `repo.diff` like a real fix/verify loop. Worth repeating as
+  a rule: a test that passes on timing jitter is testing the clock.
 
 ### 5) Coverage and Quality Signals
 
 - Coverage tool + threshold: coverage.py in CI; **no fail_under enforced**.
 - Current reported coverage: ~88% of `src/` (generated metrics table in
   README).
-- Known gaps/flaky areas: TUI worker paths partially covered; the standing
-  approval flake above; `evals/` scripts are not unit-tested (exercised by
-  live runs only).
+- Known gaps: TUI worker paths partially covered; `evals/` harness scripts are
+  not unit-tested (exercised by live runs, and by rebuilding fixtures and
+  diffing when they are refactored). No flaky tests are currently known.
 
 ### 6) Evidence
 
