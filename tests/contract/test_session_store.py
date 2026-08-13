@@ -132,6 +132,62 @@ async def test_execution_journal(store: SessionStorePort) -> None:
     assert loaded[0].postimage_digest == "post"
 
 
+async def test_update_with_empty_postimage_preserves_the_recorded_one(
+    store: SessionStorePort,
+) -> None:
+    """Regression contract for a real drift: the two stores once disagreed on
+    whether CONFIRMED with an empty postimage wipes the expectation recorded
+    at STARTED. The contract is: an empty postimage on update means "keep
+    what the record already holds" — a delete's empty expectation stays
+    empty, and a patch effect confirmed without a digest keeps the expected
+    one journaled at STARTED (recovery classifies against it)."""
+    await store.record_execution(
+        ExecutionRecord(
+            call_id="c-keep",
+            run_id="run-1",
+            ticket_digest="t1",
+            tool_name="repo.edit",
+            effect_state=EffectState.STARTED,
+            preimage_digest="pre",
+            postimage_digest="expected-post",
+            path="src/a.py",
+        )
+    )
+    await store.update_execution_state("c-keep", EffectState.CONFIRMED, "")
+    loaded = {r.call_id: r for r in await store.load_executions("run-1")}
+    assert loaded["c-keep"].effect_state is EffectState.CONFIRMED
+    assert loaded["c-keep"].postimage_digest == "expected-post"
+
+    # And a non-empty postimage on update still overwrites.
+    await store.update_execution_state("c-keep", EffectState.CONFIRMED, "actual-post")
+    loaded = {r.call_id: r for r in await store.load_executions("run-1")}
+    assert loaded["c-keep"].postimage_digest == "actual-post"
+
+
+async def test_dest_path_roundtrips_for_move_records(store: SessionStorePort) -> None:
+    """dest_path is what lets recovery classify an interrupted move end-to-end
+    (ADR 0018 follow-up); both stores must persist and return it."""
+    await store.record_execution(
+        ExecutionRecord(
+            call_id="c-move",
+            run_id="run-1",
+            ticket_digest="t2",
+            tool_name="repo.move",
+            effect_state=EffectState.STARTED,
+            preimage_digest="pre",
+            postimage_digest="",
+            path="src/old.py",
+            dest_path="src/new.py",
+        )
+    )
+    loaded = {r.call_id: r for r in await store.load_executions("run-1")}
+    assert loaded["c-move"].dest_path == "src/new.py"
+    # State updates must not lose the destination.
+    await store.update_execution_state("c-move", EffectState.EFFECT_UNKNOWN)
+    loaded = {r.call_id: r for r in await store.load_executions("run-1")}
+    assert loaded["c-move"].dest_path == "src/new.py"
+
+
 async def test_artifact_roundtrip(store: SessionStorePort) -> None:
     digest = await store.put_artifact(b"large diff content")
     assert await store.get_artifact(digest) == b"large diff content"

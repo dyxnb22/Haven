@@ -208,6 +208,31 @@ class TestPolicyCompleteness:
 
         assert set(ARGS_MODELS) == KNOWN_TOOLS
 
+    def test_every_registered_tool_is_fully_wired_in_the_pipeline(self) -> None:
+        """The pipeline's facts and execute dispatch tables must each cover
+        exactly the registered tool set. Together with the policy check above
+        this pins all four add-a-tool sites (args model, policy class, facts
+        handler, execute handler): forgetting any one fails here, not at
+        runtime as a silent fallthrough."""
+        from typing import Any, cast
+
+        from haven.application.registry import ToolRegistry
+        from haven.application.tool_pipeline import ToolPipeline
+        from haven.contracts.tools import ARGS_MODELS
+
+        pipeline = ToolPipeline(
+            workspace=cast(Any, None),
+            executor=cast(Any, None),
+            store=cast(Any, None),
+            emitter=cast(Any, None),
+            approvals=cast(Any, None),
+            registry=ToolRegistry(),
+            recipes={},
+            mode=PermissionMode.INTERACTIVE,
+        )
+        assert set(pipeline._facts_handlers) == set(ARGS_MODELS)  # noqa: SLF001
+        assert set(pipeline._execute_handlers) == set(ARGS_MODELS)  # noqa: SLF001
+
     def test_tool_categories_are_disjoint(self) -> None:
         groups = (READ_ONLY_TOOLS, EFFECT_TOOLS, STATE_TOOLS, EXEC_TOOLS)
         for index, left in enumerate(groups):

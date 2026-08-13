@@ -14,6 +14,7 @@ import json
 import shlex
 import tempfile
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -93,6 +94,19 @@ from haven.ports.workspace import (
 #: nothing (read-only tools).
 ToolPreview = EditPreview | PatchPreview | None
 
+#: Per-tool handler shapes. Both tables are keyed by registered tool name and
+#: built in `ToolPipeline.__init__`; a unit test pins that every tool in
+#: `ARGS_MODELS` has exactly one handler in each, so adding a tool without
+#: wiring it is a loud test failure instead of a silent fallthrough.
+FactsHandler = Callable[
+    ["RunContext", ToolCallProposal, ToolArgs],
+    Awaitable[tuple[ToolFacts, ToolPreview]],
+]
+ExecuteHandler = Callable[
+    ["RunContext", ToolCallProposal, ToolArgs, str, ToolPreview],
+    Awaitable["ToolExecution"],
+]
+
 MODEL_PAYLOAD_CHARS = 8_000
 PREVIEW_CHARS = 4_000
 
@@ -154,6 +168,38 @@ class ToolPipeline:
         self._mode = mode
         self._launcher = launcher
         self._scratch_dir = scratch_dir or Path(tempfile.gettempdir()) / "haven-scratch"
+        # One row per tool, both phases. The unit test
+        # test_every_registered_tool_is_fully_wired pins these tables against
+        # ARGS_MODELS, so "add a tool" is: args model + policy class + one row
+        # here per phase — and forgetting a row fails the suite, not the run.
+        self._facts_handlers: dict[str, FactsHandler] = {
+            "repo.list": self._facts_path_read,
+            "repo.search": self._facts_path_read,
+            "repo.read": self._facts_path_read,
+            "repo.edit": self._facts_edit,
+            "repo.create": self._facts_create,
+            "repo.delete": self._facts_delete,
+            "repo.move": self._facts_move,
+            "repo.apply_patch": self._facts_patch,
+            "repo.exec": self._facts_exec,
+            "repo.check": self._facts_check,
+            "repo.diff": self._facts_stateless,
+            "task.plan": self._facts_stateless,
+        }
+        self._execute_handlers: dict[str, ExecuteHandler] = {
+            "repo.list": self._execute_list,
+            "repo.search": self._execute_search,
+            "repo.read": self._execute_read,
+            "repo.edit": self._execute_write_adapter,
+            "repo.create": self._execute_write_adapter,
+            "repo.delete": self._execute_delete_adapter,
+            "repo.move": self._execute_move_adapter,
+            "repo.apply_patch": self._execute_patch_adapter,
+            "repo.exec": self._execute_exec_adapter,
+            "repo.check": self._execute_check_adapter,
+            "repo.diff": self._execute_diff,
+            "task.plan": self._execute_plan,
+        }
 
     async def execute(self, ctx: RunContext, step: int, call: ToolCallProposal) -> ToolExecution:
         started = time.monotonic()
@@ -305,10 +351,39 @@ class ToolPipeline:
     async def _collect_facts(
         self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
     ) -> tuple[ToolFacts, ToolPreview]:
-        preview: EditPreview | None = None
+        """Dispatch to the per-tool facts handler.
 
-        if isinstance(args, RepoListArgs | RepoSearchArgs | RepoReadArgs):
-            facts = self._workspace.path_facts(args.path)
+        The registry already validated `call.tool_name` against ARGS_MODELS,
+        and the wiring test pins the table to the same key set, so a miss here
+        is impossible by construction; the fallback exists only to fail soft
+        (a bare fact, which policy then denies for any effect tool).
+        """
+        handler = self._facts_handlers.get(call.tool_name)
+        if handler is None:  # pragma: no cover - pinned impossible by the wiring test
+            return ToolFacts(tool_name=call.tool_name), None
+        return await handler(ctx, call, args)
+
+    async def _facts_path_read(
+        self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
+    ) -> tuple[ToolFacts, ToolPreview]:
+        assert isinstance(args, RepoListArgs | RepoSearchArgs | RepoReadArgs)
+        facts = self._workspace.path_facts(args.path)
+        return (
+            ToolFacts(
+                tool_name=call.tool_name,
+                within_workspace=facts.within_workspace,
+                touches_protected_path=facts.is_protected,
+                path=facts.normalized,
+            ),
+            None,
+        )
+
+    async def _facts_edit(
+        self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
+    ) -> tuple[ToolFacts, ToolPreview]:
+        assert isinstance(args, RepoEditArgs)
+        facts = self._workspace.path_facts(args.path)
+        if not facts.within_workspace or facts.is_protected:
             return (
                 ToolFacts(
                     tool_name=call.tool_name,
@@ -318,203 +393,208 @@ class ToolPipeline:
                 ),
                 None,
             )
-
-        if isinstance(args, RepoEditArgs):
-            facts = self._workspace.path_facts(args.path)
-            if not facts.within_workspace or facts.is_protected:
-                return (
-                    ToolFacts(
-                        tool_name=call.tool_name,
-                        within_workspace=facts.within_workspace,
-                        touches_protected_path=facts.is_protected,
-                        path=facts.normalized,
-                    ),
-                    None,
-                )
-            recorded = ctx.files_read.get(facts.normalized)
-            if recorded is None:
-                raise WorkspaceError(
-                    "invalid_arguments",
-                    f"read {facts.normalized!r} with repo.read before editing it",
-                )
-            if facts.digest != recorded:
-                raise WorkspaceError(
-                    "stale_preimage",
-                    f"{facts.normalized!r} changed since it was last read; read it again",
-                )
-            preview = await self._workspace.preview_edit(
-                args.path,
-                args.old_string,
-                args.new_string,
-                occurrence=args.occurrence,
-                replace_all=args.replace_all,
+        recorded = ctx.files_read.get(facts.normalized)
+        if recorded is None:
+            raise WorkspaceError(
+                "invalid_arguments",
+                f"read {facts.normalized!r} with repo.read before editing it",
             )
+        if facts.digest != recorded:
+            raise WorkspaceError(
+                "stale_preimage",
+                f"{facts.normalized!r} changed since it was last read; read it again",
+            )
+        preview = await self._workspace.preview_edit(
+            args.path,
+            args.old_string,
+            args.new_string,
+            occurrence=args.occurrence,
+            replace_all=args.replace_all,
+        )
+        return (
+            ToolFacts(
+                tool_name=call.tool_name,
+                within_workspace=True,
+                touches_protected_path=False,
+                preimage_digest=preview.preimage_digest,
+                path=facts.normalized,
+            ),
+            preview,
+        )
+
+    async def _facts_create(
+        self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
+    ) -> tuple[ToolFacts, ToolPreview]:
+        assert isinstance(args, RepoCreateArgs)
+        facts = self._workspace.path_facts(args.path)
+        if not facts.within_workspace or facts.is_protected:
             return (
                 ToolFacts(
                     tool_name=call.tool_name,
-                    within_workspace=True,
-                    touches_protected_path=False,
-                    preimage_digest=preview.preimage_digest,
+                    within_workspace=facts.within_workspace,
+                    touches_protected_path=facts.is_protected,
                     path=facts.normalized,
                 ),
-                preview,
+                None,
             )
+        # Raises if the path already exists, so creation can never silently
+        # overwrite a file the agent has not read.
+        preview = await self._workspace.preview_create(args.path, args.content)
+        return (
+            ToolFacts(
+                tool_name=call.tool_name,
+                within_workspace=True,
+                touches_protected_path=False,
+                preimage_digest=None,
+                path=facts.normalized,
+            ),
+            preview,
+        )
 
-        if isinstance(args, RepoCreateArgs):
-            facts = self._workspace.path_facts(args.path)
-            if not facts.within_workspace or facts.is_protected:
-                return (
-                    ToolFacts(
-                        tool_name=call.tool_name,
-                        within_workspace=facts.within_workspace,
-                        touches_protected_path=facts.is_protected,
-                        path=facts.normalized,
-                    ),
-                    None,
-                )
-            # Raises if the path already exists, so creation can never silently
-            # overwrite a file the agent has not read.
-            preview = await self._workspace.preview_create(args.path, args.content)
+    async def _facts_delete(
+        self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
+    ) -> tuple[ToolFacts, ToolPreview]:
+        assert isinstance(args, RepoDeleteArgs)
+        facts = self._workspace.path_facts(args.path)
+        if not facts.within_workspace or facts.is_protected:
             return (
                 ToolFacts(
                     tool_name=call.tool_name,
-                    within_workspace=True,
-                    touches_protected_path=False,
-                    preimage_digest=None,
+                    within_workspace=facts.within_workspace,
+                    touches_protected_path=facts.is_protected,
                     path=facts.normalized,
                 ),
-                preview,
+                None,
             )
+        # Raises not_found if the file is absent; the pipeline turns that
+        # into a structured result. The human sees the content in the
+        # preview, so a prior read is not required — the preimage is pinned.
+        preview = await self._workspace.preview_delete(args.path)
+        return (
+            ToolFacts(
+                tool_name=call.tool_name,
+                within_workspace=True,
+                touches_protected_path=False,
+                preimage_digest=preview.preimage_digest,
+                path=facts.normalized,
+            ),
+            preview,
+        )
 
-        if isinstance(args, RepoDeleteArgs):
-            facts = self._workspace.path_facts(args.path)
-            if not facts.within_workspace or facts.is_protected:
-                return (
-                    ToolFacts(
-                        tool_name=call.tool_name,
-                        within_workspace=facts.within_workspace,
-                        touches_protected_path=facts.is_protected,
-                        path=facts.normalized,
-                    ),
-                    None,
-                )
-            # Raises not_found if the file is absent; the pipeline turns that
-            # into a structured result. The human sees the content in the
-            # preview, so a prior read is not required — the preimage is pinned.
-            preview = await self._workspace.preview_delete(args.path)
+    async def _facts_move(
+        self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
+    ) -> tuple[ToolFacts, ToolPreview]:
+        assert isinstance(args, RepoMoveArgs)
+        src_facts = self._workspace.path_facts(args.src)
+        dest_facts = self._workspace.path_facts(args.dest)
+        within = src_facts.within_workspace and dest_facts.within_workspace
+        protected = src_facts.is_protected or dest_facts.is_protected
+        if not within or protected:
             return (
                 ToolFacts(
                     tool_name=call.tool_name,
-                    within_workspace=True,
-                    touches_protected_path=False,
-                    preimage_digest=preview.preimage_digest,
-                    path=facts.normalized,
-                ),
-                preview,
-            )
-
-        if isinstance(args, RepoMoveArgs):
-            src_facts = self._workspace.path_facts(args.src)
-            dest_facts = self._workspace.path_facts(args.dest)
-            within = src_facts.within_workspace and dest_facts.within_workspace
-            protected = src_facts.is_protected or dest_facts.is_protected
-            if not within or protected:
-                return (
-                    ToolFacts(
-                        tool_name=call.tool_name,
-                        within_workspace=within,
-                        touches_protected_path=protected,
-                        path=src_facts.normalized,
-                    ),
-                    None,
-                )
-            removal, addition = await self._workspace.preview_move(args.src, args.dest)
-            combined = EditPreview(
-                path=f"{removal.path} -> {addition.path}",
-                diff=removal.diff + addition.diff,
-                preimage_digest=removal.preimage_digest,
-                postimage_digest=addition.postimage_digest,
-                insertions=addition.insertions,
-                deletions=removal.deletions,
-            )
-            return (
-                ToolFacts(
-                    tool_name=call.tool_name,
-                    within_workspace=True,
-                    touches_protected_path=False,
-                    preimage_digest=removal.preimage_digest,
+                    within_workspace=within,
+                    touches_protected_path=protected,
                     path=src_facts.normalized,
                 ),
-                combined,
+                None,
             )
+        removal, addition = await self._workspace.preview_move(args.src, args.dest)
+        combined = EditPreview(
+            path=f"{removal.path} -> {addition.path}",
+            diff=removal.diff + addition.diff,
+            preimage_digest=removal.preimage_digest,
+            postimage_digest=addition.postimage_digest,
+            insertions=addition.insertions,
+            deletions=removal.deletions,
+        )
+        return (
+            ToolFacts(
+                tool_name=call.tool_name,
+                within_workspace=True,
+                touches_protected_path=False,
+                preimage_digest=removal.preimage_digest,
+                path=src_facts.normalized,
+            ),
+            combined,
+        )
 
-        if isinstance(args, RepoApplyPatchArgs):
-            # Hard facts first: every path of every operation must be inside
-            # the workspace and unprotected, or policy hard-denies before any
-            # preview work happens.
-            op_paths: list[str] = []
-            for op in args.operations:
-                if op.kind == "move":
-                    op_paths += [op.src, op.dest]
-                else:
-                    op_paths.append(op.path)
-            all_facts = [self._workspace.path_facts(p) for p in op_paths]
-            within = all(f.within_workspace for f in all_facts)
-            protected = any(f.is_protected for f in all_facts)
-            if not within or protected:
-                return (
-                    ToolFacts(
-                        tool_name=call.tool_name,
-                        within_workspace=within,
-                        touches_protected_path=protected,
-                    ),
-                    None,
-                )
-            plan = await self._workspace.preview_patch(
-                tuple(_to_patch_spec(op) for op in args.operations), ctx.files_read
-            )
-            # The approval binds the aggregate of every touched file's pin:
-            # one digest over the canonical {path: preimage} map, so any file
-            # drifting invalidates the whole approval.
-            aggregate = sha256_text(canonical_json(dict(sorted(plan.preimages.items()))))
+    async def _facts_patch(
+        self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
+    ) -> tuple[ToolFacts, ToolPreview]:
+        assert isinstance(args, RepoApplyPatchArgs)
+        # Hard facts first: every path of every operation must be inside
+        # the workspace and unprotected, or policy hard-denies before any
+        # preview work happens.
+        op_paths: list[str] = []
+        for op in args.operations:
+            if op.kind == "move":
+                op_paths += [op.src, op.dest]
+            else:
+                op_paths.append(op.path)
+        all_facts = [self._workspace.path_facts(p) for p in op_paths]
+        within = all(f.within_workspace for f in all_facts)
+        protected = any(f.is_protected for f in all_facts)
+        if not within or protected:
             return (
                 ToolFacts(
                     tool_name=call.tool_name,
-                    within_workspace=True,
-                    touches_protected_path=False,
-                    preimage_digest=aggregate,
-                ),
-                plan,
-            )
-
-        if isinstance(args, RepoExecArgs):
-            facts = self._workspace.path_facts(args.cwd)
-            return (
-                ToolFacts(
-                    tool_name=call.tool_name,
-                    within_workspace=facts.within_workspace,
-                    touches_protected_path=facts.is_protected,
-                    exec_class=classify_argv(args.argv).value,
-                    sandbox_available=self._launcher is not None and self._launcher.available(),
-                    path=facts.normalized,
+                    within_workspace=within,
+                    touches_protected_path=protected,
                 ),
                 None,
             )
+        plan = await self._workspace.preview_patch(
+            tuple(_to_patch_spec(op) for op in args.operations), ctx.files_read
+        )
+        # The approval binds the aggregate of every touched file's pin:
+        # one digest over the canonical {path: preimage} map, so any file
+        # drifting invalidates the whole approval.
+        aggregate = sha256_text(canonical_json(dict(sorted(plan.preimages.items()))))
+        return (
+            ToolFacts(
+                tool_name=call.tool_name,
+                within_workspace=True,
+                touches_protected_path=False,
+                preimage_digest=aggregate,
+            ),
+            plan,
+        )
 
-        if isinstance(args, RepoCheckArgs):
-            return (
-                ToolFacts(
-                    tool_name=call.tool_name,
-                    recipe_registered=args.recipe_id in self._recipes,
-                ),
-                None,
-            )
+    async def _facts_exec(
+        self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
+    ) -> tuple[ToolFacts, ToolPreview]:
+        assert isinstance(args, RepoExecArgs)
+        facts = self._workspace.path_facts(args.cwd)
+        return (
+            ToolFacts(
+                tool_name=call.tool_name,
+                within_workspace=facts.within_workspace,
+                touches_protected_path=facts.is_protected,
+                exec_class=classify_argv(args.argv).value,
+                sandbox_available=self._launcher is not None and self._launcher.available(),
+                path=facts.normalized,
+            ),
+            None,
+        )
 
-        if isinstance(args, TaskPlanArgs):
-            # Touches only run state; there is no path and no external effect.
-            return ToolFacts(tool_name=call.tool_name), None
+    async def _facts_check(
+        self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
+    ) -> tuple[ToolFacts, ToolPreview]:
+        assert isinstance(args, RepoCheckArgs)
+        return (
+            ToolFacts(
+                tool_name=call.tool_name,
+                recipe_registered=args.recipe_id in self._recipes,
+            ),
+            None,
+        )
 
-        # repo.diff — read-only, no path arguments.
+    async def _facts_stateless(
+        self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
+    ) -> tuple[ToolFacts, ToolPreview]:
+        # repo.diff (read-only, no path arguments) and task.plan (touches only
+        # run state): nothing on disk to pin.
         return ToolFacts(tool_name=call.tool_name), None
 
     # -- approval -----------------------------------------------------------------
@@ -640,95 +720,188 @@ class ToolPipeline:
         ticket_digest: str,
         preview: ToolPreview,
     ) -> ToolExecution:
-        if isinstance(args, RepoListArgs):
-            listing = await self._workspace.list_dir(args.path, args.max_entries)
+        """Dispatch to the per-tool execute handler (same key set as facts)."""
+        handler = self._execute_handlers.get(call.tool_name)
+        if handler is None:  # pragma: no cover - pinned impossible by the wiring test
             return ToolExecution(
-                _ok(
-                    call,
-                    {
-                        "path": listing.path,
-                        "entries": [
-                            {"name": e.name, "dir": e.is_dir, "size": e.size_bytes}
-                            for e in listing.entries
-                        ],
-                    },
-                    truncated=listing.truncated,
-                )
+                _error(call, ToolErrorCode.UNKNOWN_TOOL, f"no executor for {call.tool_name!r}")
             )
+        return await handler(ctx, call, args, ticket_digest, preview)
 
-        if isinstance(args, RepoSearchArgs):
-            found = await self._workspace.search(args.pattern, args.path, args.max_results)
-            return ToolExecution(
-                _ok(
-                    call,
-                    {
-                        "matches": [
-                            {"path": m.path, "line": m.line_number, "text": m.line}
-                            for m in found.matches
-                        ],
-                        "files_scanned": found.files_scanned,
-                    },
-                    truncated=found.truncated,
-                )
+    async def _execute_list(
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: ToolArgs,
+        ticket_digest: str,
+        preview: ToolPreview,
+    ) -> ToolExecution:
+        assert isinstance(args, RepoListArgs)
+        listing = await self._workspace.list_dir(args.path, args.max_entries)
+        return ToolExecution(
+            _ok(
+                call,
+                {
+                    "path": listing.path,
+                    "entries": [
+                        {"name": e.name, "dir": e.is_dir, "size": e.size_bytes}
+                        for e in listing.entries
+                    ],
+                },
+                truncated=listing.truncated,
             )
+        )
 
-        if isinstance(args, RepoReadArgs):
-            read = await self._workspace.read_file(args.path, args.start_line, args.max_lines)
-            ctx.files_read[read.path] = read.digest
-            return ToolExecution(
-                _ok(
-                    call,
-                    {
-                        "path": read.path,
-                        "start_line": read.start_line,
-                        "end_line": read.end_line,
-                        "total_lines": read.total_lines,
-                        "content": read.content,
-                    },
-                    truncated=read.truncated,
-                )
+    async def _execute_search(
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: ToolArgs,
+        ticket_digest: str,
+        preview: ToolPreview,
+    ) -> ToolExecution:
+        assert isinstance(args, RepoSearchArgs)
+        found = await self._workspace.search(args.pattern, args.path, args.max_results)
+        return ToolExecution(
+            _ok(
+                call,
+                {
+                    "matches": [
+                        {"path": m.path, "line": m.line_number, "text": m.line}
+                        for m in found.matches
+                    ],
+                    "files_scanned": found.files_scanned,
+                },
+                truncated=found.truncated,
             )
+        )
 
-        if isinstance(args, RepoEditArgs | RepoCreateArgs):
-            assert not isinstance(preview, PatchPreview)
-            return await self._execute_write(ctx, call, args, ticket_digest, preview)
+    async def _execute_read(
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: ToolArgs,
+        ticket_digest: str,
+        preview: ToolPreview,
+    ) -> ToolExecution:
+        assert isinstance(args, RepoReadArgs)
+        read = await self._workspace.read_file(args.path, args.start_line, args.max_lines)
+        ctx.files_read[read.path] = read.digest
+        return ToolExecution(
+            _ok(
+                call,
+                {
+                    "path": read.path,
+                    "start_line": read.start_line,
+                    "end_line": read.end_line,
+                    "total_lines": read.total_lines,
+                    "content": read.content,
+                },
+                truncated=read.truncated,
+            )
+        )
 
-        if isinstance(args, RepoDeleteArgs):
-            assert not isinstance(preview, PatchPreview)
-            return await self._execute_delete(ctx, call, args, ticket_digest, preview)
+    async def _execute_write_adapter(
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: ToolArgs,
+        ticket_digest: str,
+        preview: ToolPreview,
+    ) -> ToolExecution:
+        assert isinstance(args, RepoEditArgs | RepoCreateArgs)
+        assert not isinstance(preview, PatchPreview)
+        return await self._execute_write(ctx, call, args, ticket_digest, preview)
 
-        if isinstance(args, RepoMoveArgs):
-            assert not isinstance(preview, PatchPreview)
-            return await self._execute_move(ctx, call, args, ticket_digest, preview)
+    async def _execute_delete_adapter(
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: ToolArgs,
+        ticket_digest: str,
+        preview: ToolPreview,
+    ) -> ToolExecution:
+        assert isinstance(args, RepoDeleteArgs)
+        assert not isinstance(preview, PatchPreview)
+        return await self._execute_delete(ctx, call, args, ticket_digest, preview)
 
-        if isinstance(args, RepoApplyPatchArgs):
-            assert isinstance(preview, PatchPreview)  # facts collection built it
-            return await self._execute_patch(ctx, call, ticket_digest, preview)
+    async def _execute_move_adapter(
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: ToolArgs,
+        ticket_digest: str,
+        preview: ToolPreview,
+    ) -> ToolExecution:
+        assert isinstance(args, RepoMoveArgs)
+        assert not isinstance(preview, PatchPreview)
+        return await self._execute_move(ctx, call, args, ticket_digest, preview)
 
-        if isinstance(args, RepoExecArgs):
-            return await self._execute_exec(ctx, call, args, ticket_digest)
+    async def _execute_patch_adapter(
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: ToolArgs,
+        ticket_digest: str,
+        preview: ToolPreview,
+    ) -> ToolExecution:
+        assert isinstance(args, RepoApplyPatchArgs)
+        assert isinstance(preview, PatchPreview)  # facts collection built it
+        return await self._execute_patch(ctx, call, ticket_digest, preview)
 
-        if isinstance(args, RepoCheckArgs):
-            return await self._execute_check(ctx, call, args, ticket_digest)
+    async def _execute_exec_adapter(
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: ToolArgs,
+        ticket_digest: str,
+        preview: ToolPreview,
+    ) -> ToolExecution:
+        assert isinstance(args, RepoExecArgs)
+        return await self._execute_exec(ctx, call, args, ticket_digest)
 
-        if isinstance(args, TaskPlanArgs):
-            ctx.plan = tuple(args.steps)
-            await self._emitter.emit(
-                ctx.run_id,
-                PlanUpdated(
-                    run_id=ctx.run_id,
-                    steps=tuple(
-                        PlanStepView(title=_clip(step.title, 120), status=step.status)
-                        for step in ctx.plan
-                    ),
+    async def _execute_check_adapter(
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: ToolArgs,
+        ticket_digest: str,
+        preview: ToolPreview,
+    ) -> ToolExecution:
+        assert isinstance(args, RepoCheckArgs)
+        return await self._execute_check(ctx, call, args, ticket_digest)
+
+    async def _execute_plan(
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: ToolArgs,
+        ticket_digest: str,
+        preview: ToolPreview,
+    ) -> ToolExecution:
+        assert isinstance(args, TaskPlanArgs)
+        ctx.plan = tuple(args.steps)
+        await self._emitter.emit(
+            ctx.run_id,
+            PlanUpdated(
+                run_id=ctx.run_id,
+                steps=tuple(
+                    PlanStepView(title=_clip(step.title, 120), status=step.status)
+                    for step in ctx.plan
                 ),
-            )
-            done = sum(1 for step in ctx.plan if step.status == "done")
-            return ToolExecution(
-                _ok(call, {"steps": len(ctx.plan), "done": done, "recorded": True})
-            )
+            ),
+        )
+        done = sum(1 for step in ctx.plan if step.status == "done")
+        return ToolExecution(_ok(call, {"steps": len(ctx.plan), "done": done, "recorded": True}))
 
-        # repo.diff
+    async def _execute_diff(
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: ToolArgs,
+        ticket_digest: str,
+        preview: ToolPreview,
+    ) -> ToolExecution:
         run_diff = await self._workspace.run_diff()
         envelope = await self._emitter.emit(
             ctx.run_id,
