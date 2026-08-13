@@ -67,6 +67,26 @@ class TestFlashProfile:
         assert not DEEPSEEK_V4_FLASH.prefix_continuation_enabled("https://api.deepseek.com")
 
 
+class TestLegacyAliases:
+    """`deepseek-chat` and `deepseek-reasoner` are documented aliases of
+    v4-flash (non-thinking and thinking mode), retiring 2026-07-24. They are
+    the names a live run actually used, and resolving them to DEFAULT_PROFILE
+    silently gave those runs a 96k context budget and a $0.00 bill."""
+
+    def test_the_legacy_chat_alias_resolves_to_flash(self) -> None:
+        assert profile_for("deepseek-chat") is DEEPSEEK_V4_FLASH
+
+    def test_the_legacy_reasoner_alias_resolves_to_flash(self) -> None:
+        assert profile_for("deepseek-reasoner") is DEEPSEEK_V4_FLASH
+
+    def test_a_profiled_model_prices_a_real_run(self) -> None:
+        """The regression that matters: a run on this model must not bill $0."""
+        assert profile_for("deepseek-chat").pricing.is_known is True
+
+    def test_an_unknown_model_still_reports_an_unknown_price(self) -> None:
+        assert profile_for("some-model-nobody-has-heard-of").pricing.is_known is False
+
+
 class TestPrefixEndpointGuard:
     """A profile that needs a specific endpoint for prefix continuation only
     enables it there, so a truncated turn on the wrong endpoint falls back to

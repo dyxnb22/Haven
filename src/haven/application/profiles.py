@@ -116,8 +116,17 @@ DEEPSEEK_V4_FLASH = ModelProfile(
     prefix_beta_base_url="https://api.deepseek.com/beta",
 )
 
+#: `deepseek-chat` and `deepseek-reasoner` are DeepSeek's documented legacy
+#: aliases for v4-flash's non-thinking and thinking modes, on the same rate card
+#: and the same 1M window (api-docs.deepseek.com, retiring 2026-07-24). They are
+#: the names a live run actually sends, and resolving them to `DEFAULT_PROFILE`
+#: silently gave those runs a 96k character budget instead of 480k and billed
+#: every one of them at $0.00.
+_LEGACY_DEEPSEEK_ALIASES = ("deepseek-chat", "deepseek-reasoner")
+
 _PROFILES: dict[str, ModelProfile] = {
     DEEPSEEK_V4_FLASH.name: DEEPSEEK_V4_FLASH,
+    **{alias: DEEPSEEK_V4_FLASH for alias in _LEGACY_DEEPSEEK_ALIASES},
 }
 
 

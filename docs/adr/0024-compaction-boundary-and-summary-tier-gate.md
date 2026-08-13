@@ -89,9 +89,10 @@ produce.
 
 - a long-horizon eval (sessions long enough to force repeated compaction
   and hard-clamp pressure, i.e. hundreds of tool calls or multiple steers)
-  shows **≥5 failures attributable to compaction information loss** —
-  repeated already-failed approaches, or lost user intent after a clamp —
-  matching the numeric bar the LSP gate used (ADR 0023); or
+  shows **≥5 failures attributable to compaction information loss, spread
+  over at least three distinct tasks** — repeated already-failed approaches,
+  or lost user intent after a clamp — matching the numeric bar the LSP gate
+  used (ADR 0023); or
 - Haven's product shape changes to open-ended interactive sessions as the
   primary use, in which case the eval is built *first* and the tier only
   ships with a before/after measurement, in that order.

@@ -248,6 +248,11 @@ class RunFinished(StrictModel):
     output_tokens: int = 0
     cached_input_tokens: int = 0
     cost_usd: float = 0.0
+    #: Whether a rate card existed for the model. False means `cost_usd` is a
+    #: placeholder, not a measurement — a reader must not see `$0.0000` and
+    #: conclude the run was free. Defaults true so a journal written before this
+    #: field keeps rendering as it did.
+    cost_known: bool = True
     usage_estimated: bool = False
     duration_ms: int = 0
 

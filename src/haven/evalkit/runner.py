@@ -244,6 +244,9 @@ class SuiteReport:
                         "tool_calls": r.tool_calls,
                         "input_tokens": r.input_tokens,
                         "output_tokens": r.output_tokens,
+                        # A hit bills at 1/50 of a miss (ADR 0011), so a report
+                        # without this cannot verify its own cost figure.
+                        "cached_input_tokens": r.cached_input_tokens,
                         "cost_usd": r.cost_usd,
                         "duration_ms": r.duration_ms,
                         "unauthorized_changes": r.unauthorized_changes,

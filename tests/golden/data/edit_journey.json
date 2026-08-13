@@ -651,6 +651,7 @@
     "input_tokens": "<estimated>",
     "output_tokens": "<estimated>",
     "cached_input_tokens": 0,
+    "cost_known": false,
     "usage_estimated": true
   }
 ]

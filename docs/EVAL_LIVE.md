@@ -5,7 +5,30 @@ driven by `ScriptedModel`, so this run is what validated that the provider
 adapter, the policy stack, and the Evidence Gate work against a model that was
 not written to cooperate.
 
-## The repetition nudge, measured (2026-08-14)
+## The repetition nudge, measured (2026-08-14) — VOID, see the correction below
+
+> **Correction (2026-08-14, independent review).** This A/B is void as a test of
+> the nudge. Counting `notice` events across all six report directories gives
+> **nudges fired = 0, stuck-stops = 0** in all 42 runs — the journals are
+> complete (they carry a network-retry notice), so the trigger simply never
+> occurred. Both arms ran an identical code path and every number below is
+> run-to-run variance. The verdict recorded here and in
+> `docs/notes/implemented/0002` is withdrawn; the nudge is untested, not proven.
+>
+> Reproduce: count `'nudging the model'` in
+> `evals/real/report-nudge-*/report-live-events/*.jsonl`.
+>
+> The run's real finding is in note 0002: across 42 tier-3 runs, including seven
+> over 20 steps and two that died on budget, **two consecutive identical
+> `(tool, arguments, result)` observations never occurred**. Budget-tail
+> non-convergence is not literal repetition, so neither the nudge nor the
+> pre-existing three-strike stop engages with it.
+>
+> Also corrected: the cost figures. Every run reported `$0.0000` because
+> `deepseek-chat` had no profile and fell back to an all-zero rate card. It is a
+> documented alias of `deepseek-v4-flash`; priced correctly, and using the cache
+> hits the per-case progress file recorded, the whole 42-run A/B cost
+> **$0.1063** at a 93% cache-hit rate (control $0.0602, treatment $0.0461).
 
 `docs/notes/implemented/0002` shipped a convergence intervention and said in
 writing that its effect was unproven: on the second identical (tool, args,

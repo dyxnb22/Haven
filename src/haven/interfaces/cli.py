@@ -113,7 +113,13 @@ class ConsoleSink:
                 f"finished: {event.status} ({event.stop_reason}) "
                 f"steps={event.steps} tools={event.tool_calls} "
                 f"tokens={event.input_tokens}/{event.output_tokens}{cached} "
-                f"cost=${event.cost_usd:.4f}" + (" (estimated)" if event.usage_estimated else "")
+                # An unpriced model must not read as a free one.
+                + (
+                    f"cost=${event.cost_usd:.4f}"
+                    if event.cost_known
+                    else "cost=unknown (no rate card for this model)"
+                )
+                + (" (estimated)" if event.usage_estimated else "")
             )
         if line and self._verbose:
             typer.echo(_plain(line))

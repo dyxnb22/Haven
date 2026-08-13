@@ -55,7 +55,13 @@ decisively — overloaded symbol names, find-all-references versus
 all-textual-matches, dynamic dispatch and deep inheritance, cross-language —
 this corpus barely exercises. Settling the broader question needs a tier on a
 genuinely large repository; the attribution format makes that experiment cheap
-to design, and it has not been run. Note also that an LSP is not the first thing
+to design, and it has not been run.
+
+*Amended 2026-08-14 — the concentration clause.* Per note 0006, the `≥5` bar
+now reads **≥5 spread over at least three distinct tasks**. A concentration
+limit only makes a bar harder to meet, so it does not disturb this verdict's
+direction (the corpus had ≈1 against ≥5); it binds whoever next argues the bar
+*has* been met. Note also that an LSP is not the first thing
 that binds at that scale: three tier-3 cases already died `token_budget_exhausted`
 on a ceiling calibrated for small repos, so context selection and budget
 calibration bind before localization does.

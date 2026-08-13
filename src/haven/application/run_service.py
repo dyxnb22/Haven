@@ -160,6 +160,9 @@ class RunOutcome:
     output_tokens: int
     cached_input_tokens: int
     cost_usd: float
+    #: False when no rate card exists for the model, so `cost_usd` is a
+    #: placeholder rather than a measurement.
+    cost_known: bool
     usage_estimated: bool
     final_text: str
 
@@ -1030,6 +1033,7 @@ class RunService:
                 output_tokens=ctx.usage.output_tokens,
                 cached_input_tokens=ctx.usage.cached_input_tokens,
                 cost_usd=round(ctx.usage.cost_usd, 6),
+                cost_known=self._pricing.is_known,
                 usage_estimated=ctx.usage.usage_estimated,
                 duration_ms=int(ctx.usage.wall_time_seconds * 1000),
             ),
@@ -1045,6 +1049,7 @@ class RunService:
             output_tokens=ctx.usage.output_tokens,
             cached_input_tokens=ctx.usage.cached_input_tokens,
             cost_usd=round(ctx.usage.cost_usd, 6),
+            cost_known=self._pricing.is_known,
             usage_estimated=ctx.usage.usage_estimated,
             final_text=final_text,
         )

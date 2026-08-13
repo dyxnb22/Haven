@@ -81,6 +81,8 @@ class PresenterState:
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float = 0.0
+    #: False when the model has no rate card, so the figure is a placeholder.
+    cost_known: bool = True
     usage_estimated: bool = False
     running: bool = False
     streaming_text: str = ""
@@ -102,7 +104,11 @@ class PresenterState:
             self.mode,
         ]
         step = f"step {self.step}/{self.max_steps}" if self.max_steps else ""
-        cost = f"${self.cost_usd:.4f}" + ("~" if self.usage_estimated else "")
+        cost = (
+            f"${self.cost_usd:.4f}" + ("~" if self.usage_estimated else "")
+            if self.cost_known
+            else "cost n/a"
+        )
         return " ─ ".join(p for p in [*parts, step, cost] if p)
 
     def status_line(self) -> str:
@@ -276,16 +282,18 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
             stop_reason=event.stop_reason,
             gate_reason=event.gate_reason,
             cost_usd=event.cost_usd,
+            cost_known=event.cost_known,
             usage_estimated=event.usage_estimated,
             running=False,
             streaming_text="",
         )
+        cost = f"cost=${event.cost_usd:.4f}" if event.cost_known else "cost=unknown"
         return _push(
             state,
             TimelineEntry(
                 "system",
                 f"run finished: {event.status} ({event.stop_reason}) "
-                f"steps={event.steps} tools={event.tool_calls} cost=${event.cost_usd:.4f}",
+                f"steps={event.steps} tools={event.tool_calls} {cost}",
             ),
         )
 

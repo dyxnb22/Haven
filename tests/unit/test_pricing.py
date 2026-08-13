@@ -9,6 +9,27 @@ figure, so it has to account for the split.
 from haven.domain.pricing import Pricing
 
 
+class TestUnknownIsNotFree:
+    """An unconfigured rate card must not render as $0.0000.
+
+    Found by audit: every live run against `deepseek-chat` reported $0.0000
+    because the model had no profile, so the default all-zero `Pricing` applied.
+    A reader cannot tell that from a genuinely free provider. This is the same
+    defect class as a stale coverage figure — a generated number that lies
+    instead of failing (docs/DEFENSIVE_PATTERNS.md).
+    """
+
+    def test_an_unconfigured_rate_card_is_not_known(self) -> None:
+        assert Pricing().is_known is False
+
+    def test_a_configured_rate_card_is_known(self) -> None:
+        assert Pricing(input_per_1m_usd=0.14, output_per_1m_usd=0.28).is_known is True
+
+    def test_an_output_only_rate_card_still_counts_as_known(self) -> None:
+        """Some providers bill output only; that is a real rate card."""
+        assert Pricing(output_per_1m_usd=0.28).is_known is True
+
+
 class TestSingleRateIsUnchanged:
     def test_without_a_cached_rate_all_input_bills_at_one_rate(self) -> None:
         """No configuration may silently change meaning."""
