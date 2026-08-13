@@ -502,14 +502,14 @@ Three changes tighten how the request is assembled, all under the same rule
   without an unbounded crawl.
 - **Compaction comprehension.** The honest open question is whether the
   structural digest preserves enough for the model to keep working after
-  compaction. The live task-performance A/B (same trajectory, before vs after
-  a forced compaction) remains the measurement that would settle it and is
-  **not yet run**. What is pinned now is the deterministic proxy: a test that
-  every load-bearing fact — files read and their digests, edits and their
-  postimages, checks and their exit codes — survives into the digest, and
-  that repository bytes never do. A semantic (model-written) digest is still
-  deliberately not built, because that A/B has not shown the structural one
-  losing task state.
+  compaction. At the time of this phase the live A/B was **not yet run**;
+  what was pinned was the deterministic proxy: a test that every load-bearing
+  fact — files read and their digests, edits and their postimages, checks and
+  their exit codes — survives into the digest, and that repository bytes
+  never do. The A/B has since been run (see "Tier 5" above: forced compaction
+  at a 12k budget, same task passed, one step faster) and the measured
+  boundary of the whole compaction design is now recorded in ADR 0024. A
+  semantic (model-written) digest remains deliberately not built.
 
 ### One same-version rerun of everything (2026-08-12)
 
