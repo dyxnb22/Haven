@@ -1,0 +1,448 @@
+# Design Q&A
+
+Every load-bearing decision in Haven, in the form it gets challenged: the
+question, the short answer, the reasoning underneath, and the follow-up that
+usually comes next. Written to be defended out loud, not skimmed.
+
+Ground rule for everything below: **if a claim here has no number or no file
+behind it, say so out loud.** The strongest position in a design conversation
+is knowing exactly where your evidence stops.
+
+---
+
+## 1. The 90-second version
+
+> **Problem.** A coding agent asks a non-deterministic model to cause
+> deterministic, security-sensitive side effects: writing files, running
+> processes, declaring work done. The model is the least trustworthy
+> component and traditionally the one deciding all three.
+>
+> **Thesis.** The model may only *propose*. Deterministic code owns
+> permission, execution, and the definition of success.
+>
+> **Three mechanisms.** (1) A single execution channel — every proposed
+> action passes registry → strict schema → program-collected workspace facts
+> → deterministic policy → digest-bound single-use approval → TOCTOU re-check
+> → execution ticket → OS-sandboxed executor. There is no second path.
+> (2) An Evidence Gate — a run that edited files cannot succeed on the
+> model's word; it needs a diff plus a green registered check recorded after
+> the last write. (3) Conservative recovery — an interrupted effect is
+> classified against content digests, and anything unprovable blocks resume
+> and is never auto-replayed.
+>
+> **Evidence.** 719 tests, CI green on macOS and Linux, offline eval 38/38
+> with zero security violations as a hard CI gate. Live on real third-party
+> repositories: 75/79 across five difficulty tiers, zero security violations.
+> Head-to-head against opencode on the same model and a neutral grader:
+> 12/12 versus 10/12 — both of opencode's losses were reaching a green test
+> suite by editing the test file, which is exactly what Haven's scope guard
+> exists to prevent.
+
+If you only remember one line: **"Done!" is unfalsifiable, so success had to
+become an artifact.**
+
+---
+
+## 2. Numbers worth knowing cold
+
+| Thing | Value | Where it comes from |
+|---|---|---|
+| Automated tests | 719 | `uv run pytest` (generated into README) |
+| Line coverage (`src/`) | 88% | `coverage report --include="src/*"` |
+| Offline eval | 38/38, 0 security violations | `haven eval --offline`, a CI gate |
+| Live real-repo suite | 75/79 across 5 tiers, 0 violations | `docs/EVAL_LIVE.md` |
+| Single-revision full rerun | 61/65 in one uninterrupted run | `evals/real/results.json` |
+| Head-to-head vs opencode | 12/12 vs 10/12, same model, neutral grader | `evals/headtohead/` |
+| Prompt-cache hit | 86–93%, at the structural ceiling | miss decomposition in `EVAL_LIVE.md` |
+| Cost per real task | ~$0.0016–0.003 | live suite: 65 cases for $0.18 |
+| ADRs | 26 | `docs/adr/` |
+| Tools | 12 | `ARGS_MODELS`, pinned to the policy set by a test |
+
+Two framing notes to have ready:
+
+- **75/79 is "after fixes", and the fixes matter more than the number.** The
+  as-found runs were 27/31, 15/20, 9/13. Every failure was attributed to a
+  root cause; harness bugs were fixed with regression tests, model-capability
+  failures were left as data. The gap between as-found and after-fix *is* the
+  finding.
+- **Cache hit is a ratio, not a cost.** A 99%-hit agent sending 100k tokens
+  per turn costs more per task than an 87%-hit agent sending 6k. Compare cost
+  per completed task, which the head-to-head harness can actually measure.
+
+---
+
+## 3. The decisions, and the follow-ups they attract
+
+### 3.1 Why can the model only propose?
+
+**Short.** Because the alternative is unfalsifiable. If the model both acts
+and reports, there is no place left to check it.
+
+**Deeper.** The split is not "the model is dumb" — it is that permission,
+execution, and success are *deterministic* concerns with testable
+implementations, while the model is a sampling process. Putting them behind
+one channel means every one of them is unit-testable without a model in the
+loop, which is why the offline eval can be a security gate at all.
+
+**Follow-up: "isn't the system prompt also a control?"**
+No, and this is the distinction worth being crisp on. The prompt is
+persuasion; the policy is enforcement. Injected repository content can argue
+with a prompt, but it cannot make `evaluate_policy` return ALLOW. Everything
+that must hold under a hostile input lives in `domain/policy.py`, not in
+`SYSTEM_RULES`.
+
+### 3.2 Why digest-bound single-use approval instead of a permission list?
+
+**Short.** A permission ("may edit `src/`") authorizes a category. An
+approval digest authorizes *exactly the change the human read*.
+
+**Deeper.** The digest covers workspace identity + tool + tool version +
+canonical arguments + preimage + preview. Any drift in any of those
+invalidates it. Consumption is a conditional SQL `UPDATE`, so it cannot be
+replayed. And because the file could change between the human's decision and
+execution, the preimage is re-verified *after* approval (the TOCTOU guard) —
+a change in that window fails closed with `stale_preimage`.
+
+**Follow-up: "isn't that approval fatigue?"**
+Yes, and fatigue is a security cost, not just a UX one: a human trained to
+press `a` on identical cards stops reading cards. That is why ADR 0025 exists
+and why it is drawn narrowly — approving one `repo.check` covers
+*byte-identical* re-runs of that check for the rest of that run only. It is
+digest-scoped, run-scoped, memory-only (a resumed run asks again), disclosed
+on the card at consent time, never armed by a rejection, and every skipped
+ask still mints and consumes its own approval row so the journal stays 1:1.
+Writes and exec always re-ask.
+
+**Follow-up: "what if the model proposes an edit and the user approves a
+different one?"**
+It cannot: the preview the human read is *in* the digest. Change one byte of
+the diff and the approval no longer matches the ticket.
+
+### 3.3 Why an Evidence Gate rather than trusting the model's report?
+
+**Short.** Because "I fixed it" is not checkable and a test result is.
+
+**Deeper.** A run that touched files can only succeed with a diff *and* a
+green registered check recorded **after** the last write (sequence-stamped,
+so a stale pre-edit pass does not count), plus a deterministic review of the
+added lines for secrets, conflict markers, debugger statements, and blanked
+files.
+
+**Follow-up: "so the model can just edit the test."**
+That is the actual attack, and it happened. In tier 1 a model edited tests;
+in the zero-config tier, when a check kept failing on a missing plugin, the
+model planted a `sitecustomize.py` to bend Python startup. The scope guard
+caught both. The response was three-layered: the scope guard fails any change
+outside the task's allowed files; the system prompt names test edits and
+environment hooks (`conftest.py`, `sitecustomize.py`) as forbidden; and a
+**hidden grader** re-runs the verify recipe on the final tree after the agent
+finishes, invisibly to it. The grader earned its place immediately — a tier-4
+bug-fix case had reached `succeeded` in 24 steps having made **zero edits**,
+reasoning its way to "done". Answering is not fixing.
+
+**This is the best story to tell,** because the same guard caught a
+*competitor* doing it: opencode's two losses in the head-to-head were
+green-suite-by-editing-tests, flagged by a grader that does not know which
+tool produced the tree.
+
+### 3.4 Why deterministic compaction instead of asking the model to summarize?
+
+**Short.** A summary the model wrote can invent facts that later turns treat
+as established — including permission-shaped ones ("the user approved this").
+Dropping information only *loses* it, and a re-read recovers it.
+
+**Deeper.** When the transcript outgrows the budget, the oldest tool-call
+units are dropped whole (call + its results together, so no orphaned
+tool_call reaches the provider) and replaced by one program-assembled digest
+containing only structured fields: paths, digests, exit codes. No file
+content, no model prose — which is what makes labelling it `trusted` honest.
+It is derived from the dropped messages, not from live state, so it is
+byte-identical between compaction events and does not move the cacheable
+prefix.
+
+**Follow-up: "Claude Code and Codex both use LLM summaries — why are you
+right and they aren't?"**
+I'm not claiming they're wrong; we optimized different things and I can state
+the trade precisely. Their nine-section summary preserves narrative — intent,
+decisions, lessons — which mine does not. Mine cannot be prompt-injected into
+fabricating a permission fact, and it has no failure mode: no extra API call,
+no latency, no circuit breaker needed. Their summarizer reads untrusted
+repository content and its output is treated as established context, which is
+a documented injection surface. For bounded tasks (5–40 steps, my measured
+range) the structural digest is enough: the compaction A/B ran the same task
+at a 12k budget with compaction firing three times and at the default budget
+with none — both passed, the compacted arm one step faster. For multi-hour
+open-ended sessions I expect their approach to win, and ADR 0024 pre-agrees
+the gate and the design for adding a summary tier if my product shape moves
+there.
+
+**Follow-up: "what breaks first under pressure?"**
+The hard clamp. Below it, user messages and narrative turns are never
+dropped; at the extreme the clamp drops whole messages oldest-first
+*regardless of role* and truncates the last. So a long multi-steer session
+could silently lose user intent. That is documented in ADR 0024 with the fix
+pre-designed, and deliberately not built because zero measured failures point
+at it.
+
+### 3.5 Why an OS sandbox, and why is `repo.exec` denied without one?
+
+**Short.** Because an argv allowlist is a guess about what a program does,
+and a kernel policy is an enforcement of what it may do.
+
+**Deeper.** Seatbelt on macOS, Landlock (ABI ≥ 4) on Linux, applied at one
+wrapping site so no caller can forget it. Writes outside the workspace are
+denied, `$HOME` is unreadable, network is denied. Where no backend exists the
+policy denies `repo.exec` outright rather than running it unconfined, and no
+config can override that.
+
+**Follow-up: "is it a container?"**
+No, and the docs say so plainly. IPC is open, the Linux rules cover TCP only,
+and secrets stored outside `$HOME` remain readable. It assumes a locally
+trusted repository and does not claim to be safe against malicious repo code.
+
+**Follow-up: "so `repo.exec` is fine because the sandbox bounds it?"**
+That was the original reasoning and a security review this month proved it
+half wrong. It holds for *writes*. For *reads* it did not: the sandbox
+deliberately leaves everything outside `$HOME` readable so interpreters
+start, `repo.exec` validates `cwd` but not the paths inside `argv`, and exec
+stdout goes back into the transcript. Composed, an auto-allowed `cat` of an
+absolute path silently shipped an unapproved file to the model provider — and
+on Linux `cat /proc/<parent-pid>/environ` reached the parent process's whole
+environment, around the child's scrubbed one. Fixed in ADR 0026: approval
+friction now follows the *operands*, so a read-only command stays silent
+while it stays inside the workspace and asks the moment an operand is
+absolute, `~`-rooted, or `..`-traversing. **The lesson I'd volunteer: a
+comment justifying a security decision is a claim, and claims expire.**
+
+### 3.6 Why both an event journal and checkpoints?
+
+**Short.** They answer different questions: the journal is *what happened*,
+the checkpoint is *where to resume*.
+
+**Deeper.** The journal is append-only and is the trace — replay is a pure
+projection of it through the same reducer the TUI uses, which is why a
+replayed run reconstructs the same screen with no model and no tools. The
+checkpoint is a fast-resume snapshot, checksum- and schema-verified on load.
+
+**Follow-up: "isn't the checkpoint redundant?"**
+It is a cache, and treating it as one is what fixed a real problem: a
+checkpoint was written per tool batch and each held the whole transcript, but
+only the newest is ever read. Measured on a real 14MB store, 12.3MB of 13.4MB
+payload was superseded checkpoint rows growing quadratically with run length.
+Now `save_checkpoint` prunes what it supersedes in the same transaction.
+
+### 3.7 Why is an ambiguous interrupted effect never auto-replayed?
+
+**Short.** Because re-running a possibly-completed write is worse than asking
+a human.
+
+**Deeper.** Each effect journals STARTED with its preimage and *expected*
+postimage before the I/O, then CONFIRMED after. On resume the file on disk is
+compared: matches preimage → not run (safe to resume); matches postimage →
+confirmed; neither → `EFFECT_UNKNOWN`, which blocks resume until
+`haven reconcile` records a human decision. `repo.move` is the interesting
+case — the copy-landed-but-source-remains window is genuinely undecidable, so
+it is classified unknown rather than guessed.
+
+### 3.8 Why no MCP, no subagents, no planner, no LSP?
+
+**Short.** Because I measured what actually fails, and none of them fix it.
+
+**Deeper.** Every non-passing live run across five tiers, the N=5
+distribution, and the head-to-head was attributed. The dominant failure is
+**budget-tail non-convergence** — the model does not stop in time — with
+oracle-gaming second (prevented at execution, not by planning) and exactly
+**≈1** case of a genuine semantic-localization ceiling. The read-only LSP had
+a pre-registered gate of ≥5 such failures. One is not five, so it was not
+built. A planner does not fix "hunts too long"; the step budget already
+bounds that. Subagents do not shorten a convergence tail on a single
+localized task. MCP breaks the invariant that every tool is compiled in and
+provably classified, and improves no metric I measure.
+
+**Follow-up: "isn't that just rationalizing a smaller scope?"**
+It would be, if the gates were written after the fact. They weren't: ADR 0007
+and ADR 0016 set the benefit gates *before* the data existed, and ADR 0023
+records the verdict against them — including the numeric LSP threshold I then
+failed to meet. The measurement apparatus is the durable asset; it will
+re-decide this in either direction as difficulty scales.
+
+### 3.9 Why is the context budget in characters when the provider bills tokens?
+
+**Short.** Because a char budget needs no tokenizer dependency, and I
+calibrated it against real runs instead of guessing.
+
+**Deeper.** `evals/calibrate_context.py` pairs each `context.built` byte size
+with the `input_tokens` the provider then reported, over committed live event
+streams, and a unit test asserts the char budget stays under the model's real
+token window even at the densest observed ratio. It is a cost/latency choice
+(ADR 0011), not a safety limit — and it is checked, not asserted.
+
+### 3.10 Why does the prompt put volatile content last?
+
+**Short.** Prefix caching matches from the front, so anything that changes
+every turn poisons everything after it.
+
+**Deeper.** The live budget counter used to sit in the *second* message, so
+the entire growing transcript was re-billed every turn. Moving the plan and
+counters to the tail took cache hit from **70.9% to 89.3%** on the same suite
+and model. The saving grows with run length, because the transcript is small
+early and dominates late.
+
+**Follow-up: "can you get it higher?"**
+No, and I can show why rather than guess. The remaining misses on a 561-call
+run decompose to 85% first-time content (irreducible — that is the model
+reading new things), 9% provider cache-ingestion lag with a distinctive
+fingerprint, 3% the per-case first step, 3% rounding. Eliminating every
+attributable break would move 86.6% to 88.3%, worth **$0.009** across a
+65-case suite. Segment-level comparison confirms the layout is byte-stable.
+The work is closed as measured-optimal.
+
+---
+
+## 4. Failure stories
+
+Interviewers learn more from these than from any feature. Each one is
+"symptom → root cause → fix → what pins it now".
+
+**The security gate cried wolf.** On its first real run the gate flagged a
+violation that wasn't one. The gate itself was wrong. Fixing the *detector*
+rather than the finding is the whole point of `docs/POSTMORTEM.md` #1.
+
+**Building the observability tool exposed a trust-labelling bug.**
+`debug-context` was built to show what the model sees; it revealed content
+labelled trusted that shouldn't have been. Tools that make a system legible
+find bugs that tests do not.
+
+**The offline test suite quietly spent money.** Tests that were supposed to
+be hermetic were reaching a paid provider. Now a guard fixture enforces the
+hermetic environment and has its own test.
+
+**A passing run that changed nothing.** A tier-4 bug-fix case reached
+`succeeded` in 24 steps with zero edits. The Evidence Gate was satisfied
+because the case's shape let it be. The hidden grader now re-runs the oracle
+on the final tree, invisibly to the model.
+
+**A proposed fix that measurement disproved.** A security review recommended
+running the regex search fallback in a thread with a timeout. I measured
+first: Python's regex engine holds the GIL, so during a 0.68s match the event
+loop ran **zero** times — the timeout could not even fire. Shipping it would
+have been a mitigation in name only *and* would have told the next reviewer
+the problem was solved. The walk now carries a wall-clock deadline, and the
+measurement is recorded where that mistake would be made again.
+
+**An assertion that would have run an unsandboxed process.** A guard reading
+`assert self._launcher is not None` looked like type narrowing. But the
+executor runs a command *unwrapped* when it has no launcher, so under
+`python -O` the stripped assert would not have failed — it would have run one
+unconfined process and crashed afterwards. Now a hard `raise`.
+
+**The same two-implementation drift, twice.** The SQLite and in-memory stores
+disagreed first about preserving a postimage digest, later about which
+checkpoint wins on an out-of-order save (the memory store would have moved
+resume *backwards*). Both are now contract tests parameterized over both
+implementations. The lesson: two implementations of one interface will drift
+unless one test suite runs against both.
+
+**A flake that was telling the truth.** A standing-approval test failed 1 run
+in 8. Root cause: it issued three *consecutive* identical checks — which is
+exactly the no-progress condition — and only passed because check results
+carry `duration_ms` and the milliseconds usually differed. The production
+behavior was correct; the test was testing the clock. **A test that passes on
+timing jitter is not flaky, it is wrong.**
+
+---
+
+## 5. The questions designed to find the bottom
+
+Expect a depth probe. These are the second- and third-level questions, with
+the shape of a good answer.
+
+- **"Why does approval bind the preimage *and* re-verify it after?"** Because
+  they defend different windows: the digest defends against the *proposal*
+  changing, the re-check against the *file* changing while the human thinks.
+- **"Landlock can't express 'workspace except .git' — so what stops a check
+  from rewriting git history?"** Nothing at the kernel layer on Linux, and I
+  say so. The before/after snapshot detects it and the call fails with
+  `protected_path_tampered` recording no evidence, so a tamper cannot be
+  laundered into a passing verification — but the write already landed. On
+  macOS Seatbelt denies it outright.
+- **"What is `repo.apply_patch` for, given you have `repo.edit`?"** A
+  multi-file change was N approvals, N chances to go stale, and no
+  whole-change review. The patch carries the entire diff into one digest-bound
+  approval over an aggregate of every touched file's preimage, applies
+  atomically with journaled rollback, and journals per-file effects so
+  recovery can still prove each one independently.
+- **"Rollback failed — now what?"** `PatchRollbackError` is deliberately not a
+  `WorkspaceError`, so a generic handler cannot swallow it. It surfaces as an
+  unknown effect: the run stops and recovery blocks until a human reconciles.
+- **"Your digest is `trusted` — how do you know repository bytes never reach
+  it?"** A test asserts exactly that, and it is the one I would keep if I had
+  to delete every other compaction test.
+- **"How do you know the TUI and headless agree?"** A golden trace test
+  compares the full event stream byte-for-byte and asserts both surfaces
+  produce identical traces.
+- **"What stops a new tool from bypassing all of this?"** Three tests: every
+  registered tool must have a policy classification, no side-effecting tool
+  may ever be auto-allowed, and both pipeline dispatch tables must cover
+  exactly the registered tool set. Forgetting a wiring site fails the suite
+  rather than falling through at runtime.
+
+---
+
+## 6. Limits, stated before being asked
+
+Volunteering these is the move. Each is documented in the repo.
+
+- **One provider, one model.** All live numbers are `deepseek-v4-flash`. The
+  adapter is OpenAI-compatible and profiles exist, but nothing else is
+  measured. It is not a benchmark.
+- **Single run per process.** `RunService` holds `_active_run_id` and the
+  steering queue as instance state. Fine for a local tool, and the blocking
+  step toward background/parallel work.
+- **Compaction under extreme pressure is role-blind** (ADR 0024), and
+  multi-hour sessions are outside the measured envelope.
+- **The Codex CLI comparison is blocked**, not skipped: Codex speaks the
+  responses API and DeepSeek exposes chat, so a same-model comparison needs a
+  translating proxy. Running it against a different model would measure tool
+  and model jointly and defeat the control.
+- **Small N.** Five tiers, a 3-case × 5-run distribution, one peer tool.
+- **No real users.** The measurements are evals, not usage.
+
+---
+
+## 7. If I had another month
+
+Ordered, with the reason each is in this position:
+
+1. **The Codex proxy** (~1 day) — unblocks same-model comparison against a
+   second mature peer, which is the highest-value missing evidence.
+2. **Bulk tier scaling** to the roadmap's 24/8/6 task counts — mechanical now
+   that the sandboxed red/green gate is proven, and it buys statistical power
+   the current N does not have.
+3. **A long-horizon eval** — the measurement ADR 0024's summary-tier gate
+   depends on. Note the order: the eval *before* the feature, or the feature's
+   before/after is authored rather than measured.
+4. **Per-run context objects** in `RunService`, only if the product shape
+   moves toward concurrency.
+
+What I would *not* do: add MCP, subagents, or a planner. Every gate says no,
+and breaking my own benefit gate to lengthen a feature list would discard the
+most defensible thing about the project.
+
+---
+
+## 8. Where to look in the repo
+
+| Question | File |
+|---|---|
+| How does one action get executed? | `src/haven/application/tool_pipeline.py` |
+| What is one turn of the loop? | `src/haven/application/run_service.py` |
+| Who decides permission? | `src/haven/domain/policy.py` |
+| What counts as success? | `src/haven/domain/evidence.py` |
+| What does the model see? | `src/haven/application/context_builder.py` |
+| How do writes actually land? | `src/haven/adapters/workspace_fs.py` |
+| Threat model and limits | `docs/SECURITY.md` |
+| Every decision, with rollback | `docs/adr/` (26) |
+| What was measured live | `docs/EVAL_LIVE.md` |
+| What went wrong and why | `docs/POSTMORTEM.md` |
+| Orientation and reading order | `src/haven/__init__.py` |

@@ -231,6 +231,7 @@ including one where the security gate itself was wrong.
 | `course/` | a 10-module course that teaches agent engineering using this repo as the textbook |
 | `docs/DEMO.md` | 2–3 minute walkthrough script |
 | `docs/PROJECT_CARD.md` | one-page summary, measured results, trade-offs |
+| `docs/DESIGN_QA.md` | every load-bearing decision in the form it gets challenged: alternatives, evidence, follow-ups, and the limits stated first |
 | `docs/POSTMORTEM.md` | real failures, root causes, regression guards |
 | `docs/adr/` | Architecture decision records (count in the metrics table), from scope and the tool boundary through the OS sandbox, sessions, reasoning replay, the multi-file patch transaction, session runtime, headless write, the data-driven architecture verdict (ADR 0023), the compaction boundary + summary-tier gate (ADR 0024), run-scoped standing approvals (ADR 0025), and exec friction following the operands (ADR 0026) |
 | `docs/ROADMAP.md` (+ `ROADMAP2/3`) | the executed improvement plans, kept as the record of what was built in which order and why |
