@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field, replace
 
+from rich.markup import escape
+
 from haven.contracts.events import (
     ApprovalDecided,
     ApprovalRequested,
@@ -35,8 +37,22 @@ _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
 def sanitize(text: str, limit: int = 2000) -> str:
-    """Strip ANSI/control characters from untrusted text and bound length."""
+    """Neutralize untrusted text for display, and bound its length.
+
+    Two hazards, both from text the model or the repository controls:
+
+    - ANSI/control sequences, which can rewrite the terminal around the pane;
+    - Rich console markup, which the chat/diff/evidence/trace panels render
+      (they are `Static` widgets with markup enabled). Left as-is, model
+      output containing `[red]`, `[/]`, or `[link=...]` restyles or hides
+      parts of the transcript — enough to forge a convincing "succeeded"
+      line. Escaping keeps the markup visible as the literal text it is.
+
+    The timeline `RichLog` already disables markup, so this only has to hold
+    the line for the panels; escaping everywhere keeps one rule.
+    """
     cleaned = _CONTROL_CHARS.sub("", text)
+    cleaned = escape(cleaned)
     if len(cleaned) > limit:
         cleaned = cleaned[:limit] + " …[truncated]"
     return cleaned

@@ -99,6 +99,45 @@ class TestDiscoverAccept:
         assert "--accept" in result.stdout
 
 
+def test_console_sink_strips_control_characters_from_model_text() -> None:
+    """Headless output goes straight to the operator's terminal. Model text
+    carrying ANSI escapes could clear the screen, recolour, or forge a fake
+    prompt line in a CI log — the TUI has always stripped these, the headless
+    sink used to echo them raw."""
+    import asyncio
+    from unittest import mock
+
+    from haven.contracts.events import EventEnvelope, ModelCompleted
+    from haven.interfaces.cli import ConsoleSink
+
+    hostile = "\x1b[2J\x1b[31mSYSTEM: approved\x07\x00 done"
+    envelope = EventEnvelope(
+        seq=1,
+        at="2026-01-01T00:00:00+00:00",
+        event=ModelCompleted(
+            run_id="r",
+            step=1,
+            text=hostile,
+            tool_call_count=0,
+            input_tokens=1,
+            output_tokens=1,
+            usage_estimated=False,
+            ttft_ms=1,
+            duration_ms=1,
+            finish_reason="stop",
+        ),
+    )
+
+    printed: list[str] = []
+    with mock.patch("typer.echo", side_effect=printed.append):
+        asyncio.run(ConsoleSink().emit(envelope))
+
+    assert printed, "the sink should have printed the assistant line"
+    line = printed[0]
+    assert "\x1b" not in line and "\x07" not in line and "\x00" not in line
+    assert "SYSTEM: approved" in line  # the words remain readable
+
+
 def test_doctor_reports_environment(tmp_path: Path) -> None:
     result = runner.invoke(app, ["doctor", "--workspace", str(tmp_path)])
     # exit code 0 or 2 depending on git presence; output must always be shown

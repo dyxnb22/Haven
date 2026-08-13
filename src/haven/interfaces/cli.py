@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +67,18 @@ def _exit_code_for(status: RunStatus, stop_reason: StopReason) -> int:
     return EXIT_STOPPED
 
 
+#: Control characters are stripped before anything reaches the terminal. The
+#: TUI has always done this (`presenter.sanitize`); the headless sink echoed
+#: model-controlled text raw, so a model could emit ANSI escapes that rewrite
+#: the operator's terminal or forge log lines. Rich markup needs no escaping
+#: here — typer.echo writes plain bytes, it does not render markup.
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def _plain(text: str) -> str:
+    return _CONTROL_CHARS.sub("", text)
+
+
 class ConsoleSink:
     """Compact human-readable event stream for headless runs and replay."""
 
@@ -103,7 +116,7 @@ class ConsoleSink:
                 f"cost=${event.cost_usd:.4f}" + (" (estimated)" if event.usage_estimated else "")
             )
         if line and self._verbose:
-            typer.echo(line)
+            typer.echo(_plain(line))
 
 
 class NullSink:

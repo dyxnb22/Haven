@@ -62,6 +62,23 @@ class TestSanitizerAgainstHostileText:
         assert cleaned.endswith("…[truncated]")
         assert len(cleaned) < 200
 
+    def test_rich_markup_is_escaped_not_rendered(self) -> None:
+        """The chat/diff/evidence/trace panels are Static widgets with markup
+        enabled, so unescaped model output could restyle or hide parts of the
+        transcript — enough to forge a convincing "succeeded" line."""
+        cleaned = sanitize("[red]FAKE: run succeeded[/red] and [link=http://evil]click[/link]")
+        # The tags survive as literal text, escaped so Rich will not act on them.
+        assert "\\[red]" in cleaned
+        assert "\\[link=http://evil]" in cleaned
+        # And the words a human would read are still there.
+        assert "FAKE: run succeeded" in cleaned
+
+    def test_ordinary_brackets_stay_readable(self) -> None:
+        """Escaping must not mangle normal text: code and logs are full of
+        brackets, and the human still has to be able to read them."""
+        cleaned = sanitize("items[0] = fn(a[1], b[2])  # [note]")
+        assert "items" in cleaned and "fn(a" in cleaned and "note" in cleaned
+
 
 class TestReducerWithHostileEvents:
     def test_ansi_in_model_text_never_reaches_view_state(self) -> None:

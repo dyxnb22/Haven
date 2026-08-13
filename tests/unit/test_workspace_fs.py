@@ -1,5 +1,6 @@
 """Behavior tests for the filesystem workspace adapter."""
 
+import time
 from pathlib import Path
 
 import pytest
@@ -116,6 +117,38 @@ class TestSearch:
         (workspace.root / "blob.bin").write_bytes(b"BUG\x00BUG")
         result = await workspace.search("BUG", ".", 50)
         assert all(m.path != "blob.bin" for m in result.matches)
+
+    async def test_a_slow_search_degrades_on_its_deadline(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The model's pattern is only syntax-checked, so a search can be made
+        arbitrarily slow. The walk is bounded by wall clock, not just by the
+        result caps, and reports truncation rather than running to completion.
+        """
+        from haven.adapters import workspace_fs
+
+        root = tmp_path / "repo"
+        root.mkdir()
+        for index in range(400):
+            (root / f"f{index}.txt").write_text("needle\n" * 100)
+        ws = FsWorkspace(root, use_ripgrep=False)
+        # Already expired: the very first deadline check must stop the walk.
+        monkeypatch.setattr(workspace_fs, "RIPGREP_TIMEOUT_SECONDS", -1.0)
+
+        started = time.monotonic()
+        result = await ws.search("needle", ".", 10_000)
+        elapsed = time.monotonic() - started
+
+        assert result.truncated, "a search past its deadline must report truncation"
+        assert elapsed < 5.0, f"the walk should have stopped promptly, took {elapsed:.1f}s"
+
+    async def test_the_deadline_does_not_truncate_an_ordinary_search(
+        self, workspace: FsWorkspace
+    ) -> None:
+        """The bound must not turn normal searches into partial results."""
+        result = await workspace.search("BUG", ".", 50)
+        assert not result.truncated
+        assert len(result.matches) == 1
 
 
 class TestList:

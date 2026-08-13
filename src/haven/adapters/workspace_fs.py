@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 from haven.domain.digest import sha256_bytes, sha256_text
@@ -44,6 +45,10 @@ MAX_SEARCH_LINE_CHARS = 240
 MAX_DIFF_BYTES = 64 * 1024
 MAX_CREATE_BYTES = 256 * 1024
 RIPGREP_TIMEOUT_SECONDS = 20.0
+
+#: How often the pure-Python search checks its deadline, in lines. Frequent
+#: enough to bound a long walk, rare enough that the clock read is free.
+_DEADLINE_CHECK_LINES = 256
 
 #: Path components that tools may never touch (the agent must not be able to
 #: rewrite its own configuration, git history, or audit surfaces).
@@ -297,6 +302,28 @@ class FsWorkspace:
         return rel, int(number), text
 
     def _search_walk(self, pattern: str, target: Path, max_results: int) -> SearchResult:
+        """Pure-Python fallback, used only when ripgrep is unavailable.
+
+        Bounded by a wall-clock deadline as well as the result caps, because
+        the pattern comes from the model and is validated only for syntax: a
+        backtracking pattern like `(a+)+b` costs exponential time per subject,
+        and `re` has no timeout of its own.
+
+        What the deadline does and does not cover, measured rather than
+        assumed:
+
+        - It bounds the *walk* — many files, many lines — which is the shape
+          any realistically slow search takes. Checked between subjects, so
+          the cost of checking is nothing.
+        - It cannot interrupt a single `re.search` already running. Python's
+          regex engine holds the GIL for the whole match: measured here, a
+          0.68s match let the event loop run exactly **zero** times. That is
+          also why moving this to `asyncio.to_thread` does not help and was
+          deliberately not done — the timeout could not even fire. Genuinely
+          bounding one pathological subject needs a killable subprocess,
+          which is not worth it for a fallback that exists only when ripgrep
+          is missing (ripgrep's engine is linear and immune).
+        """
         compiled = re.compile(pattern)
         matches: list[SearchMatch] = []
         # Files that produced at least one match, which is the only count
@@ -306,9 +333,13 @@ class FsWorkspace:
         seen_files: set[str] = set()
         total_bytes = 0
         truncated = False
+        deadline = time.monotonic() + RIPGREP_TIMEOUT_SECONDS
 
         for file_path in self._iter_files(target):
             if truncated:
+                break
+            if time.monotonic() > deadline:
+                truncated = True
                 break
             try:
                 if file_path.stat().st_size > MAX_SEARCH_FILE_BYTES:
@@ -321,6 +352,9 @@ class FsWorkspace:
             text = data.decode("utf-8", errors="replace")
             rel = file_path.relative_to(self._root).as_posix()
             for line_number, line in enumerate(text.splitlines(), start=1):
+                if line_number % _DEADLINE_CHECK_LINES == 0 and time.monotonic() > deadline:
+                    truncated = True
+                    break
                 if compiled.search(line):
                     clipped = line.strip()[:MAX_SEARCH_LINE_CHARS]
                     total_bytes += len(clipped.encode("utf-8"))
