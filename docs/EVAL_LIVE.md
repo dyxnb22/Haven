@@ -781,6 +781,41 @@ Two honest caveats:
 The "before" number was produced by a temporary, since-removed ordering shim, on
 the same suite and model, so the comparison is apples-to-apples.
 
+### Where the remaining misses go (2026-08-13)
+
+Recent runs sit at 86.6% (the 65-case same-version rerun, 561 model calls),
+92.1% (tier-4 rerun), 87.6–92.7% (the N=5 distribution). Before spending any
+effort raising that, the misses on the 65-case run were decomposed from the
+per-step `model.completed` events (`input_tokens` vs `cached_input_tokens`):
+
+| Where the 771k uncached tokens went | Share | Nature |
+|---|---:|---|
+| Per-step growth: new tool outputs / new turns | **85%** | Irreducible — first-time content; the model doing its job, not a cache failure |
+| Provider cache-ingestion lag (48 steps) | 9% | DeepSeek builds cache entries asynchronously; a fast next step misses them |
+| Step-1 structural miss (fresh goal per case) | 3% | Only the shared system-rules head can cross-hit (~256 tokens does) |
+| Other (block rounding, scattered breaks) | 3% | — |
+
+Two findings worth recording. First, **the layout is verified clean at the
+byte level**: comparing `context.built` segments across consecutive steps
+shows every segment stable (tail = 40 bytes), and healthy steps match the
+theoretical optimum `cached_i ≈ input_{i-1}` almost exactly — ADR 0008's
+design holds in production data, not just in the one A/B above. Second, the
+lag breaks have a fingerprint: **the broken step's cached count equals the
+previous step's cached count exactly** (it matched an older entry, not the
+one just written), and they cluster on fast small steps — provider-side
+timing, not client layout.
+
+The ceiling this implies: eliminating every attributable break would move
+86.6% to **88.3%**, worth **$0.009 across the entire 65-case run**. The one
+remaining layout lever — moving per-config values (recipe list, budget
+numbers) from the front of the system prompt to its end so more of the head
+cross-hits between cases — addresses the 3% step-1 slice (~$0.003/suite) and
+would invalidate the golden trace for it. Both are below any reasonable
+effort bar, so the cache work is **closed as measured-optimal**: hit-rate
+differences between runs reflect trajectory shape (long runs amortize the
+prefix; the 12k-budget compaction arm rewrites the digest position by
+design, ADR 0010), not layout regressions.
+
 ## Honest limits
 
 - One provider, one model, eight cases, three runs. No claim about task success
