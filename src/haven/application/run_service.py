@@ -41,7 +41,7 @@ import shutil
 import tempfile
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -137,6 +137,22 @@ class RunOutcome:
     cost_usd: float
     usage_estimated: bool
     final_text: str
+
+
+@dataclass
+class _AnswerAssembly:
+    """Cross-turn state for assembling one final answer.
+
+    `parts` holds the pieces of an answer the provider truncated at its
+    output-token limit, stitched across bounded continuations; the counters
+    bound the two recovery loops; `final_text` is the last assembled answer,
+    which every stop path reports as the run's final text.
+    """
+
+    parts: list[str] = field(default_factory=list)
+    continuations: int = 0
+    empty_replies: int = 0
+    final_text: str = ""
 
 
 class RunService:
@@ -354,14 +370,9 @@ class RunService:
         stuck = StuckLoopDetector()
         started = time.monotonic()
         elapsed_base = ctx.usage.wall_time_seconds
-        final_text = ""
-        # Output-truncation recovery: parts of an answer the provider cut off
-        # at its output-token limit, stitched back together across bounded
-        # continuation requests (a truncated answer must never be silently
-        # accepted as a complete one).
-        answer_parts: list[str] = []
-        continuations = 0
-        empty_replies = 0
+        # Output-truncation and empty-reply recovery state (a truncated answer
+        # must never be silently accepted as a complete one).
+        answer = _AnswerAssembly()
 
         self._active_run_id = ctx.run_id
         self._steer_queue.clear()
@@ -369,7 +380,7 @@ class RunService:
             while True:
                 ctx.usage = ctx.usage.with_wall_time(elapsed_base + (time.monotonic() - started))
                 if stop := check_budget(ctx.budget, ctx.usage):
-                    return await self._finish(ctx, RunStatus.STOPPED, stop, final_text)
+                    return await self._finish(ctx, RunStatus.STOPPED, stop, answer.final_text)
 
                 ctx.usage = ctx.usage.charge_step()
                 step = ctx.usage.steps
@@ -416,7 +427,7 @@ class RunService:
                         ),
                     )
                     return await self._finish(
-                        ctx, RunStatus.FAILED, StopReason.PROVIDER_ERROR, final_text
+                        ctx, RunStatus.FAILED, StopReason.PROVIDER_ERROR, answer.final_text
                     )
 
                 self._charge_usage(ctx, request, result)
@@ -453,165 +464,19 @@ class RunService:
                         return stopped
                     continue
 
-                # An answer cut off at the provider's output-token limit is not
-                # a final answer. Ask for the rest — bounded, because a model
-                # that truncates forever must not be able to spend the budget.
-                if result.finish_reason == "length" and continuations < MAX_OUTPUT_CONTINUATIONS:
-                    continuations += 1
-                    answer_parts.append(result.text)
-                    await self._emitter.emit(
-                        ctx.run_id,
-                        Notice(
-                            run_id=ctx.run_id,
-                            level="warning",
-                            message=(
-                                "answer hit the output token limit; requesting a "
-                                f"continuation ({continuations}/{MAX_OUTPUT_CONTINUATIONS})"
-                            ),
-                        ),
-                    )
-                    if self._profile.supports_assistant_prefix:
-                        # Native prefix continuation (ADR 0022): re-issue with
-                        # the partial answer as an assistant *prefix* the model
-                        # extends in place — no seam duplication, no extra user
-                        # turn. The adapter recognises a trailing assistant
-                        # message and sends it with the provider's prefix flag.
-                        ctx.transcript.append(
-                            ModelMessage(role="assistant", content=result.text, is_prefix=True)
-                        )
-                    else:
-                        # Conversational shim: ask the next turn to continue.
-                        # Can duplicate at the seam and costs a full extra
-                        # request, but needs no provider-specific support.
-                        ctx.transcript.append(
-                            ModelMessage(
-                                role="user",
-                                content=(
-                                    "Your previous message was cut off at the output token "
-                                    "limit. Continue exactly from where it stopped, without "
-                                    "repeating anything. If no answer text was produced yet, "
-                                    "give the answer directly and concisely."
-                                ),
-                            )
-                        )
+                # No tool calls: the reply is the candidate final answer.
+                # Recover a truncated or empty one first (bounded), then let
+                # the Evidence Gate decide — the model's claim never does.
+                recovered = await self._recover_incomplete_reply(ctx, result, answer)
+                if isinstance(recovered, RunOutcome):
+                    return recovered
+                if recovered:
                     continue
-
-                # A reply with neither text nor tool calls (a reasoning-only
-                # response) would sail through the no-edit gate as an empty
-                # answer. Re-prompt, bounded.
-                if not result.text.strip() and not answer_parts:
-                    empty_replies += 1
-                    if empty_replies > MAX_EMPTY_REPLIES:
-                        await self._emitter.emit(
-                            ctx.run_id,
-                            Notice(
-                                run_id=ctx.run_id,
-                                level="error",
-                                message="model repeatedly returned no content and no tool calls",
-                            ),
-                        )
-                        return await self._finish(
-                            ctx, RunStatus.STOPPED, StopReason.NO_PROGRESS, final_text
-                        )
-                    await self._emitter.emit(
-                        ctx.run_id,
-                        Notice(
-                            run_id=ctx.run_id,
-                            level="warning",
-                            message="model returned no content; asking again "
-                            f"({empty_replies}/{MAX_EMPTY_REPLIES})",
-                        ),
-                    )
-                    ctx.transcript.append(
-                        ModelMessage(
-                            role="user",
-                            content=(
-                                "Your reply contained no answer text and no tool calls. "
-                                "Reply with either a tool call or your answer."
-                            ),
-                        )
-                    )
-                    continue
-
-                # Final answer: the Evidence Gate decides, not the model.
-                final_text = "".join((*answer_parts, result.text))
-                answer_parts = []
-                if result.finish_reason == "length":
-                    await self._emitter.emit(
-                        ctx.run_id,
-                        Notice(
-                            run_id=ctx.run_id,
-                            level="warning",
-                            message=(
-                                "answer still truncated after "
-                                f"{MAX_OUTPUT_CONTINUATIONS} continuations; "
-                                "proceeding with the partial answer"
-                            ),
-                        ),
-                    )
-                ctx.move_to(RunStatus.VERIFYING)
-                # Re-read the accumulated diff so the review sees what is on
-                # disk now, not what a stale event recorded.
-                diff_text = (await self._workspace.run_diff()).diff if ctx.ledger.has_edits else ""
-                gate = evaluate_evidence_gate(
-                    ctx.ledger, diff_text, verification_available=bool(self._recipes)
-                )
-                if gate.passed:
-                    reason = (
-                        StopReason.EVIDENCE_SATISFIED
-                        if ctx.ledger.has_edits
-                        else StopReason.FINAL_ANSWER
-                    )
-                    return await self._finish(
-                        ctx, RunStatus.SUCCEEDED, reason, final_text, gate.reason_code
-                    )
-
-                if gate.terminal:
-                    # Nudging here would loop until the budget dies without any
-                    # possibility of success, and report the wrong reason.
-                    await self._emitter.emit(
-                        ctx.run_id,
-                        Notice(run_id=ctx.run_id, level="error", message=gate.detail),
-                    )
-                    return await self._finish(
-                        ctx,
-                        RunStatus.STOPPED,
-                        StopReason.VERIFICATION_UNAVAILABLE,
-                        final_text,
-                        gate.reason_code,
-                    )
-
-                ctx.nudges += 1
-                if ctx.nudges > MAX_EVIDENCE_NUDGES:
-                    return await self._finish(
-                        ctx,
-                        RunStatus.STOPPED,
-                        StopReason.EVIDENCE_MISSING,
-                        final_text,
-                        gate.reason_code,
-                    )
-                await self._emitter.emit(
-                    ctx.run_id,
-                    Notice(
-                        run_id=ctx.run_id,
-                        level="warning",
-                        message=f"final answer rejected by evidence gate: {gate.detail}",
-                    ),
-                )
-                ctx.transcript.append(
-                    ModelMessage(
-                        role="user",
-                        content=(
-                            "Your answer was NOT accepted as success: "
-                            f"{gate.detail} Run repo.diff and a repo.check recipe to "
-                            "produce fresh evidence, then answer again."
-                        ),
-                    )
-                )
-                ctx.move_to(RunStatus.RUNNING_MODEL)
-                await self._checkpoint(ctx)
+                outcome = await self._finish_with_gate(ctx, result, answer)
+                if outcome is not None:
+                    return outcome
         except asyncio.CancelledError:
-            await self._finish(ctx, RunStatus.CANCELLED, StopReason.CANCELLED, final_text)
+            await self._finish(ctx, RunStatus.CANCELLED, StopReason.CANCELLED, answer.final_text)
             raise
         finally:
             self._active_run_id = None
@@ -620,6 +485,182 @@ class RunService:
                 # queued events stay in the journal for the record.
                 self._steer_queue.clear()
             shutil.rmtree(self._scratch_dir, ignore_errors=True)
+
+    async def _recover_incomplete_reply(
+        self, ctx: RunContext, result: ModelResult, answer: _AnswerAssembly
+    ) -> RunOutcome | bool:
+        """The truncation / empty-reply recovery machine, both loops bounded.
+
+        Returns a RunOutcome to stop the run (repeated empty replies), True
+        when a continuation or re-prompt was queued (take another turn), or
+        False when the reply is complete enough to face the Evidence Gate.
+        """
+        # An answer cut off at the provider's output-token limit is not a
+        # final answer. Ask for the rest — bounded, because a model that
+        # truncates forever must not be able to spend the budget.
+        if result.finish_reason == "length" and answer.continuations < MAX_OUTPUT_CONTINUATIONS:
+            answer.continuations += 1
+            answer.parts.append(result.text)
+            await self._emitter.emit(
+                ctx.run_id,
+                Notice(
+                    run_id=ctx.run_id,
+                    level="warning",
+                    message=(
+                        "answer hit the output token limit; requesting a "
+                        f"continuation ({answer.continuations}/{MAX_OUTPUT_CONTINUATIONS})"
+                    ),
+                ),
+            )
+            if self._profile.supports_assistant_prefix:
+                # Native prefix continuation (ADR 0022): re-issue with the
+                # partial answer as an assistant *prefix* the model extends in
+                # place — no seam duplication, no extra user turn. The adapter
+                # recognises a trailing assistant message and sends it with
+                # the provider's prefix flag.
+                ctx.transcript.append(
+                    ModelMessage(role="assistant", content=result.text, is_prefix=True)
+                )
+            else:
+                # Conversational shim: ask the next turn to continue. Can
+                # duplicate at the seam and costs a full extra request, but
+                # needs no provider-specific support.
+                ctx.transcript.append(
+                    ModelMessage(
+                        role="user",
+                        content=(
+                            "Your previous message was cut off at the output token "
+                            "limit. Continue exactly from where it stopped, without "
+                            "repeating anything. If no answer text was produced yet, "
+                            "give the answer directly and concisely."
+                        ),
+                    )
+                )
+            return True
+
+        # A reply with neither text nor tool calls (a reasoning-only response)
+        # would sail through the no-edit gate as an empty answer. Re-prompt,
+        # bounded.
+        if not result.text.strip() and not answer.parts:
+            answer.empty_replies += 1
+            if answer.empty_replies > MAX_EMPTY_REPLIES:
+                await self._emitter.emit(
+                    ctx.run_id,
+                    Notice(
+                        run_id=ctx.run_id,
+                        level="error",
+                        message="model repeatedly returned no content and no tool calls",
+                    ),
+                )
+                return await self._finish(
+                    ctx, RunStatus.STOPPED, StopReason.NO_PROGRESS, answer.final_text
+                )
+            await self._emitter.emit(
+                ctx.run_id,
+                Notice(
+                    run_id=ctx.run_id,
+                    level="warning",
+                    message="model returned no content; asking again "
+                    f"({answer.empty_replies}/{MAX_EMPTY_REPLIES})",
+                ),
+            )
+            ctx.transcript.append(
+                ModelMessage(
+                    role="user",
+                    content=(
+                        "Your reply contained no answer text and no tool calls. "
+                        "Reply with either a tool call or your answer."
+                    ),
+                )
+            )
+            return True
+
+        return False
+
+    async def _finish_with_gate(
+        self, ctx: RunContext, result: ModelResult, answer: _AnswerAssembly
+    ) -> RunOutcome | None:
+        """Assemble the final answer and apply the Evidence Gate.
+
+        Returns the run's outcome, or None when the gate rejected the answer
+        and the model was nudged toward producing evidence (bounded by
+        MAX_EVIDENCE_NUDGES) — the caller takes another turn.
+        """
+        answer.final_text = "".join((*answer.parts, result.text))
+        answer.parts = []
+        if result.finish_reason == "length":
+            await self._emitter.emit(
+                ctx.run_id,
+                Notice(
+                    run_id=ctx.run_id,
+                    level="warning",
+                    message=(
+                        "answer still truncated after "
+                        f"{MAX_OUTPUT_CONTINUATIONS} continuations; "
+                        "proceeding with the partial answer"
+                    ),
+                ),
+            )
+        ctx.move_to(RunStatus.VERIFYING)
+        # Re-read the accumulated diff so the review sees what is on disk
+        # now, not what a stale event recorded.
+        diff_text = (await self._workspace.run_diff()).diff if ctx.ledger.has_edits else ""
+        gate = evaluate_evidence_gate(
+            ctx.ledger, diff_text, verification_available=bool(self._recipes)
+        )
+        if gate.passed:
+            reason = (
+                StopReason.EVIDENCE_SATISFIED if ctx.ledger.has_edits else StopReason.FINAL_ANSWER
+            )
+            return await self._finish(
+                ctx, RunStatus.SUCCEEDED, reason, answer.final_text, gate.reason_code
+            )
+
+        if gate.terminal:
+            # Nudging here would loop until the budget dies without any
+            # possibility of success, and report the wrong reason.
+            await self._emitter.emit(
+                ctx.run_id,
+                Notice(run_id=ctx.run_id, level="error", message=gate.detail),
+            )
+            return await self._finish(
+                ctx,
+                RunStatus.STOPPED,
+                StopReason.VERIFICATION_UNAVAILABLE,
+                answer.final_text,
+                gate.reason_code,
+            )
+
+        ctx.nudges += 1
+        if ctx.nudges > MAX_EVIDENCE_NUDGES:
+            return await self._finish(
+                ctx,
+                RunStatus.STOPPED,
+                StopReason.EVIDENCE_MISSING,
+                answer.final_text,
+                gate.reason_code,
+            )
+        await self._emitter.emit(
+            ctx.run_id,
+            Notice(
+                run_id=ctx.run_id,
+                level="warning",
+                message=f"final answer rejected by evidence gate: {gate.detail}",
+            ),
+        )
+        ctx.transcript.append(
+            ModelMessage(
+                role="user",
+                content=(
+                    "Your answer was NOT accepted as success: "
+                    f"{gate.detail} Run repo.diff and a repo.check recipe to "
+                    "produce fresh evidence, then answer again."
+                ),
+            )
+        )
+        ctx.move_to(RunStatus.RUNNING_MODEL)
+        await self._checkpoint(ctx)
+        return None
 
     async def _handle_tool_calls(
         self,
