@@ -106,6 +106,8 @@ ExecuteHandler = Callable[
     ["RunContext", ToolCallProposal, ToolArgs, str, ToolPreview],
     Awaitable["ToolExecution"],
 ]
+#: Renders one approval card: (summary line, preview body).
+CardHandler = Callable[[ToolArgs, ToolPreview], tuple[str, str]]
 
 MODEL_PAYLOAD_CHARS = 8_000
 PREVIEW_CHARS = 4_000
@@ -185,6 +187,18 @@ class ToolPipeline:
             "repo.check": self._facts_check,
             "repo.diff": self._facts_stateless,
             "task.plan": self._facts_stateless,
+        }
+        # What the human sees per tool. Keyed like the two tables above, but
+        # over the ASK-able tools only: read-only and state tools never reach
+        # approval. Pinned by test_every_ask_tool_has_an_approval_card.
+        self._card_handlers: dict[str, CardHandler] = {
+            "repo.edit": self._card_edit,
+            "repo.create": self._card_create,
+            "repo.delete": self._card_delete,
+            "repo.move": self._card_move,
+            "repo.apply_patch": self._card_patch,
+            "repo.exec": self._card_exec,
+            "repo.check": self._card_check,
         }
         self._execute_handlers: dict[str, ExecuteHandler] = {
             "repo.list": self._execute_list,
@@ -599,6 +613,92 @@ class ToolPipeline:
 
     # -- approval -----------------------------------------------------------------
 
+    def _approval_card(
+        self, call: ToolCallProposal, args: ToolArgs, preview: ToolPreview
+    ) -> tuple[str, str]:
+        """What the human is shown for one proposal: (summary, preview text).
+
+        Per-tool, like the facts and execute tables, so the approval flow
+        itself stays about digests, grants, and consumption. A tool with no
+        card entry is one policy never sends here (read-only and state
+        tools); `_card_handlers` is pinned against the ASK-able tool set by
+        `tests/unit/test_policy.py`, so an ASK tool cannot silently reach the
+        human with an empty summary.
+        """
+        handler = self._card_handlers.get(call.tool_name)
+        return handler(args, preview) if handler is not None else ("", "")
+
+    @staticmethod
+    def _intent(summary: str) -> str:
+        return f": {summary}" if summary else ""
+
+    def _card_patch(self, args: ToolArgs, preview: ToolPreview) -> tuple[str, str]:
+        if not (isinstance(args, RepoApplyPatchArgs) and isinstance(preview, PatchPreview)):
+            return "", ""
+        summary = (
+            f"apply patch: {len(args.operations)} operation(s) across "
+            f"{len(preview.effects)} file(s) "
+            f"(+{preview.insertions} -{preview.deletions}){self._intent(args.summary)}"
+        )
+        return summary, _clip(preview.diff, PREVIEW_CHARS)
+
+    def _card_edit(self, args: ToolArgs, preview: ToolPreview) -> tuple[str, str]:
+        if not (isinstance(args, RepoEditArgs) and isinstance(preview, EditPreview)):
+            return "", ""
+        scope = ""
+        if args.replace_all:
+            scope = " [all occurrences]"
+        elif args.occurrence is not None:
+            scope = f" [occurrence {args.occurrence}]"
+        summary = (
+            f"edit {preview.path} (+{preview.insertions} -{preview.deletions})"
+            f"{scope}{self._intent(args.summary)}"
+        )
+        return summary, _clip(preview.diff, PREVIEW_CHARS)
+
+    def _card_create(self, args: ToolArgs, preview: ToolPreview) -> tuple[str, str]:
+        if not (isinstance(args, RepoCreateArgs) and isinstance(preview, EditPreview)):
+            return "", ""
+        summary = (
+            f"create {preview.path} ({preview.insertions} new line(s)){self._intent(args.summary)}"
+        )
+        return summary, _clip(preview.diff, PREVIEW_CHARS)
+
+    def _card_delete(self, args: ToolArgs, preview: ToolPreview) -> tuple[str, str]:
+        if not (isinstance(args, RepoDeleteArgs) and isinstance(preview, EditPreview)):
+            return "", ""
+        summary = f"delete {preview.path} ({preview.deletions} line(s)){self._intent(args.summary)}"
+        return summary, _clip(preview.diff, PREVIEW_CHARS)
+
+    def _card_move(self, args: ToolArgs, preview: ToolPreview) -> tuple[str, str]:
+        if not (isinstance(args, RepoMoveArgs) and isinstance(preview, EditPreview)):
+            return "", ""
+        return f"move {preview.path}{self._intent(args.summary)}", _clip(
+            preview.diff, PREVIEW_CHARS
+        )
+
+    def _card_exec(self, args: ToolArgs, preview: ToolPreview) -> tuple[str, str]:
+        if not isinstance(args, RepoExecArgs):
+            return "", ""
+        lines = [f"$ {shlex.join(args.argv)}", self._describe_sandbox()]
+        if classify_argv(args.argv) is ExecClass.SHELL_PASSTHROUGH:
+            lines.append(
+                "WARNING: this interprets an arbitrary script, so the command "
+                "above does not describe everything it may do."
+            )
+        summary = f"run {shlex.join(args.argv)} in {args.cwd}{self._intent(args.summary)}"
+        return summary, "\n".join(lines)
+
+    def _card_check(self, args: ToolArgs, preview: ToolPreview) -> tuple[str, str]:
+        if not isinstance(args, RepoCheckArgs):
+            return "", ""
+        recipe = self._recipes[args.recipe_id]
+        summary = (
+            f"run check recipe {args.recipe_id!r} "
+            "(approving also covers identical re-runs for the rest of this run)"
+        )
+        return summary, "$ " + " ".join(recipe.argv)
+
     async def _ask_approval(
         self,
         ctx: RunContext,
@@ -608,56 +708,7 @@ class ToolPipeline:
         preview: ToolPreview,
         facts: ToolFacts,
     ) -> tuple[bool, str | None, str]:
-        preview_text = ""
-        summary = ""
-        if isinstance(args, RepoApplyPatchArgs) and isinstance(preview, PatchPreview):
-            preview_text = _clip(preview.diff, PREVIEW_CHARS)
-            intent = f": {args.summary}" if args.summary else ""
-            summary = (
-                f"apply patch: {len(args.operations)} operation(s) across "
-                f"{len(preview.effects)} file(s) "
-                f"(+{preview.insertions} -{preview.deletions}){intent}"
-            )
-        elif isinstance(args, RepoEditArgs) and isinstance(preview, EditPreview):
-            preview_text = _clip(preview.diff, PREVIEW_CHARS)
-            intent = f": {args.summary}" if args.summary else ""
-            scope = ""
-            if args.replace_all:
-                scope = " [all occurrences]"
-            elif args.occurrence is not None:
-                scope = f" [occurrence {args.occurrence}]"
-            summary = (
-                f"edit {preview.path} (+{preview.insertions} -{preview.deletions}){scope}{intent}"
-            )
-        elif isinstance(args, RepoCreateArgs) and isinstance(preview, EditPreview):
-            preview_text = _clip(preview.diff, PREVIEW_CHARS)
-            intent = f": {args.summary}" if args.summary else ""
-            summary = f"create {preview.path} ({preview.insertions} new line(s)){intent}"
-        elif isinstance(args, RepoDeleteArgs) and isinstance(preview, EditPreview):
-            preview_text = _clip(preview.diff, PREVIEW_CHARS)
-            intent = f": {args.summary}" if args.summary else ""
-            summary = f"delete {preview.path} ({preview.deletions} line(s)){intent}"
-        elif isinstance(args, RepoMoveArgs) and isinstance(preview, EditPreview):
-            preview_text = _clip(preview.diff, PREVIEW_CHARS)
-            intent = f": {args.summary}" if args.summary else ""
-            summary = f"move {preview.path}{intent}"
-        elif isinstance(args, RepoExecArgs):
-            lines = [f"$ {shlex.join(args.argv)}", self._describe_sandbox()]
-            if classify_argv(args.argv) is ExecClass.SHELL_PASSTHROUGH:
-                lines.append(
-                    "WARNING: this interprets an arbitrary script, so the command "
-                    "above does not describe everything it may do."
-                )
-            preview_text = "\n".join(lines)
-            intent = f": {args.summary}" if args.summary else ""
-            summary = f"run {shlex.join(args.argv)} in {args.cwd}{intent}"
-        elif isinstance(args, RepoCheckArgs):
-            recipe = self._recipes[args.recipe_id]
-            preview_text = "$ " + " ".join(recipe.argv)
-            summary = (
-                f"run check recipe {args.recipe_id!r} "
-                "(approving also covers identical re-runs for the rest of this run)"
-            )
+        summary, preview_text = self._approval_card(call, args, preview)
 
         digest = compute_approval_digest(
             workspace_digest=self._workspace.workspace_digest,

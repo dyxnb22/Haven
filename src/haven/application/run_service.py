@@ -84,12 +84,11 @@ from haven.contracts.model import (
 )
 from haven.contracts.tools import RecipeSpec, tool_schemas
 from haven.domain.budget import Budget, check_budget
-from haven.domain.digest import digest_of
 from haven.domain.enums import PermissionMode, RunStatus, StopReason
 from haven.domain.evidence import evaluate_evidence_gate
 from haven.domain.ids import RunId, new_run_id
 from haven.domain.pricing import Pricing
-from haven.domain.stuck import StuckLoopDetector
+from haven.domain.stuck import StuckLoopDetector, call_fingerprint
 from haven.ports.executor import ExecutorPort
 from haven.ports.model import ModelPort, ProviderError
 from haven.ports.sandbox import SandboxLauncher
@@ -706,7 +705,9 @@ class RunService:
             if ctx.status is not RunStatus.RUNNING_MODEL:
                 ctx.move_to(RunStatus.RUNNING_MODEL)
 
-            fingerprint = digest_of([call.tool_name, call.arguments_json, result.to_model_text()])
+            fingerprint = call_fingerprint(
+                call.tool_name, call.arguments_json, result.to_model_text()
+            )
             if stuck.observe(fingerprint):
                 await self._emitter.emit(
                     ctx.run_id,

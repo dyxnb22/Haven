@@ -12,8 +12,20 @@ from dataclasses import dataclass, field
 from haven.domain.digest import digest_of
 
 
-def call_fingerprint(tool_name: str, canonical_args_json: str, result_digest: str) -> str:
-    return digest_of({"tool": tool_name, "args": canonical_args_json, "result": result_digest})
+def call_fingerprint(tool_name: str, arguments_json: str, result_text: str) -> str:
+    """Identity of one (call, outcome) observation.
+
+    The only definition — the run loop calls this rather than composing its
+    own digest, so what the tests pin is what ships. The value is compared
+    only against other fingerprints inside one run: it is never persisted,
+    journaled, or compared across versions, so its exact shape is free to
+    change.
+
+    `result_text` is the observation the model actually saw (a digest of it
+    would discriminate identically); passing the text keeps the caller from
+    having to hash twice.
+    """
+    return digest_of({"tool": tool_name, "args": arguments_json, "result": result_text})
 
 
 @dataclass(slots=True)

@@ -233,6 +233,28 @@ class TestPolicyCompleteness:
         assert set(pipeline._facts_handlers) == set(ARGS_MODELS)  # noqa: SLF001
         assert set(pipeline._execute_handlers) == set(ARGS_MODELS)  # noqa: SLF001
 
+    def test_every_ask_tool_has_an_approval_card(self) -> None:
+        """A tool policy sends to a human must render a card. Without this,
+        a new ASK tool reaches the approval modal with an empty summary —
+        the human would be asked to authorize a blank line."""
+        from typing import Any, cast
+
+        from haven.application.registry import ToolRegistry
+        from haven.application.tool_pipeline import ToolPipeline
+
+        pipeline = ToolPipeline(
+            workspace=cast(Any, None),
+            executor=cast(Any, None),
+            store=cast(Any, None),
+            emitter=cast(Any, None),
+            approvals=cast(Any, None),
+            registry=ToolRegistry(),
+            recipes={},
+            mode=PermissionMode.INTERACTIVE,
+        )
+        askable = EFFECT_TOOLS | EXEC_TOOLS
+        assert set(pipeline._card_handlers) == askable  # noqa: SLF001
+
     def test_tool_categories_are_disjoint(self) -> None:
         groups = (READ_ONLY_TOOLS, EFFECT_TOOLS, STATE_TOOLS, EXEC_TOOLS)
         for index, left in enumerate(groups):
