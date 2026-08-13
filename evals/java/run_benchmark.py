@@ -63,7 +63,8 @@ def main() -> int:
         )
         elapsed = time.monotonic() - started
         tail = (completed.stdout or completed.stderr).strip().splitlines()
-        print(f"    rc={completed.returncode} {elapsed:.0f}s {tail[-1] if tail else ''}", flush=True)
+        last = tail[-1] if tail else ""
+        print(f"    rc={completed.returncode} {elapsed:.0f}s {last}", flush=True)
 
     print(f"\ntraces in {EVENTS}. Score with: uv run python evals/java/score.py {EVENTS}")
     return 0
