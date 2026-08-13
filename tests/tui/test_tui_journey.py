@@ -35,6 +35,7 @@ class _Services:
         self.replay = ReplayService(store)
         self.git_branch = "main"
         self.model_name = "scripted"
+        self.lease_warning = ""
         self.config = type("Cfg", (), {"budget": Budget()})()
 
     async def close(self) -> None:
@@ -131,6 +132,59 @@ async def test_edit_journey_with_approval(tmp_path: Path) -> None:
         assert app._state.stop_reason == "evidence_satisfied"  # noqa: SLF001
 
     assert "return a + b" in (repo / "src" / "calc.py").read_text()
+
+
+@pytest.mark.timeout(30)
+async def test_rewind_command_restores_the_runs_edit(tmp_path: Path) -> None:
+    """/rewind is two-step (state intent, then confirm) and restores the
+    file the finished run edited — the TUI face of ADR 0020's fail-closed
+    user-level undo."""
+    repo = make_repo(tmp_path)
+    buggy = (repo / "src" / "calc.py").read_text()
+    turns = [
+        [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
+        [
+            tool(
+                "c2",
+                "repo.edit",
+                path="src/calc.py",
+                old_string="return a - b  # BUG: should be +",
+                new_string="return a + b",
+                summary="fix add()",
+            ),
+            finish("tool_calls"),
+        ],
+        [tool("c3", "repo.diff"), finish("tool_calls")],
+        [tool("c4", "repo.check", recipe_id="verify-calc"), finish("tool_calls")],
+        [text("Fixed and verified."), finish()],
+    ]
+    app = HavenApp(workspace=repo, services_builder=make_builder(repo, turns))
+
+    async with app.run_test() as pilot:
+        await _wait_ready(app, pilot)
+        await _submit(app, pilot, "Fix the bug in add()")
+        await _approve_pending(app, pilot, "a", count=2)
+        await _settle(pilot, 60)
+        assert app._state.status == "succeeded"  # noqa: SLF001
+        assert "return a + b" in (repo / "src" / "calc.py").read_text()
+
+        # Step 1: without confirmation nothing changes, the intent is stated.
+        await _submit(app, pilot, "/rewind")
+        await _settle(pilot, 10)
+        assert "return a + b" in (repo / "src" / "calc.py").read_text()
+        assert any(
+            "rewind restores" in entry.text
+            for entry in app._state.timeline  # noqa: SLF001
+        )
+
+        # Step 2: confirmed — the run's edit is undone.
+        await _submit(app, pilot, "/rewind yes")
+        await _settle(pilot, 40)
+        assert (repo / "src" / "calc.py").read_text() == buggy
+        assert any(
+            "rewind complete" in entry.text
+            for entry in app._state.timeline  # noqa: SLF001
+        )
 
 
 @pytest.mark.timeout(30)

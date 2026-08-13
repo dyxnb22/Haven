@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from textual import on, work
 from textual.app import App, ComposeResult
@@ -21,6 +21,8 @@ from textual.widgets import Button, Input, RichLog, Static, TabbedContent, TabPa
 from textual.worker import Worker
 
 from haven.application.approvals import QueueApprovalBroker
+from haven.application.recovery_service import RecoveryService
+from haven.application.run_service import RunService
 from haven.contracts.events import (
     TRANSIENT_KINDS,
     ApprovalRequested,
@@ -28,8 +30,41 @@ from haven.contracts.events import (
 )
 from haven.domain.enums import ApprovalDecision, PermissionMode
 from haven.interfaces.tui.presenter import PresenterState, TimelineEntry, reduce, sanitize
+from haven.ports.session import SessionStorePort
 
-ServicesBuilder = Callable[..., Awaitable[Any]]
+
+class SessionServices(Protocol):
+    """The slice of the composed application the TUI actually uses.
+
+    Structural on purpose: production passes bootstrap's AppServices, tests
+    pass a lightweight stand-in, and the TUI stays decoupled from the
+    composition root while mypy still checks every attribute it touches.
+    Members are read-only properties so implementations may declare narrower
+    concrete types (e.g. AppServices' SqliteSessionStore for `store`).
+    """
+
+    @property
+    def run_service(self) -> RunService: ...
+
+    @property
+    def recovery(self) -> RecoveryService: ...
+
+    @property
+    def store(self) -> SessionStorePort: ...
+
+    @property
+    def git_branch(self) -> str: ...
+
+    @property
+    def model_name(self) -> str: ...
+
+    @property
+    def lease_warning(self) -> str: ...
+
+    async def close(self) -> None: ...
+
+
+ServicesBuilder = Callable[..., Awaitable[SessionServices]]
 
 HELP_TEXT = """\
 Commands:
@@ -38,6 +73,7 @@ Commands:
   /context   show what the model saw last turn
   /sessions  list recent runs you can continue or fork
   /fork ID   start a new turn branched from run ID (fork the session)
+  /rewind    undo this session's last run (fail-closed; asks to confirm)
   /diff      switch to the Diff tab
   /export    write a markdown report of the current run
   /quit      exit Haven
@@ -159,7 +195,7 @@ class HavenApp(App[None]):
         self._workspace = workspace
         self._resume_run_id = resume_run_id
         self._services_builder = services_builder
-        self._services: Any = None
+        self._services: SessionServices | None = None
         self._broker = QueueApprovalBroker()
         self._sink = QueueSink()
         self._state = PresenterState()
@@ -213,20 +249,28 @@ class HavenApp(App[None]):
             self._set_status(f"startup failed: {exc}")
             return
 
+        services = self._services
+        assert services is not None  # just assigned above
         self._state = PresenterState(
             workspace=str(self._workspace),
-            branch=getattr(self._services, "git_branch", ""),
-            model_name=getattr(self._services, "model_name", ""),
+            branch=services.git_branch,
+            model_name=services.model_name,
             mode="interactive",
         )
-        lease_warning = getattr(self._services, "lease_warning", "")
-        if lease_warning:
-            self._log_line("system", lease_warning)
+        if services.lease_warning:
+            self._log_line("system", services.lease_warning)
         self._refresh_chrome()
         self._log_line("system", f"workspace: {self._workspace}")
         self._log_line("system", "ready — describe a task and press Enter (/help for commands)")
         if self._resume_run_id is not None:
             self._start_resume(self._resume_run_id)
+
+    @property
+    def _svc(self) -> SessionServices:
+        """Services after bootstrap. Callers run only once the prompt is live,
+        which `_on_submit` gates on `self._services is None`."""
+        assert self._services is not None
+        return self._services
 
     @work(exclusive=False)
     async def _consume_events(self) -> None:
@@ -236,24 +280,24 @@ class HavenApp(App[None]):
 
     @work(exclusive=True, group="run")
     async def _execute_run(self, goal: str) -> None:
-        await self._services.run_service.run(goal)
+        await self._svc.run_service.run(goal)
 
     @work(exclusive=True, group="run")
     async def _execute_continue(self, previous_run_id: str, follow_up: str) -> None:
-        await self._services.run_service.continue_run(previous_run_id, follow_up)
+        await self._svc.run_service.continue_run(previous_run_id, follow_up)
 
     @work(exclusive=True, group="run")
     async def _execute_resume(self, ctx: Any) -> None:
-        await self._services.run_service.resume(ctx)
+        await self._svc.run_service.resume(ctx)
 
     def _start_resume(self, run_id: str) -> None:
         async def _do() -> None:
-            report = await self._services.recovery.inspect(run_id)
+            report = await self._svc.recovery.inspect(run_id)
             if not report.can_resume or report.checkpoint is None:
                 for blocker in report.blockers:
                     self._log_line("system", f"cannot resume: {blocker}")
                 return
-            ctx = await self._services.recovery.build_context(report.checkpoint)
+            ctx = await self._svc.recovery.build_context(report.checkpoint)
             self._log_line("system", f"resuming run {run_id}")
             self._run_worker = self._execute_resume(ctx)
 
@@ -385,7 +429,7 @@ class HavenApp(App[None]):
 
     def _queue_steering(self, text: str) -> None:
         async def _do() -> None:
-            accepted = await self._services.run_service.steer(text)
+            accepted = await self._svc.run_service.steer(text)
             if accepted:
                 self._log_line("you (queued)", text)
                 self._log_line("system", "queued; it reaches the agent at the next turn")
@@ -428,6 +472,8 @@ class HavenApp(App[None]):
                 )
         elif name == "/diff":
             self.query_one("#tabs", TabbedContent).active = "tab-diff"
+        elif name == "/rewind":
+            self._rewind_command(command)
         elif name == "/export":
             self._export_run()
         elif name == "/quit":
@@ -435,9 +481,51 @@ class HavenApp(App[None]):
         else:
             self._log_line("system", f"unknown command {name}; try /help")
 
+    def _rewind_command(self, command: str) -> None:
+        """User-level undo of this session's last finished run (ADR 0020).
+
+        Two-step on purpose: `/rewind` states exactly what would happen,
+        `/rewind yes` performs it. The operation itself is fail-closed —
+        RecoveryService.rewind refuses any file that changed since the run —
+        so the confirmation is about intent, not safety.
+        """
+        if self._services is None:
+            self._log_line("system", "still starting up, try again in a moment")
+            return
+        if self._state.running:
+            self._log_line("system", "a run is active; wait for it to finish before rewinding")
+            return
+        run_id = self._state.run_id
+        if not run_id:
+            self._log_line("system", "no run in this session to rewind")
+            return
+        confirmed = command.split()[1:] == ["yes"]
+        if not confirmed:
+            self._log_line(
+                "system",
+                f"rewind restores every file run {run_id} changed to its pre-run "
+                "content; anything modified since blocks instead of being "
+                "overwritten. Type /rewind yes to proceed.",
+            )
+            return
+
+        async def _do() -> None:
+            report = await self._svc.recovery.rewind(run_id)
+            if report.blockers:
+                self._log_line("system", "rewind blocked:\n  " + "\n  ".join(report.blockers))
+                return
+            parts = []
+            if report.restored:
+                parts.append(f"restored {len(report.restored)} file(s)")
+            if report.deleted:
+                parts.append(f"removed {len(report.deleted)} run-created file(s)")
+            self._log_line("system", "rewind complete: " + (", ".join(parts) or "nothing to undo"))
+
+        self.run_worker(_do(), exclusive=False)
+
     def _list_sessions(self) -> None:
         async def _do() -> None:
-            runs = await self._services.store.list_runs(10)
+            runs = await self._svc.store.list_runs(10)
             if not runs:
                 self._log_line("system", "no recorded runs yet")
                 return
@@ -456,8 +544,8 @@ class HavenApp(App[None]):
         async def _do() -> None:
             from haven.interfaces.export import render_markdown
 
-            run = await self._services.store.get_run(self._state.run_id)
-            envelopes = await self._services.store.load_events(self._state.run_id)
+            run = await self._svc.store.get_run(self._state.run_id)
+            envelopes = await self._svc.store.load_events(self._state.run_id)
             if run is None:
                 self._log_line("system", "run not found in the store")
                 return
