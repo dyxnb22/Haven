@@ -18,7 +18,7 @@
   `HAVEN_API_KEY_ENV=DEEPSEEK_API_KEY HAVEN_BASE_URL=https://api.deepseek.com/beta HAVEN_MODEL=deepseek-chat`
 - The security boundary may only be widened through an ADR plus an offline eval case that proves the *narrow* case still denies (Task B1 before B2).
 - `evals/real/{repos,fixtures,cases}` are gitignored; only `tasks.py`, `build.py`, `repos.lock` are tracked.
-- A negative result is a deliverable. If Task A4's data shows no improvement, the nudge is **deleted**, per `docs/notes/implemented/0002`.
+- A negative result is a deliverable. If Task A4's data shows no improvement, the nudge is **deleted**, per `docs/notes/rejected/0002`.
 
 ---
 
@@ -104,7 +104,7 @@ In `src/haven/application/run_service.py`, add to `RunService.__init__` signatur
 and in the body, after `self._supports_prefix = ...`:
 
 ```python
-        # A/B control (docs/notes/implemented/0002): the nudge is an unproven
+        # A/B control (docs/notes/rejected/0002): the nudge is an unproven
         # convergence intervention, so an eval arm must be able to switch it
         # off without a second build. Default on; only the eval turns it off.
         self._repeat_nudge = repeat_nudge
@@ -247,7 +247,7 @@ Create `evals/nudge_ab.py`:
 
     uv run python evals/nudge_ab.py CONTROL_REPORT.json TREATMENT_REPORT.json
 
-The nudge (docs/notes/implemented/0002) is an unproven convergence
+The nudge (docs/notes/rejected/0002) is an unproven convergence
 intervention; ADR 0023 requires a before/after measurement before it stays.
 Steps are the primary metric because the failure it targets is a variance
 tail, not a hard wall: pass/fail at this sample size cannot separate the two.
@@ -315,7 +315,7 @@ def compare(control: list[dict[str, Any]], treatment: list[dict[str, Any]]) -> s
     if mean_delta >= 0 and t_sum.passed <= c_sum.passed:
         lines.append("")
         lines.append(
-            "**Verdict: no improvement.** Per docs/notes/implemented/0002 the honest "
+            "**Verdict: no improvement.** Per docs/notes/rejected/0002 the honest "
             "action is to delete the nudge rather than keep it on plausibility."
         )
     return "\n".join(lines)
@@ -450,7 +450,7 @@ Expected: a Markdown table on stdout and `eval_report/nudge-ab.md` written.
 
 - [ ] **Step 2: Apply the pre-agreed decision rule**
 
-- Mean paired delta ≤ **−2 steps**, or treatment pass count higher: **keep**. Record the numbers in `docs/EVAL_LIVE.md` and update `docs/notes/implemented/0002` from "unproven" to measured.
+- Mean paired delta ≤ **−2 steps**, or treatment pass count higher: **keep**. Record the numbers in `docs/EVAL_LIVE.md` and update `docs/notes/rejected/0002` from "unproven" to measured.
 - Delta between −2 and 0 with equal passes: **keep but mark inconclusive**, and say so in the note — do not claim a win.
 - Delta ≥ 0 and passes not higher: **delete the nudge.** This is the pre-committed outcome.
 
@@ -461,7 +461,7 @@ Expected: a Markdown table on stdout and `eval_report/nudge-ab.md` written.
 # run_service: delete the `verdict == "nudge"` branch and `self._repeat_nudge`
 # tests: delete the nudge tests, keep the stuck tests
 ```
-Then update `docs/notes/implemented/0002` → move to `docs/notes/rejected/` with
+Then update `docs/notes/rejected/0002` → move to `docs/notes/rejected/` with
 the measured numbers as the reason, and run `uv run python scripts/gates.py --mode full`.
 
 ---
@@ -919,7 +919,7 @@ Depends on Task B. Only start this if A and C are complete.
 ## Task E: Write up
 
 - [ ] **Step 1:** Add a section to `docs/EVAL_LIVE.md` for each experiment run, in the existing format: what was measured, the numbers, and the attribution of every non-passing run.
-- [ ] **Step 2:** Update `docs/notes/implemented/0002` with the nudge verdict (or move it to `rejected/`).
+- [ ] **Step 2:** Update `docs/notes/rejected/0002` with the nudge verdict (or move it to `rejected/`).
 - [ ] **Step 3:** Amend ADR 0023's LSP section with the Java results — this is the amendment the ADR itself pre-registered.
 - [ ] **Step 4:** `uv run python scripts/refresh_metrics.py` then `uv run python scripts/gates.py --mode full`.
 - [ ] **Step 5:** Commit.

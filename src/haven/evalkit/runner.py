@@ -105,10 +105,6 @@ class EvalCase(StrictModel):
     #: (compaction forced early) vs a large one (no compaction), with task
     #: success as the metric. 0 = use the profile default.
     max_context_chars: int = 0
-    #: Disable the repetition nudge for this case. The control arm of the
-    #: convergence A/B (docs/notes/implemented/0002); the stop-on-repetition
-    #: behaviour is unaffected, so the arms differ in exactly one thing.
-    repeat_nudge: bool = True
     budget: dict[str, int | float] = Field(default_factory=dict)
     recipes: dict[str, RecipeDef] = Field(default_factory=dict)
     turns: list[list[dict[str, Any]]] = Field(default_factory=list)
@@ -543,7 +539,6 @@ async def _run_agent_case(
         budget=budget,
         launcher=launcher,
         context_chars_override=case.max_context_chars,
-        repeat_nudge=case.repeat_nudge,
     )
     try:
         outcome = await service.run(case.goal)

@@ -42,7 +42,57 @@ does not.
 A repetition episode now costs one extra transcript message before it can stop
 the run.
 
-## WITHDRAWN (2026-08-14): the A/B below measured nothing
+> **Status: rejected and removed from the code (2026-08-14).** Built on the
+> assumption that non-convergence looks like repetition. A trace study of 42
+> live runs showed it does not, and the mechanism never fired once. The design
+> and the reasoning stay here so the same idea is not re-proposed without new
+> evidence; the sections below are in the order they were learned.
+
+## REMOVED (2026-08-14): the trace study that settled it
+
+The pre-registered gate below — *"if a trace study of the slow runs finds no
+literal-repetition episodes either, the nudge and the three-strike stop are both
+deleted together"* — has been run. `evals/trace_study.py` over the 42 journals:
+
+| Cohort | runs | median calls | consecutive identical | runs with any repeat |
+|---|---|---|---|---|
+| slow (≥15 steps) | 11 | 21 | **0** | **1/11** |
+| fast (≤11 steps) | 27 | 10 | **0** | 1/27 |
+
+Repetition is not the signature of a slow run. It appears in 1 of 11 of them, at
+a rate the fast cohort matches — so a repetition detector, at *any* window
+width, cannot be the answer to non-convergence. Widening the adjacency
+requirement was the obvious next move and the data rules it out too.
+
+**What the slow runs actually do is explore without converging:**
+
+| Tool | slow per run | fast per run | ratio |
+|---|---|---|---|
+| `repo.exec` | 2.1 | 0.1 | **28×** |
+| `repo.read` | 7.5 | 2.4 | 3.1× |
+| `repo.search` | 5.7 | 2.6 | 2.2× |
+| `repo.edit` | 1.0 | 1.1 | 0.9× |
+
+The editing rate is flat; everything upstream of it multiplies. A non-converging
+run is one that keeps *looking* — and `repo.exec`, the tool for running things to
+find out, is the sharpest marker.
+
+**Decision: the nudge is deleted.** Its justification was that it addressed the
+dominant failure class; that justification is falsified. `StuckLoopDetector`
+returns to a two-state check and keeps its three-strike stop — that is a
+pre-existing backstop against literal thrash, was not the thing under test, and
+costs nothing idle. Its measured limit (an alternating A, B, A pattern never
+trips it) is now pinned by a test rather than left implied.
+
+**What the data supports building instead**, pre-registered here rather than
+built on the same enthusiasm that produced the nudge: a *progress-free stretch*
+signal — tool calls since the last edit or evidence entry. It is program-
+decidable, needs no model, and matches the measured shape. Before any of it is
+written, the gate is: the signal must separate the two cohorts on the existing
+42 journals, offline and for free, at a threshold fixed in advance. If it cannot
+separate cohorts it already has the data for, it does not get built.
+
+## WITHDRAWN (2026-08-14): the A/B measured nothing
 
 **The nudge fired zero times in all 42 runs.** Counting `notice` events across
 every run journal in the six report directories: `nudges fired = 0,

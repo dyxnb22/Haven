@@ -13,7 +13,7 @@ not written to cooperate.
 > complete (they carry a network-retry notice), so the trigger simply never
 > occurred. Both arms ran an identical code path and every number below is
 > run-to-run variance. The verdict recorded here and in
-> `docs/notes/implemented/0002` is withdrawn; the nudge is untested, not proven.
+> `docs/notes/rejected/0002` is withdrawn; the nudge is untested, not proven.
 >
 > Reproduce: count `'nudging the model'` in
 > `evals/real/report-nudge-*/report-live-events/*.jsonl`.
@@ -30,7 +30,7 @@ not written to cooperate.
 > hits the per-case progress file recorded, the whole 42-run A/B cost
 > **$0.1063** at a 93% cache-hit rate (control $0.0602, treatment $0.0461).
 
-`docs/notes/implemented/0002` shipped a convergence intervention and said in
+`docs/notes/rejected/0002` shipped a convergence intervention and said in
 writing that its effect was unproven: on the second identical (tool, args,
 result) observation the harness appends one message telling the model the call
 produced nothing new. The note pre-committed to deleting it if an A/B showed no

@@ -123,7 +123,6 @@ class Harness:
         model_name: str = "scripted",
         pricing: Pricing | None = None,
         supports_prefix_continuation: bool | None = None,
-        repeat_nudge: bool = True,
     ) -> None:
         self.workspace = FsWorkspace(repo)
         self.store = MemorySessionStore()
@@ -149,5 +148,4 @@ class Harness:
             launcher=resolved,
             pricing=pricing,
             supports_prefix_continuation=supports_prefix_continuation,
-            repeat_nudge=repeat_nudge,
         )

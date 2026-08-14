@@ -742,78 +742,22 @@ class TestBudgetsAndStops:
         assert outcome.stop_reason is StopReason.NO_PROGRESS
         assert outcome.steps < 12  # detector fires before the step budget
 
-    async def test_a_repeat_is_nudged_before_it_is_fatal(self, tmp_path: Path) -> None:
-        """The dominant live failure is not converging in time (ADR 0023). By
-        the time a run is killed for repetition its budget is already gone, so
-        the second identical call earns a warning the model can still act on."""
-        repeat: list[ModelEvent] = [
-            tool("c1", "repo.search", pattern="nothing_here", path="."),
-            finish("tool_calls"),
-        ]
-        turns: list[list[ModelEvent]] = [
-            repeat,
-            list(repeat),
-            [text("Not found anywhere; reporting that instead of searching again."), finish()],
-        ]
-        h = Harness(make_repo(tmp_path), turns)
-        outcome = await h.service.run("Search for something absent")
+    async def test_an_alternating_pattern_is_not_detected_as_stuck(self, tmp_path: Path) -> None:
+        """The detector's measured limit, pinned at the loop level. A trace
+        study of 42 live runs found non-convergence is varied unproductive work,
+        not repetition, so the run below burns its budget without ever tripping
+        the stuck check (docs/notes/rejected/0002)."""
+        alternating: list[list[ModelEvent]] = []
+        for i in range(8):
+            path = "." if i % 2 == 0 else "src"
+            alternating.append([tool(f"c{i}", "repo.list", path=path), finish("tool_calls")])
+        h = Harness(make_repo(tmp_path), alternating, budget=Budget(max_steps=6))
+        outcome = await h.service.run("Alternate forever")
 
-        assert outcome.status is RunStatus.SUCCEEDED
-        note = [
-            m.content
-            for m in h.model.requests_seen[-1].messages
-            if m.role == "user" and "identical" in m.content
-        ]
-        assert note, "the model must be told its repeated call produced nothing new"
-        assert "repo.search" in note[0]
-
-    async def test_the_nudge_can_be_disabled_for_an_ab_arm(self, tmp_path: Path) -> None:
-        """The A/B needs a control arm. Disabling the nudge removes the note
-        while leaving the stop behaviour identical, so the two arms differ in
-        exactly one thing (docs/notes/implemented/0002)."""
-        repeat: list[ModelEvent] = [
-            tool("c1", "repo.search", pattern="nothing_here", path="."),
-            finish("tool_calls"),
-        ]
-        turns: list[list[ModelEvent]] = [repeat, list(repeat), [text("Done."), finish()]]
-        h = Harness(make_repo(tmp_path), turns, repeat_nudge=False)
-        outcome = await h.service.run("Search twice")
-
-        assert outcome.status is RunStatus.SUCCEEDED
-        assert not any("identical" in m.content for m in h.model.requests_seen[-1].messages), (
-            "the control arm must see no harness note"
+        assert outcome.stop_reason is StopReason.STEP_BUDGET_EXHAUSTED
+        assert not any(
+            "stuck loop" in getattr(e, "message", "") for e in h.sink.events_of("notice")
         )
-
-    async def test_disabling_the_nudge_leaves_the_stop_behaviour_intact(
-        self, tmp_path: Path
-    ) -> None:
-        """Only the warning is removed. If the control arm also stopped later,
-        the arms would differ in two ways and the measurement would be void."""
-        turns: list[list[ModelEvent]] = [
-            [tool("c1", "repo.search", pattern="nothing_here", path="."), finish("tool_calls")],
-        ]
-        h = Harness(make_repo(tmp_path), turns, repeat_last=True, repeat_nudge=False)
-        outcome = await h.service.run("Search in circles")
-        assert outcome.status is RunStatus.STOPPED
-        assert outcome.stop_reason is StopReason.NO_PROGRESS
-
-    async def test_the_nudge_carries_no_model_authored_text(self, tmp_path: Path) -> None:
-        """It lands as a trusted user-role message, so it may contain only
-        program facts — never the model's own argument JSON echoed back."""
-        repeat: list[ModelEvent] = [
-            tool("c1", "repo.search", pattern="s3cr3t_needle", path="."),
-            finish("tool_calls"),
-        ]
-        turns: list[list[ModelEvent]] = [repeat, list(repeat), [text("Done."), finish()]]
-        h = Harness(make_repo(tmp_path), turns)
-        await h.service.run("Search twice")
-
-        note = next(
-            m.content
-            for m in h.model.requests_seen[-1].messages
-            if m.role == "user" and "identical" in m.content
-        )
-        assert "s3cr3t_needle" not in note
 
     async def test_provider_error_fails_run(self, tmp_path: Path) -> None:
         turns: list[list[ModelEvent]] = [
