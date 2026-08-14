@@ -1,5 +1,9 @@
 # Design: a DeepSeek v4 flash harness (sub-project C)
 
+> **Historical record — implemented and later refined.** Current provider and
+> context behavior lives in `application/profiles.py`, ADRs 0011/0014/0022/0027,
+> and `docs/EVAL_LIVE.md`. Measurements below retain their point-in-time meaning.
+
 Status: approved direction (user delegated detailed decisions on 2026-08-12).
 Scope committed in `2026-08-12-repo-exec-sandbox-design.md`. Explicitly
 single-model: multi-provider support is a permanent non-goal.

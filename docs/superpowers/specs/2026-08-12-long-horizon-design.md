@@ -1,5 +1,9 @@
 # Design: long-horizon mechanics (sub-project B)
 
+> **Historical record — implemented and later refined.** Current compaction and
+> budget behavior lives in `application/{context_builder,compaction}.py` and
+> ADRs 0010/0022/0024. This document preserves the design as proposed.
+
 Status: approved direction (user delegated detailed decisions on 2026-08-12).
 Follows `docs/superpowers/specs/2026-08-12-repo-exec-sandbox-design.md`, which
 committed this scope.

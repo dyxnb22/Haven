@@ -40,10 +40,15 @@ model; a real provider is used only in the two optional "live" exercises.
 
 ## How to use this repository as a textbook
 
+Start with [`docs/LEARNING.md`](../docs/LEARNING.md) for the truth hierarchy.
+It distinguishes current implementation documentation from the original plan,
+executed roadmaps, and point-in-time measurements retained as history.
+
 Four teaching aids, used throughout:
 
-1. **The source.** Every module lists the files it covers. Read them; they are
-   small and deliberately single-purpose.
+1. **The source.** Every module lists the files it covers. Most are small and
+   single-purpose; the two large orchestrators (`RunService` and `ToolPipeline`)
+   carry stage-by-stage module docstrings and dispatch tables as their map.
 2. **The git history.** The commits are vertical slices in build order —
    `git log --oneline` reads like a table of contents, from `domain` to
    `perf(context)`. Each module names its commit(s) so you can `git show` the

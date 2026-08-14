@@ -64,6 +64,12 @@ argument rests on that closure. The cost is not the HTTP client:
   currently checkable in one place and would become a per-tool argument.
 - A search provider is a second vendor relationship, key, and failure mode.
 
+> **Scope correction (2026-08-14).** "Haven" in the first bullet means
+> Haven-owned network clients. A user-authored `repo.check` recipe has always
+> been able to set `allow_network = true` (ADR 0009); that child process is
+> explicit user authority, while `repo.exec` remains network-denied. The product
+> therefore has one built-in network peer, not a universal no-network guarantee.
+
 Against that: no corpus failure needs it, and the tasks Haven is built for
 (bounded edits in one local repository, verified by a registered recipe) are
 answerable from the repository.

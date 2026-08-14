@@ -117,7 +117,7 @@ that exactly one class enjoys that exception.
 | Tool | Class | Interactive | Read-only | Key constraints |
 |---|---|---|---|---|
 | `repo.apply_patch` | effect | ask | deny | multi-file transaction: simulated first, one approval binds every file's preimage, applied atomically with journaled rollback (ADR 0019) |
-| `repo.check` | effect | ask | deny | registered recipe ids only, fixed argv, scrubbed env, timeout, bounded output |
+| `repo.check` | effect | ask | deny | registered recipe ids only, fixed argv, scrubbed env, timeout, bounded output; workspace-writable and user config may opt into network |
 | `repo.create` | effect | ask | deny | new paths only — fails on anything that exists, so it can never blank a file |
 | `repo.delete` | effect | ask | deny | existing files only, content pinned at approval so a concurrent change fails |
 | `repo.diff` | read-only | allow | allow | shows only what *this run* changed, including created files |
@@ -181,9 +181,12 @@ flowchart TD
     APR -->|approve| TOC{"Re-verify preimage<br/>TOCTOU guard"}
     TOC -->|file drifted| E5["error: stale_preimage"]
     TOC -->|unchanged| TICKET["<b>ExecutionTicket</b><br/>raw model JSON stops here"]
-    TICKET --> SBX["<b>OS sandbox</b><br/>Seatbelt / Landlock<br/><i>every child process, one wrapping site</i>"]
-    SBX --> EXE["<b>Executor</b><br/>atomic write + re-read postimage<br/>or a sandboxed process (fixed argv)"]
-    EXE --> OUT["<b>ToolResult + Evidence + Trace</b>"]
+    TICKET --> KIND{"Execution kind"}
+    KIND -->|file or state| FS["<b>Workspace executor</b><br/>atomic write + re-read postimage"]
+    KIND -->|process| SBX["<b>OS sandbox</b><br/>Seatbelt / Landlock<br/><i>one wrapping site when available</i>"]
+    SBX --> PROC["<b>ProcessExecutor</b><br/>fixed argv + bounded output"]
+    FS --> OUT["<b>ToolResult + Evidence + Trace</b>"]
+    PROC --> OUT
     E1 --> OUT
     E2 --> OUT
     E3 --> OUT
@@ -195,9 +198,12 @@ flowchart TD
 Invariants:
 
 - The executor accepts only a program-minted `ExecutionTicket`, never model JSON.
-- Every child process is confined by the OS. Where no backend exists, `repo.exec`
-  is denied rather than run unconfined, and no configuration can override that
-  (ADR 0009).
+- File operations use the workspace adapter directly; the OS sandbox stage is
+  for process tools only. On a supported backend every child process is wrapped
+  at the executor. Where
+  no backend exists, model-proposed `repo.exec` is denied rather than run
+  unconfined and no configuration can override that; a user-registered
+  `repo.check` may still run under the local-trust assumption (ADR 0009/0013).
 - Approvals bind workspace + tool + canonical args + preimage + preview digests;
   any drift invalidates them, and each is consumed at most once (a conditional
   SQL `UPDATE`).
@@ -284,4 +290,5 @@ Large content (diffs, file originals) is content-addressed in an artifact store;
 events keep only digests and bounded summaries.
 
 See `docs/SECURITY.md`, `docs/EVAL.md`, `docs/DEMO.md`, the ADRs in `docs/adr/`,
-and `Haven_TUI_Coding_Agent_项目计划.md` for the full plan, budgets, and matrix.
+and `docs/LEARNING.md` for the current reading order. The original project plan
+is retained as historical input, not as a current behavior contract.

@@ -17,10 +17,12 @@ from a command in this repository; nothing is estimated.
 
 1. **Single execution channel.** Registry → strict schema → program-collected
    workspace facts → deterministic policy → exact approval → `ExecutionTicket` →
-   OS sandbox → executor. The executor accepts only a program-minted ticket,
-   never model JSON, and every child process is confined by Seatbelt (macOS) or
-   Landlock (Linux) at one wrapping site. Where no backend exists, `repo.exec`
-   is denied rather than run unconfined, and no config can override that.
+   executor, with an OS-sandbox stage for process tools. The executor accepts only a program-minted ticket,
+   never model JSON. On supported systems every child process is wrapped at one
+   site by Seatbelt (macOS) or Landlock (Linux); where no backend exists,
+   model-proposed `repo.exec` is denied rather than run unconfined. A registered
+   check may still run without a backend under the explicitly stated
+   locally-trusted-repository assumption.
 2. **Digest-bound, single-use approval.** An approval pins workspace + tool +
    canonical args + preimage + preview. Any drift invalidates it; consumption is
    a conditional SQL `UPDATE`, so it can never be replayed. The preimage is
@@ -98,12 +100,13 @@ change.
 
 ## Known limitations (stated up front)
 
-- Child processes are confined by an OS sandbox that blocks writes outside the
-  workspace, reads of `$HOME`, and the network — but it is not a container or a
-  VM. IPC is open, the Linux network rules cover TCP only, `.git` write
-  protection is kernel-enforced on macOS but tool-layer only on Linux, and
-  secrets stored outside `$HOME` stay readable. Haven assumes a locally trusted
-  repo and does not claim it is safe to run malicious repository code.
+- `repo.exec` requires an OS sandbox, keeps the workspace read-only, hides
+  `$HOME`, and denies network access. Registered checks use a workspace-writable
+  profile, may opt into network through user-authored config, and may run without
+  a backend on an unsupported platform under the local-trust assumption. This
+  is not a container or VM: IPC is open, Linux network confinement covers TCP
+  only, `.git` write protection during checks is kernel-enforced on macOS but
+  detect-and-fail on Linux, and secrets outside `$HOME` can remain readable.
 - Single repository, single provider, no background processes, no automatic Git
   history changes, no multi-agent, no RAG, no MCP.
 - Token/cost accounting is exact when the provider reports usage and explicitly

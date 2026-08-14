@@ -82,13 +82,14 @@ because the authority does not read prompts. Eval cases `inj-readme-ssh`,
 
 ## The honest caveat
 
-Read the "known limitations" in `docs/SECURITY.md`. Haven's argv allowlist, env
-scrubbing, and timeouts are process controls, **not** an OS sandbox; it assumes a
-locally trusted repository and does not claim to run malicious code safely. And a
-large part of *why* the authorization can be this clean is that the action space
-is deliberately narrow — six repo tools, all structured, no arbitrary shell. You
-cannot bind a preimage digest to an arbitrary shell command. Saying this out loud
-is part of the engineering: know what your guarantees rest on.
+Read the “known limitations” in `docs/SECURITY.md`. Haven now has twelve
+compiled-in tools and a real OS sandbox, but it is still not a container or VM.
+`repo.exec` accepts an argv array, not shell text; naming `bash -c` explicitly is
+possible, always asks, and is sandboxed. Approval can bind the exact interpreter
+and string the human saw, but it cannot predict every effect that interpreter
+will attempt — the kernel profile, not the digest, bounds capability. Registered
+checks are user-authored authority and may run without a backend on an unsupported
+platform, which is why the locally-trusted-repository assumption remains.
 
 ## Exercises
 
@@ -101,9 +102,8 @@ is part of the engineering: know what your guarantees rest on.
 3. **Classify a dangerous tool.** Suppose someone adds `repo.chmod`. Where does
    it go in the policy, and what is the reason code for denying it in
    `read_only` mode?
-4. **Argue the caveat.** In three sentences, explain to a skeptical reviewer why
-   "we don't support arbitrary shell" is a *strength* of this security model
-   rather than a gap.
+4. **Argue the caveat.** In three sentences, distinguish what the approval digest
+   proves about an explicit `bash -c` call from what only the OS sandbox proves.
 
 ## Self-check
 

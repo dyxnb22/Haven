@@ -75,16 +75,20 @@ N local exceptions.
 
 ## Narrow-but-rigorous vs. broad-but-shallow
 
-The most important judgment in the whole project is the scope itself. Haven does
-six repo tools, one provider, no shell, no multi-agent — and in exchange it can
-make *provable* claims: unauthorized writes at 0 across a security suite,
-ambiguous effects never auto-replayed, every run with one named stop reason.
+The most important judgment in the whole project is the scope itself. Haven has
+twelve compiled-in tools, one provider connection, no shell-string tool, and no
+multi-agent orchestration. An explicit interpreter in `repo.exec` is still
+possible, but it always asks and runs inside the mandatory exec sandbox. In
+exchange Haven can make *provable* claims: unauthorized changes at 0 across the
+offline security gate, ambiguous effects never auto-replayed, and every run with
+one named stop reason.
 
-A broader agent cannot make those claims as cleanly, because you cannot bind a
-preimage digest to an arbitrary shell command. The lesson is not "narrow is
-always better." It is: **choose your action space deliberately, and know what
-guarantees that choice buys or forfeits.** Being able to articulate that
-trade-off is the deliverable.
+An approval digest can bind an interpreter argv exactly; it cannot predict the
+program hidden behind that string. The kernel profile supplies that missing
+capability boundary. The lesson is not “narrow is always better.” It is:
+**choose your action space deliberately, and know which guarantee comes from
+schema, approval, sandbox, or evidence.** Articulating that trade-off is the
+deliverable.
 
 ## Exercises
 
@@ -96,9 +100,9 @@ trade-off is the deliverable.
    it up in the `docs/adr/` format, especially the alternatives you discarded.
 3. **Write a postmortem.** Take a bug you fixed recently and write the
    symptom / root cause / tempting-wrong-fix / fix / regression-test entry.
-4. **Argue the scope.** In a paragraph, defend Haven's "no shell" decision to a
-   reviewer who says it makes the agent a toy. Then argue the *other* side. Which
-   is more convincing, and why?
+4. **Argue the scope.** In a paragraph, defend Haven's “no implicit shell
+   string” decision to a reviewer who wants pipes and redirection. Include what
+   changes when the argv explicitly names `bash -c`, then argue the *other* side.
 
 ## Self-check
 

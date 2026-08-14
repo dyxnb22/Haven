@@ -6,8 +6,8 @@
 
 | System | Type | Purpose | Auth model | Criticality | Evidence |
 |--------|------|---------|------------|-------------|----------|
-| OpenAI-compatible chat API (target: DeepSeek `api.deepseek.com/v1`) | HTTPS API (SSE streaming) | The model provider | Bearer key from env (`HAVEN_API_KEY` or `$HAVEN_API_KEY_ENV`) | high | `src/haven/adapters/providers/openai_compatible.py`, `src/haven/config.py` |
-| OS sandbox: Seatbelt (macOS) / Landlock (Linux ABI>=4) | Kernel confinement | Confine every child process (exec/check) | n/a (local kernel API) | high | `src/haven/adapters/sandbox/`, `src/haven/sandbox/landlock_launcher.py` |
+| OpenAI-compatible Chat Completions API (default OpenAI endpoint; live measurements used DeepSeek) | HTTPS API (SSE streaming + tool calls) | The model provider | Bearer key from env (`HAVEN_API_KEY` or `$HAVEN_API_KEY_ENV`) | high | `src/haven/adapters/providers/openai_compatible.py`, `src/haven/config.py` |
+| OS sandbox: Seatbelt (macOS) / Landlock (Linux ABI>=4) | Kernel confinement | Wrap exec/check on supported systems; exec fails closed without a backend | n/a (local kernel API) | high | `src/haven/adapters/sandbox/`, `src/haven/sandbox/landlock_launcher.py` |
 | Git (local) | Subprocess | Baseline capture at run start; eval harness clones | n/a | low | `src/haven/adapters/git_baseline.py` |
 | GitHub Actions | CI | Gates on macOS+Linux | repo-scoped | med | `.github/workflows/ci.yml` |
 

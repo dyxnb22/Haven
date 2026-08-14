@@ -1,5 +1,9 @@
 # Measure What Was Built: nudge A/B, Java localization, Java oracle tier
 
+> **Historical record — executed.** The verdicts and final measurements live in
+> `docs/EVAL_LIVE.md`, ADR 0023/0029, and the implemented/rejected decision
+> notes. Checkboxes below preserve the work order rather than current status.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Settle the project's one outstanding "built but unproven" mechanism (the repetition nudge), and extend the measurement apparatus to a real large Java repository so the LSP deferral is decided at a difficulty that matters.

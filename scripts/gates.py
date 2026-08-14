@@ -85,6 +85,12 @@ GATES: list[Gate] = [
         description="an overturned ADR points at the ADR that overturned it",
     ),
     Gate(
+        "docs",
+        "uv run python scripts/check_docs.py",
+        modes=("fast", "full"),
+        description="local links, commands, version, and historical labels agree",
+    ),
+    Gate(
         "tests",
         "uv run coverage run -m pytest",
         modes=("full",),

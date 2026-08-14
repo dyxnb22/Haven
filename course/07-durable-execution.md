@@ -79,12 +79,13 @@ Read `sqlite_session.py`:
 
 ## Config that can only tighten
 
-`config.py` merges built-in safe defaults → user config → project `.haven.toml` →
-CLI. A project file may only *lower* budgets and *register* recipes; it can never
-raise a limit, change the provider, or widen permissions. Secrets come only from
-environment variables and are reported present/missing, never printed. This is
-durability of a different kind: a checked-in project file cannot escalate what an
-agent is allowed to do.
+`config.py` merges built-in safe defaults → user config → provider environment
+variables and the CLI-selected budget tier → project `.haven.toml`. The project
+file is applied last but may only *lower* budgets and *register* recipes; it can
+never raise a limit, change the provider, or widen the agent's policy. A recipe
+can declare fixed process capabilities such as network/readable roots because it
+is user-authored authority, not model input. Secrets come only from environment
+variables and are reported present/missing, never printed.
 
 ## Exercises
 

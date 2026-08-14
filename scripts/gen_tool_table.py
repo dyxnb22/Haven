@@ -61,7 +61,10 @@ CONSTRAINTS: dict[str, str] = {
         "multi-file transaction: simulated first, one approval binds every file's preimage, "
         "applied atomically with journaled rollback (ADR 0019)"
     ),
-    "repo.check": "registered recipe ids only, fixed argv, scrubbed env, timeout, bounded output",
+    "repo.check": (
+        "registered recipe ids only, fixed argv, scrubbed env, timeout, bounded output; "
+        "workspace-writable and user config may opt into network"
+    ),
     "repo.exec": (
         "argv array only (no shell string), OS sandbox with the workspace read-only, no network, "
         "`$HOME` unreadable; output is never evidence"

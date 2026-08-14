@@ -8,6 +8,10 @@
 > threshold of 5), and no planner / FSM / subagent / MCP crosses its benefit
 > gate. The verdict, with evidence, is the deliverable.
 
+The remaining sections are the original plan kept as written. Statements such
+as “cannot yet show” describe the pre-execution baseline and are not current
+product claims; use `docs/PROJECT_CARD.md` and `docs/LEARNING.md` for those.
+
 Written 2026-08-13, immediately after roadmap v2 was executed in full (see
 `ROADMAP2.md` execution status). The gap analysis behind this plan is the
 post-v2 self-assessment against Codex CLI, opencode, and Reasonix: the

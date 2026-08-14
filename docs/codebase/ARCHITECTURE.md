@@ -24,7 +24,9 @@ user goal (TUI/CLI)
      -> ModelPort.generate_stream       src/haven/adapters/providers/openai_compatible.py
      -> ToolPipeline.execute            src/haven/application/tool_pipeline.py
         Registry -> schema -> workspace facts -> policy -> approval (digest-bound)
-        -> TOCTOU recheck -> ExecutionTicket -> sandboxed executor -> evidence + journal
+        -> TOCTOU recheck -> ExecutionTicket -> executor
+           (native sandbox is mandatory for exec, conditional for registered checks)
+        -> evidence + journal
   -> Evidence Gate on final answer      src/haven/domain/evidence.py
   -> RunFinished + checkpoint           src/haven/adapters/sqlite_session.py
 ```
@@ -67,4 +69,5 @@ user goal (TUI/CLI)
 
 - `src/haven/bootstrap.py`
 - `src/haven/application/tool_pipeline.py`, `run_service.py`
-- `docs/ARCHITECTURE.md`, `docs/adr/` (25 ADRs)
+- `docs/ARCHITECTURE.md`, `docs/adr/` (current count is generated in
+  `README.md` / `docs/PROJECT_CARD.md`)

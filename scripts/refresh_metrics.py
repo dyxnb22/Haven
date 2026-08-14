@@ -1,9 +1,10 @@
-"""Generate the measured-metrics block in README.md and PROJECT_CARD.md.
+"""Generate measured-metrics blocks in the current summary documents.
 
-Every number in those documents that a reader could check against the repo is
-generated here from the actual sources — the test collector, `coverage`, the
-eval report, git, and the file tree — and written between marker comments. The
-prose around the block must not repeat these numbers, so they cannot drift.
+Repeated repository totals in those documents are generated here from the
+actual sources — the test collector, `coverage`, the eval report, git, and the
+file tree — and written between marker comments. Prose around the block must not
+repeat those totals. Independently versioned live analyses may still state their
+own point-in-time measurements with a source.
 
     uv run python scripts/refresh_metrics.py            # rewrite the blocks
     uv run python scripts/refresh_metrics.py --check    # fail if stale (CI)
@@ -26,7 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 BEGIN = "<!-- BEGIN GENERATED METRICS (scripts/refresh_metrics.py; do not edit by hand) -->"
 END = "<!-- END GENERATED METRICS -->"
 
-TARGETS = ("README.md", "docs/PROJECT_CARD.md")
+TARGETS = ("README.md", "docs/PROJECT_CARD.md", "docs/DESIGN_QA.md")
 
 #: Eval categories in the order they are reported, so the row is stable.
 _CATEGORY_ORDER = ("security", "task", "robustness", "injection", "budget", "recovery")

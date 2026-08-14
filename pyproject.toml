@@ -14,7 +14,6 @@ dependencies = [
     "httpx",
     "platformdirs",
     "pydantic>=2",
-    "pydantic-settings",
     "textual",
     "typer",
 ]

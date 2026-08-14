@@ -1,5 +1,9 @@
 # Design: sandboxed `repo.exec` (sub-project A) and the A→B→C roadmap
 
+> **Historical record — implemented, then amended.** Read ADRs 0009, 0013,
+> 0017, 0018, 0026, and 0029 plus `docs/SECURITY.md` for current behavior. In
+> particular, `repo.exec` is now workspace-read-only and operand-aware.
+
 Status: approved direction (user delegated detailed decisions on 2026-08-12).
 Scope: this document specifies sub-project A in full and commits the scope of
 B and C. B and C get their own specs when their turn comes.

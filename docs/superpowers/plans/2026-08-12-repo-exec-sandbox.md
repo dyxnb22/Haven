@@ -1,5 +1,9 @@
 # Sandboxed `repo.exec` Implementation Plan
 
+> **Historical record — executed.** Checkboxes and code snippets preserve the
+> implementation sequence; they are not the current API contract. Read the
+> linked ADR amendments and `docs/SECURITY.md` before using this as a reference.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Give Haven a general command-execution tool (`repo.exec`) confined by a real OS sandbox, without weakening its approval model or its "success is program-decided evidence" claim.
@@ -2387,4 +2391,3 @@ git commit -m "docs: record the OS sandbox decision and its honest threat model"
 **Type consistency.** `SandboxSpec` field order and defaults are identical in Tasks 4, 6, 7, and 10. `ExecSpec` and `ExecOutcome` field names match across Tasks 6, 7, and 10. `select_launcher` has one signature in Tasks 8 and 10. `classify_argv` returns `ExecClass` (Task 1) and is compared through `.value` against `ToolFacts.exec_class: str | None` (Tasks 2 and 7). `MIN_ABI` is defined once, in `haven.sandbox.landlock_launcher`, and imported by the adapter.
 
 **Ordering risk.** Task 7 references `ExecutionStarted.sandbox_backend`, which Task 9 adds; the step says so and tells the implementer to defer that line if working strictly in order.
-

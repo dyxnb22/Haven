@@ -1,11 +1,14 @@
 """Layered configuration.
 
 Merge order is fixed and fail-closed:
-built-in safe defaults -> user config file -> project `.haven.toml` -> CLI.
+built-in safe defaults -> user config -> provider environment + CLI budget tier
+-> project `.haven.toml` (tighten-only).
 
 A project file can only *tighten* budgets and *register* verification recipes;
-it can never raise limits, change the provider, or widen permissions. Secrets
-live in environment variables only and are reported as present/missing.
+it can never raise limits, change the provider, or change the agent approval
+policy. A recipe is explicit user-authored process authority and may declare its
+own network/readable-root needs. Secrets live in environment variables only and
+are reported as present/missing.
 """
 
 from __future__ import annotations
@@ -225,7 +228,7 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
         sources["provider.model"] = "env"
 
     # -- tier: a user-level choice, so it may raise; applied before the
-    # project file so a repository still cannot widen what it inherits -------
+    # project file so a repository still cannot widen the selected budget -----
     if tier is not None:
         if tier not in BUDGET_TIERS:
             raise ConfigError(f"unknown budget tier {tier!r}; choose one of {sorted(BUDGET_TIERS)}")

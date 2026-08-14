@@ -7,13 +7,13 @@
 | Path | Purpose | Evidence |
 |------|---------|----------|
 | `src/haven/` | The package: 7 layers (interfaces, bootstrap, application, domain, ports, adapters, contracts) + evalkit + sandbox helpers | `src/haven/__init__.py` package map |
-| `tests/` | 698 tests: unit, integration, contract, security, recovery, tui (Pilot), golden (trace), eval | `pyproject.toml` testpaths; `tests/` tree |
+| `tests/` | Unit, integration, contract, security, recovery, TUI (Pilot), golden-trace, and eval tests; current count is generated | `pyproject.toml` testpaths; README metrics |
 | `evals/` | Offline eval cases (JSON, committed) + live real-repo suite builder + head-to-head harness | `evals/generate_cases.py`, `evals/real/build.py`, `evals/headtohead/harness.py` |
-| `docs/` | ARCHITECTURE, SECURITY, EVAL, EVAL_LIVE, PROJECT_CARD, POSTMORTEM, DEMO, ROADMAP(1-3), `adr/` (25 ADRs), generated `codebase/` | `docs/` tree |
-| `course/` | 10-module teaching course built on the repo | `course/README.md` |
-| `scripts/` | `refresh_metrics.py` (generated metrics gate), `demo.sh` (offline demo) | `scripts/` |
-| `.github/workflows/ci.yml` | CI: ruff, mypy, pytest+coverage, import-linter, offline eval, metrics drift, on macOS+Linux | `.github/workflows/ci.yml` |
-| `evals/real/repos|fixtures|cases|report*`, `evals/headtohead/runs/`, `.hypothesis/` | Gitignored work products (third-party clones, run artifacts, property-test cache) — 266 tracked files vs ~48k on disk | `.gitignore`; `git ls-files | wc -l` |
+| `docs/` | Current architecture/security/eval/learning docs, immutable ADR history, executed roadmaps/specs/plans, and the `codebase/` audit | `docs/LEARNING.md`; `docs/` tree |
+| `course/` | One derivation module plus 10 layer modules and a capstone | `course/README.md` |
+| `scripts/` | Declarative gate graph, docs/ADR/notes checks, generated metrics/tool table, and offline demo | `scripts/gates.py`; `scripts/` |
+| `.github/workflows/ci.yml` | Runs the single full gate graph on macOS and Linux after a locked dependency sync | `.github/workflows/ci.yml`; `scripts/gates.py` |
+| `evals/real/repos|fixtures|cases|report*`, `evals/headtohead/runs/`, `.hypothesis/` | Gitignored work products: third-party clones, run artifacts, and property-test cache | `.gitignore` |
 
 ### 2) Entry Points
 

@@ -27,7 +27,8 @@ ModelResult
   → Deterministic Policy (allow / ask / deny — a pure function)
   → Exact Approval       (when policy says ask; digest-bound, single-use)
   → ExecutionTicket      (raw model JSON stops here)
-  → Executor             (atomic write + re-read, or a registered recipe)
+  → Executor             (atomic workspace op, or fixed argv through one sandbox wrapper;
+                          mandatory for repo.exec, used for checks when available)
   → ToolResult + Evidence + Trace
   → next turn's Context
 ```

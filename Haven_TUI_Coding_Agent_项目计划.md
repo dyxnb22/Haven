@@ -1,5 +1,10 @@
 # Haven：简历级 TUI Coding Agent 项目计划
 
+> **Historical record — not current documentation.** This is the original
+> proposal from before implementation. Its unchecked boxes record intended
+> scope, not unfinished work. Use `docs/LEARNING.md` for the current reading
+> order and `README.md` / `docs/PROJECT_CARD.md` for the implemented surface.
+
 > 项目名：`Haven`。  
 > 命名含义：受控的本地工作区与可信执行环境；模型在这里提出动作，程序用策略、审批、证据和回放机制守住边界。  
 > 计划制定时间：2026-08-11  

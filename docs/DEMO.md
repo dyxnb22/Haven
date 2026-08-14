@@ -19,7 +19,7 @@ PACE=0 ./scripts/demo.sh                           # instant, for CI
 Embed the result at the top of `README.md`:
 
 ```markdown
-![Haven offline demo](docs/demo.gif)
+![Haven offline demo](demo.gif)
 ```
 
 The manual walkthrough below covers the interactive TUI, which needs a human at

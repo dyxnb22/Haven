@@ -21,7 +21,6 @@
 | httpx | locked | Async HTTP client for the OpenAI-compatible provider adapter | `src/haven/adapters/providers/openai_compatible.py` |
 | aiosqlite | locked | Async SQLite session store (journal/checkpoints/approvals) | `src/haven/adapters/sqlite_session.py` |
 | platformdirs | locked | User config/data dir resolution | `src/haven/config.py` |
-| pydantic-settings | locked | Declared in `[project.dependencies]` | `pyproject.toml` |
 
 ### 3) Development Toolchain
 
@@ -30,7 +29,7 @@
 | ruff | FORMAT + LINT (line 100; rules E,F,I,UP,B,SIM) | `pyproject.toml` `[tool.ruff]` |
 | mypy --strict | TYPE CHECK (packages=haven) | `pyproject.toml` `[tool.mypy]` |
 | pytest (+pytest-asyncio auto, pytest-timeout) | TEST | `pyproject.toml` `[tool.pytest.ini_options]` |
-| coverage | COVERAGE (no fail_under threshold configured) | `.github/workflows/ci.yml`, `pyproject.toml` |
+| coverage | COVERAGE; per-file 85% floor on domain/application/contracts/ports | `scripts/check_coverage_floor.py`, `.github/workflows/ci.yml` |
 | import-linter | ARCHITECTURE CONTRACTS (3 contracts) | `pyproject.toml` `[tool.importlinter]` |
 | hypothesis | PROPERTY TESTS | `pyproject.toml` dev group; `.hypothesis/` cache (gitignored) |
 | respx | HTTP mocking for provider contract tests | `tests/contract/test_openai_compatible.py` |
@@ -43,18 +42,17 @@ so pinned third-party eval repos' test suites run green; Haven never imports the
 
 ```bash
 uv sync --locked
-uv run ruff format --check . && uv run ruff check .
-uv run mypy src
-uv run lint-imports
-uv run coverage run -m pytest
-uv run haven eval --offline          # deterministic eval suite (security gate)
-uv run python scripts/refresh_metrics.py --check   # generated-metrics drift gate
+uv run python scripts/gates.py --mode fast  # static, architecture, docs
+uv run python scripts/gates.py --mode full  # CI graph: tests, coverage, eval, metrics too
 ```
 
 ### 5) Environment and Config
 
 - Config sources: built-in defaults -> user `config.toml` (platformdirs) ->
-  project `.haven.toml` (tighten-only) -> CLI flags (`src/haven/config.py`).
+  provider environment variables + CLI budget tier -> project `.haven.toml`
+  (budget tighten-only; recipes register fixed argv and explicit process
+  capabilities). The project file is last precisely so it can constrain the
+  selected user tier (`src/haven/config.py`).
 - Required env vars: `HAVEN_API_KEY` (default) or the var named by
   `HAVEN_API_KEY_ENV`; optional `HAVEN_BASE_URL`, `HAVEN_MODEL`,
   `HAVEN_DATA_DIR`. No `.env.example` exists — vars are discovered from

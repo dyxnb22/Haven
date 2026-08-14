@@ -304,8 +304,10 @@ the whole machine.
    never a command string. The argv lives in the user's `.haven.toml`. The
    model's vocabulary shrinks to a set the human authored.
 2. **A kernel sandbox at one wrapping site.** Seatbelt on macOS, Landlock on
-   Linux: writes confined, `$HOME` unreadable, network denied. One site, so
-   no future caller can forget to wrap.
+   Linux. Model-proposed `repo.exec` gets a workspace-read-only, network-denied
+   profile; registered checks get a workspace-writable profile and only
+   user-authored config may opt them into network. Both hide `$HOME` where a
+   backend exists. One wrapping site keeps callers from forgetting the policy.
 3. **No sandbox, no exec.** Where no backend exists, the general-exec tool is
    *denied*, not run unconfined — and no config can override that.
 

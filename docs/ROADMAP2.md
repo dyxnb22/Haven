@@ -6,8 +6,9 @@ real-task measurement. Every load-bearing claim in those audits was verified
 against the code before this plan was written; file:line references below are
 the verified evidence, not quotations.
 
-> **This plan has been executed** (status below). The current plan is
-> `docs/ROADMAP3.md`, written after the post-execution gap re-assessment.
+> **This plan has been executed** (status below). It was followed by
+> `docs/ROADMAP3.md`, which was also executed. Current behavior is summarized
+> in `docs/PROJECT_CARD.md`; the sections below remain the plan as written.
 
 ## Execution status (2026-08-12)
 

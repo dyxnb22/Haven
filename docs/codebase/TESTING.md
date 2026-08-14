@@ -14,8 +14,12 @@
 uv run pytest                       # the whole suite (count in README's metrics table)
 uv run pytest tests/unit -q        # one category
 uv run coverage run -m pytest && uv run coverage report --include="src/*"
-uv run haven eval --offline         # 38 scripted eval cases (security gate)
+uv run haven eval --offline         # scripted eval count is generated (security gate)
 HAVEN_UPDATE_GOLDEN=1 uv run pytest tests/golden -q   # regenerate golden trace
+
+# Preferred release checks (the same graph CI runs)
+uv run python scripts/gates.py --mode fast
+uv run python scripts/gates.py --mode full
 ```
 
 ### 2) Test Layout
@@ -37,7 +41,7 @@ HAVEN_UPDATE_GOLDEN=1 uv run pytest tests/golden -q   # regenerate golden trace
 | Security | yes | sandbox enforcement by running real commands; policy escapes | skips per-platform where no backend |
 | E2E (TUI) | yes | Pilot journeys: approval modal, /rewind, steering, fork | `tests/tui/test_tui_journey.py` |
 | Golden | yes | full event-trace byte comparison, TUI==headless | `tests/golden/` |
-| Offline eval | yes | 38 JSON cases run the real stack with only the model scripted; unauthorized changes / transcript leaks fail the build | `evals/cases/`, `src/haven/evalkit/runner.py` |
+| Offline eval | yes | Generated JSON cases run the real stack with only the model scripted; unauthorized changes / transcript leaks fail the build | `evals/cases/`, `src/haven/evalkit/runner.py` |
 
 ### 4) Mocking and Isolation Strategy
 
@@ -55,9 +59,12 @@ HAVEN_UPDATE_GOLDEN=1 uv run pytest tests/golden -q   # regenerate golden trace
 
 ### 5) Coverage and Quality Signals
 
-- Coverage tool + threshold: coverage.py in CI; **no fail_under enforced**.
-- Current reported coverage: ~88% of `src/` (generated metrics table in
-  README).
+- Coverage tool + threshold: coverage.py in CI. There is no single global
+  `fail_under`, but every file in `domain/`, `application/`, `contracts/`, and
+  `ports/` is individually gated at **85%** by
+  `scripts/check_coverage_floor.py`.
+- Current overall `src/` coverage is generated into README / PROJECT_CARD /
+  DESIGN_QA by `scripts/refresh_metrics.py`.
 - Known gaps: TUI worker paths partially covered; `evals/` harness scripts are
   not unit-tested (exercised by live runs, and by rebuilding fixtures and
   diffing when they are refactored). No flaky tests are currently known.

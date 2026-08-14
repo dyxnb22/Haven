@@ -16,8 +16,11 @@
 - Formatter: ruff format (line-length 100) — `pyproject.toml [tool.ruff]`.
 - Linter: ruff check, rules `E,F,I,UP,B,SIM`; bugbear immutable-call
   exceptions for Typer defaults.
-- Types: mypy `strict = true` over `src` (68 modules).
-- Run commands: `uv run ruff format --check . && uv run ruff check . && uv run mypy src`.
+- Types: mypy `strict = true` over every `src/haven` module; the current module
+  count is generated in the summary metrics.
+- Preferred command: `uv run python scripts/gates.py --mode fast`, which runs
+  formatting, lint, strict types, architecture, and documentation contracts from
+  the same graph CI uses.
 
 ### 3) Import and Module Conventions
 
@@ -46,8 +49,9 @@
 - Mocking: no monkeypatch-heavy style — dependency injection via ports
   (ScriptedModel, MemorySessionStore, RecordingLauncher in
   `tests/integration/fakes.py`); provider HTTP mocked with respx.
-- Coverage: run in CI; ~88% on `src/` reported in generated metrics; no
-  enforced `fail_under`.
+- Coverage: the overall `src/` figure is generated; every file in the four core
+  decision/boundary layers has an enforced 85% floor. UI/platform adapters are
+  covered by their dedicated suites rather than that per-file floor.
 
 ### 6) Evidence
 

@@ -67,8 +67,9 @@ uv run haven verify-provider --yes    # one tiny real request to check connectiv
 uv run haven                          # interactive TUI in the current repo
 ```
 
-Any OpenAI-compatible endpoint works; point `HAVEN_API_KEY_ENV` at whatever
-variable the provider conventionally uses:
+Any OpenAI-compatible Chat Completions endpoint that supports streaming and
+tool calls can be configured; point `HAVEN_API_KEY_ENV` at whatever variable
+the provider conventionally uses:
 
 ```bash
 export DEEPSEEK_API_KEY=sk-...
@@ -98,7 +99,7 @@ flowchart TD
     APR -->|approve| TOC{"Re-verify preimage<br/>TOCTOU guard"}
     TOC -->|drifted| ERR
     TOC -->|unchanged| TICKET["<b>ExecutionTicket</b><br/>raw model JSON stops here"]
-    TICKET --> EXE["<b>Executor</b><br/>atomic write + re-read postimage<br/>or registered recipe (fixed argv)"]
+    TICKET --> EXE["<b>Executor</b><br/>atomic write + re-read postimage<br/>or sandboxed process (fixed argv)"]
     EXE --> OUT["<b>ToolResult + Evidence + Trace</b>"]
     ERR --> OUT
     OUT --> CTX["next turn's Context<br/>as untrusted &lt;tool_output&gt;"]
@@ -115,9 +116,9 @@ See `docs/ARCHITECTURE.md` for the layering and state-machine diagrams, and
   import-contract'd layering (`domain → application → ports`, adapters behind a
   single composition root).
 - A `search → read → edit → verify → diff` loop over a real repository.
-- **Deterministic policy + digest-bound one-time approval + hard workspace
-  confinement** over model-proposed side effects, with TOCTOU and stale-approval
-  protection.
+- **Deterministic policy + digest-bound one-time approval**, hard path
+  confinement for file tools, and mandatory native-sandbox confinement for
+  model-proposed general exec, with TOCTOU and stale-approval protection.
 - An **Evidence Gate**: a run that edited files cannot succeed on the model's word;
   it needs a diff and a passing check recorded *after* the last write, and a
   deterministic review of what it wrote (no committed secrets, conflict markers,
@@ -141,14 +142,18 @@ See `docs/ARCHITECTURE.md` for the layering and state-machine diagrams, and
 ## Non-goals (v1)
 
 Multi-agent orchestration · RAG/GraphRAG · browser/computer-use/voice/image ·
-cloud accounts or remote execution · arbitrary shell (only registered recipes) ·
-auto commit/push/PR · multi-provider routing · MCP. These are deliberately out of
+cloud accounts or remote execution · an unconfined shell (`repo.exec` is argv
+only; an explicit shell interpreter always asks and stays sandboxed) · auto
+commit/push/PR · multi-provider routing · MCP. These are deliberately out of
 scope so the core guarantees can be proven rather than gestured at.
 
 ## Command surface
 
+<!-- BEGIN CLI COMMAND SURFACE -->
+
 ```text
-haven [PATH]                         # interactive TUI (default)
+haven                                # interactive TUI in the current directory
+haven tui [PATH]                     # interactive TUI in an explicit workspace
 haven init --workspace PATH [--accept]   # one-step onboarding: env summary + recipe discovery
 haven run GOAL --workspace PATH      # headless; read-only by default
 haven run GOAL --write --approval-policy reject|trusted-recipe|all [--jsonl] [--events F]
@@ -170,9 +175,12 @@ haven verify-provider --yes          # explicit, may incur provider cost
 haven config explain --workspace PATH
 ```
 
-Inside the TUI, `/sessions`, `/fork RUN_ID`, `/rewind`, `/diff`, and `@path`
-file mentions steer the session; typing while a run is active queues the
-input for the next turn rather than interrupting it.
+<!-- END CLI COMMAND SURFACE -->
+
+Inside the TUI, `/help`, `/budget`, `/context`, `/sessions`, `/fork`, `/rewind`,
+`/diff`, `/export`, and `/quit` expose the interactive controls. `@path` file
+mentions point the agent at a file without bypassing `repo.read`; typing while a
+run is active queues the input for the next turn rather than interrupting it.
 
 Exit codes are stable: `0` success · `2` usage · `3` policy/permission ·
 `4` provider · `5` tool · `6` budget/stopped · `7` recovery required.
@@ -229,12 +237,13 @@ including one where the security gate itself was wrong.
 | `docs/SECURITY.md` | assets, principals, attack surface, defenses, limitations |
 | `docs/EVAL.md` | case design, metrics, offline vs. live eval |
 | `docs/EVAL_LIVE.md` | every live real-model measurement: five task tiers, zero-config discovery, a head-to-head vs a peer agent, and the harness defects each round exposed |
-| `course/` | a 10-module course that teaches agent engineering using this repo as the textbook |
+| `course/` | one derivation module plus 10 layer modules that teach agent engineering from this repo |
 | `docs/DEMO.md` | 2–3 minute walkthrough script |
 | `docs/PROJECT_CARD.md` | one-page summary, measured results, trade-offs |
 | `docs/DESIGN_QA.md` | every load-bearing decision in the form it gets challenged: alternatives, evidence, follow-ups, and the limits stated first |
 | `docs/POSTMORTEM.md` | real failures, root causes, regression guards |
 | `docs/DEFENSIVE_PATTERNS.md` | the bug classes those failures produced, as rules to read before writing policy, boundary, gate, or provider code |
+| `docs/LEARNING.md` | reading order, truth hierarchy, and the boundary between current docs and historical plans |
 | `docs/notes/` | decision notes: the lightweight tier below ADRs, including a `rejected/` record of ideas considered and declined |
 | `docs/adr/` | Architecture decision records (count in the metrics table), from scope and the tool boundary through the OS sandbox, sessions, reasoning replay, the multi-file patch transaction, session runtime, headless write, the data-driven architecture verdict (ADR 0023), the compaction boundary + summary-tier gate (ADR 0024), run-scoped standing approvals (ADR 0025), and exec friction following the operands (ADR 0026) |
 | `docs/ROADMAP.md` (+ `ROADMAP2/3`) | the executed improvement plans, kept as the record of what was built in which order and why |
@@ -242,10 +251,10 @@ including one where the security gate itself was wrong.
 ## Learn from this repo
 
 `course/` is a self-paced course that teaches how to build a production-grade
-coding agent by reading and extending this one. Ten modules map to the layers
-here — from the provider contract to the execution channel, the Evidence Gate,
-durable recovery, and evaluation — each pointing at real files, ADRs, tests, and
-the failures found by running against a live model. It runs fully offline (no API
+coding agent by reading and extending this one. A derive-it-from-scratch module
+is followed by ten layer modules — from the provider contract to the execution
+channel, Evidence Gate, durable recovery, and evaluation — each pointing at
+real files, ADRs, tests, and live-model failures. It runs fully offline (no API
 key) and ends with a capstone. Start at [`course/README.md`](course/README.md).
 
 ## Design references
@@ -254,16 +263,19 @@ Haven is an independent Python implementation. [Morrow](https://github.com/dyxnb
 is one design reference for principles such as a single tool execution channel,
 policy-bound approval, and replayable eval — Haven does not fork or copy Morrow
 source. See `docs/adr/` for the decisions and trade-offs, and
-`Haven_TUI_Coding_Agent_项目计划.md` for the full plan.
+`Haven_TUI_Coding_Agent_项目计划.md` for the historical original plan.
 
 ## Known limitations
 
-- Child processes run under an OS sandbox (Seatbelt on macOS, Landlock on Linux)
-  that blocks writes outside the workspace, reads of `$HOME`, and the network —
-  but it is **not** a container or a VM. IPC is open, the Linux network rules
-  cover TCP only, and secrets outside `$HOME` stay readable. Haven assumes a
-  locally trusted repository and does not claim to safely run
-  untrusted/malicious repository code. See [ADR 0009](docs/adr/0009-os-sandbox-and-general-exec.md).
+- Model-proposed `repo.exec` requires Seatbelt (macOS) or Landlock (Linux), runs
+  with the workspace read-only, cannot read `$HOME`, and cannot use the network
+  (Landlock covers TCP; UDP/DNS remain a stated Linux gap). A registered
+  `repo.check` uses a workspace-writable profile and may opt into network access
+  through user-authored config; on a platform without a backend, checks still
+  run under the locally-trusted-repository assumption while `repo.exec` is
+  denied. This is **not** a container or VM: IPC is open and secrets outside
+  `$HOME` can remain readable. See [ADR 0009](docs/adr/0009-os-sandbox-and-general-exec.md)
+  and [ADR 0013](docs/adr/0013-sandbox-scope-exec-vs-check.md).
 - Token/cost accounting is exact when the provider returns usage and clearly
   marked `estimated` otherwise.
 - Single repository, single provider, fixed verification recipes, no automatic Git

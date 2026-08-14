@@ -128,10 +128,10 @@ recipe, so a model cannot satisfy the Evidence Gate by running `echo ok`.
 
 ### 6a. The OS sandbox
 
-Child processes are wrapped by the platform's native sandbox in exactly one
-place (`ProcessExecutor`), so no caller can introduce an unconfined path where a
-backend exists. The two process tools are treated differently on purpose
-(ADR 0013):
+Where a native backend exists, child processes are wrapped in exactly one place
+(`ProcessExecutor`), so no caller can accidentally introduce a second,
+unconfined path. The two process tools are treated differently on purpose
+(ADR 0013), including what happens when no backend exists:
 
 - `repo.exec` runs **model-proposed** argv, so the sandbox is the only thing
   between the model and the machine. It is **mandatory**: with no backend, exec
@@ -148,6 +148,9 @@ backend exists. The two process tools are treated differently on purpose
   workspace stays **writable** (tests write caches and artifacts). It is applied
   whenever a backend exists, but a platform without one still runs registered
   checks, under the same locally-trusted-repo assumption the whole tool holds.
+  Network is denied by default; a user-authored recipe may explicitly set
+  `allow_network = true`. The model cannot add or change that grant because
+  `.haven.toml` is protected.
   Files a check changes are attributed to the evidence ledger from before/after
   snapshots (ADR 0012), and a change to a protected path (`.git`, `.haven`,
   `.haven.toml`) — which Landlock cannot prevent for a writable workspace — is
@@ -165,7 +168,7 @@ registered `repo.check` recipes run processes.
 | Writes (`repo.exec`) | scratch only | scratch only |
 | Writes (`repo.check`) | workspace + scratch | workspace + scratch |
 | Reads | everything except `$HOME` | enumerated system roots + workspace |
-| Network | all denied | TCP bind/connect denied |
+| Network | denied by default; a registered check may opt in | TCP bind/connect denied by default; a registered check may opt in |
 | `.git` writes during a check | denied by the kernel | allowed by the kernel; detected by snapshot, fails the call (`protected_path_tampered`, ADR 0018) |
 
 Read confinement matters because `repo.exec` validates `cwd`, not the paths
@@ -306,13 +309,14 @@ window.
 
 ## Known limitations (stated plainly)
 
-- Child processes are confined by an OS sandbox (Seatbelt on macOS, Landlock on
-  Linux) that blocks writes outside the workspace, reads of `$HOME`, and the
-  network — but this is **not** a container or a VM. IPC is open, the Linux
-  network rules cover TCP only, and secrets stored outside `$HOME` stay
-  readable. Haven still assumes a locally trusted repository and does **not**
-  claim it is safe to run untrusted or malicious repository code; container or
-  VM isolation remains a precondition for any such claim.
+- Model-proposed `repo.exec` is available only with Seatbelt (macOS) or Landlock
+  (Linux): its workspace is read-only, `$HOME` is hidden, and network is denied.
+  Registered checks use a workspace-writable profile, may opt into network in
+  user-authored config, and still run without a backend on unsupported platforms
+  under the local-trust assumption. This is **not** a container or VM. IPC is
+  open, Linux network confinement covers TCP only, and secrets outside `$HOME`
+  can remain readable. Haven does **not** claim safety for an untrusted or
+  malicious repository; that would require container or VM isolation.
 - WAL gives local crash consistency, not distributed durability.
 - Guarantees cover the code paths that are actually implemented and tested; the
   eval suite's security cases are the executable statement of those guarantees.
