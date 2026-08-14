@@ -24,6 +24,16 @@ not written to cooperate.
 > non-convergence is not literal repetition, so neither the nudge nor the
 > pre-existing three-strike stop engages with it.
 >
+> The trace study that followed (`evals/trace_study.py`) went further: the slow
+> cohort's marker is exploration volume, not repetition — `repo.exec` 28× the
+> fast cohort, reads 3.1×, searches 2.2×, with the edit rate flat. A
+> *progress-free stretch* signal (consecutive calls with no edit, check, or
+> diff) separates the cohorts where repetition cannot: at a threshold of 12,
+> fixed on the A/B cohort and then checked against **102 previously unseen runs**
+> from the older report directories, it fires on **21 of 22** slow runs and 7 of
+> 77 fast ones. The nudge fired on 0 of 42. Full numbers and the caveats in
+> `docs/notes/rejected/0002`.
+>
 > Also corrected: the cost figures. Every run reported `$0.0000` because
 > `deepseek-chat` had no profile and fell back to an all-zero rate card. It is a
 > documented alias of `deepseek-v4-flash`; priced correctly, and using the cache

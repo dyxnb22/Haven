@@ -86,11 +86,32 @@ trips it) is now pinned by a test rather than left implied.
 
 **What the data supports building instead**, pre-registered here rather than
 built on the same enthusiasm that produced the nudge: a *progress-free stretch*
-signal — tool calls since the last edit or evidence entry. It is program-
-decidable, needs no model, and matches the measured shape. Before any of it is
-written, the gate is: the signal must separate the two cohorts on the existing
-42 journals, offline and for free, at a threshold fixed in advance. If it cannot
-separate cohorts it already has the data for, it does not get built.
+signal — consecutive tool calls with no edit, check, or diff among them. It is
+program-decidable, needs no model, and matches the measured shape. The gate was:
+it must separate the two cohorts on journals already on disk, offline and free.
+
+**The gate is met, and it held out of sample.** On the 42 A/B journals the max
+progress-free stretch has a median of 18 in slow runs against 7 in fast ones.
+Threshold 12 was then fixed and checked against **102 previously unseen runs**
+from the eleven older report directories:
+
+| Cohort | runs | median stretch | fires at ≥12 |
+|---|---|---|---|
+| slow (≥15 steps) | 22 | 28 | **21/22** |
+| fast (≤11 steps) | 77 | 6 | 7/77 |
+
+95% of non-converging runs, 9% of converging ones, on data the threshold was not
+chosen from — against the nudge's 0 firings in 42. Honest caveat: the threshold
+was scanned (6/8/10/12) on the A/B cohort before being fixed, which is why the
+held-out check is the number that counts, and why the training figures are
+reported beside it rather than instead of it.
+
+This is now a *candidate*, not a decision. What it detects is a correlate of
+slowness, and the obvious failure mode is that a legitimately exploratory task
+trips it — 7 of 77 converging runs already do. Before anything ships, the open
+question is what a detector should *do*: warning the model is the move that just
+failed, and stopping a run on a correlate would convert 9% of good runs into
+false stops. The likely first use is reporting, not intervention.
 
 ## WITHDRAWN (2026-08-14): the A/B measured nothing
 
