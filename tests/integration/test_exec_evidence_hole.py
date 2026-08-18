@@ -1,9 +1,8 @@
-"""A write performed by repo.exec must not escape the Evidence Gate.
+"""repo.exec 执行的写入不得逃过 Evidence Gate。
 
-The gate used to key off an evidence ledger that only repo.edit / repo.create
-wrote to, so a sandboxed command could modify the workspace with no ledger
-entry and the run would be reported as a success that made no changes. ADR 0012
-closed this by attributing process writes to the ledger.
+过去门禁依据的证据账本只由 repo.edit / repo.create 写入，因此沙箱命令可以在没有
+账本记录的情况下修改工作区，运行会被报告为“没有变更但成功”。ADR 0012 通过将
+进程写入归因到账本关闭了这一缺口。
 """
 
 import sys
@@ -38,15 +37,14 @@ class TestExecWritesAreAttributed:
         assert "return a+b" in (repo / "src" / "calc.py").read_text(), (
             "precondition: the command must actually have written the file"
         )
-        # The write is now attributed, so the gate demands a diff and a passing
-        # check after it — which this run never produced.
+        # 写入现在会被归因，因此门禁要求之后有 diff 和通过的 check——但本次
+        # 运行从未产生它们。
         assert not (
             outcome.status is RunStatus.SUCCEEDED and outcome.stop_reason is StopReason.FINAL_ANSWER
         ), "a run that rewrote a file was accepted as having made no changes"
 
     async def test_a_run_whose_exec_changes_nothing_is_unaffected(self, tmp_path: Path) -> None:
-        """Read-only commands must not be recorded as writes, or every safe
-        exec would falsely trip the gate."""
+        """只读命令不得记录为写入，否则每个安全的 exec 都会错误触发门禁。"""
         repo = make_repo(tmp_path)
         turns = [
             [tool("c1", "repo.exec", argv=["ls", "-la"], cwd="."), finish("tool_calls")],
@@ -63,10 +61,9 @@ class TestProtectedPathTamperIsDetected:
     async def test_a_process_that_rewrites_dot_git_raises_an_error_notice(
         self, tmp_path: Path
     ) -> None:
-        """Landlock cannot carve `.git` out of a writable workspace, and the
-        change snapshot excludes protected paths from normal attribution — so a
-        process touching them was previously invisible. It must now surface as
-        an error in the audit trail (ADR 0017)."""
+        """Landlock 无法从可写工作区中划出 `.git`，而变更快照会将受保护路径排除在
+        普通归因之外——因此进程触碰这些路径过去是不可见的。现在必须在审计轨迹中
+        作为错误暴露（ADR 0017）。"""
         from haven.contracts.events import Notice
 
         repo = make_repo(tmp_path)
@@ -98,8 +95,8 @@ class TestProtectedPathTamperIsDetected:
         assert errors, "a protected-path change during a process must be surfaced, not silent"
 
     async def test_an_exec_that_tampers_fails_as_a_tool_call(self, tmp_path: Path) -> None:
-        """ADR 0018: the violation is a hard outcome. The exec call itself must
-        return protected_path_tampered, not succeed with a side note."""
+        """ADR 0018：违规是硬结果。exec 调用本身必须返回 protected_path_tampered，
+        而不是成功后附带一条说明。"""
         from haven.contracts.events import ToolCompleted
 
         repo = make_repo(tmp_path)
@@ -130,9 +127,8 @@ class TestProtectedPathTamperIsDetected:
     async def test_a_check_that_tampers_fails_and_records_no_check_evidence(
         self, tmp_path: Path
     ) -> None:
-        """A recipe that rewrites the control plane is not a verification: the
-        call fails with protected_path_tampered and no check evidence lands, so
-        the Evidence Gate cannot be satisfied by a tampering check (ADR 0018)."""
+        """重写控制平面的配方不是验证：调用会以 protected_path_tampered 失败，且不
+        会产生检查证据，因此 Evidence Gate 不能被篡改检查满足（ADR 0018）。"""
         from haven.contracts.events import ToolCompleted
         from haven.contracts.tools import RecipeSpec
         from tests.integration.harness import default_recipes

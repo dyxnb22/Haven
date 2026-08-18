@@ -1,81 +1,70 @@
-"""Haven: an evidence-driven, replayable, locally scoped coding agent.
+"""Haven：一个以证据为驱动、可重放且作用域限定在本地的编程代理。
 
-One sentence: the model may only *propose* actions; deterministic code owns
-permission, execution, and the definition of success.
+一句话概括：模型只能“提出”操作；权限、执行以及成功定义都由确定性代码负责。
 
-Layer map (enforced by import-linter; see pyproject `[tool.importlinter]`)
-==========================================================================
+分层结构（由 import-linter 强制执行；见 pyproject `[tool.importlinter]`）
+=========================================================================
 
-    interfaces/   CLI (Typer) and TUI (Textual). Turn user intent into
-                  service calls, render events. Never import adapters.
-    bootstrap.py  The composition root - the ONLY module that wires
-                  adapters into application services.
-    application/  Use cases. The two big orchestrators live here:
-                  run_service.py (the agent loop) and tool_pipeline.py
-                  (the single execution channel). Plus context_builder,
-                  compaction, recovery, replay, approvals, registry.
-    domain/       Pure logic, no I/O: policy, approval digests, budgets,
-                  evidence gate, tickets, state transitions, review.
-    ports/        Protocols the core depends on: model, workspace,
-                  executor, sandbox, session store, event sink, clock.
-    adapters/     Implementations of ports: OpenAI-compatible provider,
-                  filesystem workspace, process executor, OS sandbox
-                  launchers (Seatbelt/Landlock), SQLite session store,
-                  workspace writer lease.
-    contracts/    Strict Pydantic DTOs crossing every boundary: tool
-                  args/results, model messages, events, checkpoints.
-    evalkit/      Offline eval harness (ScriptedModel + real adapters).
+    interfaces/   CLI（Typer）和 TUI（Textual）。将用户意图转换为服务调用并渲染事件，
+                  绝不导入 adapters。
+    bootstrap.py  组合根——唯一负责将 adapters 接入应用服务的模块。
+    application/  用例层。两个主要编排器位于此处：run_service.py（代理循环）和
+                  tool_pipeline.py（唯一执行通道），以及 context_builder、compaction、
+                  recovery、replay、approvals、registry。
+    domain/       纯逻辑，不执行 I/O：策略、审批摘要、预算、证据门禁、票据、
+                  状态转换和审查。
+    ports/        核心依赖的协议：model、workspace、executor、sandbox、会话存储、
+                  event sink、clock。
+    adapters/     ports 的实现：OpenAI 兼容提供商、文件系统工作区、进程执行器、
+                  操作系统沙箱启动器（Seatbelt/Landlock）、SQLite 会话存储、
+                  工作区写入租约。
+    contracts/    穿过各边界的严格 Pydantic DTO：工具参数/结果、模型消息、事件、检查点。
+    evalkit/      离线评估 harness（ScriptedModel + 真实 adapters）。
 
-The security spine (why the layering is shaped this way)
-========================================================
+安全主线（分层采用这种形态的原因）
+====================================
 
-Every model-proposed side effect passes through exactly one channel
-(application/tool_pipeline.py):
+模型提出的每个副作用都必须经过唯一的通道（application/tool_pipeline.py）：
 
-    Registry -> strict schema -> workspace facts -> deterministic policy
-    -> exact approval (digest-bound, single-use) -> TOCTOU re-check
-    -> ExecutionTicket -> sandboxed executor -> evidence + journal
+    Registry -> 严格模式 -> 工作区事实 -> 确定性策略
+    -> 精确审批（绑定摘要、单次使用）-> TOCTOU 再检查
+    -> ExecutionTicket -> 沙箱执行器 -> 证据 + 日志
 
-and a run can only *succeed* if the Evidence Gate (domain/evidence.py)
-saw a diff plus a green registered check recorded after the last write.
-Model text is never evidence. Docs: docs/SECURITY.md, docs/adr/.
+只有当证据门禁（domain/evidence.py）看到了 diff，以及在最后一次写入之后记录的
+通过状态 check 时，一次运行才能“成功”。模型文本永远不是证据。文档见
+docs/SECURITY.md、docs/adr/。
 
-Business flows and their entry points
-=====================================
+业务流程及其入口
+================
 
-Interactive session   interfaces/cli.py `tui` (the default command)
-                      -> bootstrap.build_services -> interfaces/tui/app.py
-                      -> RunService.start_run / continue_run; approvals
-                      arrive as modal cards; typing while a run is active
-                      queues steering for the next turn boundary.
-Headless run          interfaces/cli.py `run` (read-only by default;
-                      --write + --approval-policy for unattended fixes,
-                      --jsonl / --events for machine consumption).
-Sessions / forensics  `sessions list|show`, `replay`, `export`,
-                      `debug-context` - pure projections of the journal.
-Crash recovery        `resume` -> application/recovery_service.py
-                      classifies interrupted effects by digest; anything
-                      unprovable blocks until `reconcile`. User-level undo
-                      is `rewind` (fail-closed compensation).
-Recipe discovery      `discover [--accept]` -> domain/discovery.py
-                      proposes verify commands from the repo's own files;
-                      `init` bundles it with an environment summary for
-                      first contact with a repository.
-Store maintenance     `gc` -> application/maintenance.py prunes old runs
-                      and unreferenced artifacts (dry run by default).
-Offline eval          `eval --offline` -> evalkit/runner.py; live suites
-                      live in evals/ (see docs/EVAL_LIVE.md).
+交互会话            interfaces/cli.py 的 `tui`（默认命令）
+                    -> bootstrap.build_services -> interfaces/tui/app.py
+                    -> RunService.start_run / continue_run；审批以模态卡片出现；
+                    运行活跃期间输入的内容会排队，等待下一轮边界处理。
+无头运行            interfaces/cli.py 的 `run`（默认只读；无人值守修复使用
+                    --write + --approval-policy，机器消费使用 --jsonl / --events）。
+会话 / 取证          `sessions list|show`、`replay`、`export`、`debug-context`——
+                    对日志的纯投影。
+崩溃恢复            `resume` -> application/recovery_service.py 按摘要对中断副作用分类；
+                    无法证明的情况会阻塞，直到执行 `reconcile`。用户级撤销使用
+                    `rewind`（失败即拒绝的补偿操作）。
+配方发现            `discover [--accept]` -> domain/discovery.py 从仓库自身文件中
+                    提议 verify 命令；`init` 将其与环境摘要组合，用于首次接触仓库。
+存储维护            `gc` -> application/maintenance.py 清理旧运行和未引用构件
+                   （默认只进行 dry run）。
+离线评估            `eval --offline` -> evalkit/runner.py；在线套件位于 evals/（见
+                    docs/EVAL_LIVE.md）。
 
-Suggested reading order for a first pass
-========================================
+首次阅读建议顺序
+================
 
-    1. domain/policy.py + domain/approval.py   (the permission model)
-    2. application/tool_pipeline.py            (the execution channel)
-    3. application/run_service.py              (the agent loop)
-    4. application/context_builder.py          (what the model sees)
-    5. domain/evidence.py                      (what "success" means)
-    6. adapters/workspace_fs.py                (how writes really land)
-    7. interfaces/tui/app.py + presenter.py    (how it reaches the user)
+    1. domain/policy.py + domain/approval.py   （权限模型）
+    2. application/tool_pipeline.py            （执行通道）
+    3. application/run_service.py              （代理循环）
+    4. application/context_builder.py          （模型能看到什么）
+    5. domain/evidence.py                      （“成功”意味着什么）
+    6. adapters/workspace_fs.py                （写入实际上如何落盘）
+    7. interfaces/tui/app.py + presenter.py    （如何呈现给用户）
 """
 
 __version__ = "0.1.0"

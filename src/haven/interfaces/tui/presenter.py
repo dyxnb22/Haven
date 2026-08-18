@@ -1,8 +1,7 @@
-"""Presenter: a pure reducer from application events to view state.
+"""Presenter：将应用事件纯粹归约为视图状态。
 
-The TUI renders PresenterState and nothing else; it never reaches into the
-agent, the workspace, or the policy. Replay reuses the same reducer, which is
-why a replayed run reconstructs the same screen.
+TUI 只渲染 PresenterState，不渲染其他内容；它不会深入访问代理、工作区或策略。
+重放会复用同一个归约器，因此重放运行能够重建相同的界面。
 """
 
 from __future__ import annotations
@@ -37,19 +36,18 @@ _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
 def sanitize(text: str, limit: int = 2000) -> str:
-    """Neutralize untrusted text for display, and bound its length.
+    """将不可信文本处理为可安全显示的内容，并限制其长度。
 
-    Two hazards, both from text the model or the repository controls:
+    有两类风险，都来自模型或仓库控制的文本：
 
-    - ANSI/control sequences, which can rewrite the terminal around the pane;
-    - Rich console markup, which the chat/diff/evidence/trace panels render
-      (they are `Static` widgets with markup enabled). Left as-is, model
-      output containing `[red]`, `[/]`, or `[link=...]` restyles or hides
-      parts of the transcript — enough to forge a convincing "succeeded"
-      line. Escaping keeps the markup visible as the literal text it is.
+    - ANSI/控制序列可能重写面板周围的终端内容；
+    - Rich 控制台标记会由 chat/diff/evidence/trace 面板渲染（这些是启用了标记的
+      `Static` widgets）。如果原样保留，包含 `[red]`、`[/]` 或 `[link=...]` 的
+      模型输出可能重新设置样式或隐藏对话记录的一部分，足以伪造令人信服的“成功”
+      行。转义后，标记会以字面文本形式显示。
 
-    The timeline `RichLog` already disables markup, so this only has to hold
-    the line for the panels; escaping everywhere keeps one rule.
+    时间线 `RichLog` 已经禁用标记，因此这里主要是保护各面板中的文本；统一在所有
+    位置转义可以保持单一规则。
     """
     cleaned = _CONTROL_CHARS.sub("", text)
     cleaned = escape(cleaned)
@@ -60,7 +58,7 @@ def sanitize(text: str, limit: int = 2000) -> str:
 
 @dataclass(frozen=True, slots=True)
 class TimelineEntry:
-    kind: str  # user | agent | tool | policy | approval | notice | system
+    kind: str  # 取值：user | agent | tool | policy | approval | notice | system
     text: str
 
 
@@ -81,7 +79,7 @@ class PresenterState:
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float = 0.0
-    #: False when the model has no rate card, so the figure is a placeholder.
+    #: 模型没有费率卡时为 False，此时数值是占位值。
     cost_known: bool = True
     usage_estimated: bool = False
     running: bool = False
@@ -161,8 +159,8 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
         return replace(state, streaming_text="", reasoning_text="")
 
     if isinstance(event, AssistantReasoning):
-        # Kept in a separate buffer so thinking is visibly distinct from the
-        # answer, and cleared when the turn completes.
+        # 保存在单独的缓冲区中，使用户能明显区分思考和答案，并在轮次完成
+        # 时清空。
         return replace(state, reasoning_text=state.reasoning_text + sanitize(event.text, 10000))
 
     if isinstance(event, ModelCompleted):

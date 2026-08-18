@@ -1,14 +1,13 @@
-"""The quality gates, declared once, run the same way locally and in CI.
+"""质量门禁只声明一次，并在本地和 CI 中以相同方式运行。
 
-CI steps and the README's development command list were two hand-maintained
-copies of one sequence. Copies drift: a gate added to CI is absent locally until
-someone notices, and a local-only check never protects `main`. Here the gates
-are one list with explicit dependencies; CI picks a mode, a developer picks a
-mode, and both traverse the same graph.
+CI 步骤和 README 的开发命令列表原本是同一序列的两份手工维护副本。副本会漂移：
+加入 CI 的门禁在本地可能直到有人注意才出现，而只在本地运行的检查永远保护不了
+`main`。现在门禁是一份带显式依赖的列表；CI 选择模式，开发者选择模式，二者都
+遍历同一张图。
 
-    uv run python scripts/gates.py            # everything (default: full)
-    uv run python scripts/gates.py --mode fast    # static checks only, no tests
-    uv run python scripts/gates.py --list         # show the graph
+    uv run python scripts/gates.py            # 全部（默认：full）
+    uv run python scripts/gates.py --mode fast    # 只做静态检查，不测试
+    uv run python scripts/gates.py --list         # 显示图
 """
 
 from __future__ import annotations
@@ -25,22 +24,21 @@ ROOT = Path(__file__).resolve().parent.parent
 
 @dataclass(frozen=True, slots=True)
 class Gate:
-    """One quality check: an id, the command, when it runs, what it needs."""
+    """一项质量检查：包含 id、命令、运行时机和依赖。"""
 
     id: str
     command: str
-    #: Modes this gate belongs to. A gate reachable only as a dependency needs
-    #: no mode of its own.
+    #: 此门禁所属的模式。只作为依赖被触达的门禁不需要单独的模式。
     modes: tuple[str, ...] = ()
-    #: Gates that must succeed first. A dependency is pulled into the run even
-    #: when its own modes exclude it, so a gate never executes without what it
-    #: assumes (coverage reporting needs the suite to have produced data).
+    #: 必须先成功的门禁。即使依赖自身的模式不包含当前模式，也会将其拉入本次
+    #: 运行，因此门禁不会在缺少前置条件的情况下执行（覆盖率报告需要测试套件
+    #: 先产出数据）。
     needs: tuple[str, ...] = ()
     description: str = ""
 
 
-#: The shipped graph. `--mode fast` is the pre-commit sweep (no test run);
-#: `full` is what CI enforces.
+#: 发布的门禁图。`--mode fast` 是提交前检查（不运行测试）；`full` 是 CI
+#: 强制执行的模式。
 GATES: list[Gate] = [
     Gate(
         "format",
@@ -120,7 +118,7 @@ GATES: list[Gate] = [
 
 
 def validate(gates: list[Gate]) -> None:
-    """Reject a malformed graph loudly, before anything runs."""
+    """在任何内容运行前明确拒绝格式错误的图。"""
     seen: set[str] = set()
     for gate in gates:
         if gate.id in seen:
@@ -135,9 +133,9 @@ def validate(gates: list[Gate]) -> None:
 
 
 def cycle_in(gates: list[Gate]) -> bool:
-    """Whether the `needs` edges contain a cycle."""
+    """判断 `needs` 边中是否存在环。"""
     by_id = {gate.id: gate for gate in gates}
-    state: dict[str, int] = {}  # 0 = visiting, 1 = done
+    state: dict[str, int] = {}  # 0 = 正在访问，1 = 已完成
 
     def visit(node: str) -> bool:
         if state.get(node) == 1:
@@ -155,7 +153,7 @@ def cycle_in(gates: list[Gate]) -> bool:
 
 
 def order_for(gates: list[Gate], ids: list[str]) -> list[str]:
-    """`ids` in dependency order: everything a gate needs precedes it."""
+    """按依赖顺序排列 `ids`：门禁所需的一切都排在该门禁之前。"""
     by_id = {gate.id: gate for gate in gates}
     wanted = set(ids)
     ordered: list[str] = []
@@ -176,10 +174,10 @@ def order_for(gates: list[Gate], ids: list[str]) -> list[str]:
 
 
 def select(gates: list[Gate], mode: str) -> list[Gate]:
-    """The gates to run for `mode`, dependencies included, in run order."""
+    """返回 `mode` 要运行的门禁，包含依赖，并按运行顺序排列。"""
     by_id = {gate.id: gate for gate in gates}
     chosen: set[str] = {gate.id for gate in gates if mode in gate.modes}
-    # Pull in dependencies transitively: a gate must never run without them.
+    # 传递性地纳入依赖：门禁绝不能在缺少依赖的情况下运行。
     frontier = list(chosen)
     while frontier:
         for need in by_id[frontier.pop()].needs:

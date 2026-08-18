@@ -1,13 +1,11 @@
-"""Deterministic review of what a run actually wrote.
+"""对运行实际写入内容进行确定性审查。
 
-The Evidence Gate proves that a change exists and that verification passed. It
-says nothing about the *content* of the change, so a run can add an API key or
-leave a `breakpoint()` behind and still look successful.
+Evidence Gate 证明变更存在且验证通过，但不判断变更的*内容*，因此运行即使加入
+API 密钥或留下 `breakpoint()`，看起来仍可能是成功的。
 
-This module inspects only the lines a run added, using patterns chosen for a low
-false-positive rate. It is a program judgment with no tokens and no second
-model — see ADR 0007 for why that was preferred over a Reviewer agent. These are
-heuristics for obvious mistakes, not a defense against a determined adversary.
+本模块只检查运行新增的行，并使用经过选择、误报率较低的模式。这是无需 token、
+也不调用第二个模型的程序判断——为何选择它而不是 Reviewer 代理，见 ADR 0007。
+这些只是针对明显错误的启发式检查，不是抵御蓄意攻击者的防线。
 """
 
 from __future__ import annotations
@@ -15,7 +13,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-#: A file that loses at least this fraction and this many lines looks blanked.
+#: 文件同时丢失至少这一比例和这么多行时，通常可视为空文件化结果。
 MASS_DELETION_RATIO = 0.8
 MASS_DELETION_MIN_LINES = 50
 
@@ -75,18 +73,17 @@ _DEBUG_PATTERN = _Pattern(
     "a debugger statement was left in the code",
 )
 
-#: Placeholder credentials that are conventional in examples and fixtures.
+#: 示例和测试夹具中常见的占位凭据。
 _PLACEHOLDER = re.compile(
     r"(?i)(x{6,}|changeme|placeholder|your[-_]?(?:key|token|password)|example\.com|<[^>]+>)"
 )
 
 
 def review_diff(diff_text: str) -> tuple[ReviewFinding, ...]:
-    """Inspect the added lines of a unified diff.
+    """检查统一差异中新增的行。
 
-    Only `+` lines are examined, so content that already existed in the
-    repository can never produce a finding — the same "this run only"
-    attribution that `repo.diff` uses.
+    只检查 `+` 行，因此仓库中原本就存在的内容永远不会产生发现——这与
+    `repo.diff` 使用的是同一套“仅归属于本次运行”的归因规则。
     """
     findings: list[ReviewFinding] = []
     current_path = ""

@@ -1,4 +1,4 @@
-"""Capture the Git baseline of a workspace at run start."""
+"""捕获运行开始时工作区的 Git 基线。"""
 
 from __future__ import annotations
 

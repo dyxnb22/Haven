@@ -1,4 +1,4 @@
-"""Typed identifiers so run/step/call/session ids are never mixed up."""
+"""类型化标识符，避免混淆 run/step/call/session id。"""
 
 from __future__ import annotations
 

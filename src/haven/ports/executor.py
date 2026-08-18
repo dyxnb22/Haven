@@ -1,4 +1,4 @@
-"""Executor port: registered verification recipes and sandboxed commands."""
+"""执行器端口：已注册的验证配方和沙箱命令。"""
 
 from __future__ import annotations
 
@@ -23,10 +23,10 @@ class CheckOutcome:
 
 @dataclass(frozen=True, slots=True)
 class ExecSpec:
-    """One command to run confined.
+    """一条需要在受限环境中运行的命令。
 
-    `argv` is the program as proposed; wrapping happens inside the executor so
-    there is exactly one place that can forget to do it.
+    `argv` 是提议的程序；包装在执行器内部完成，因此系统中只有一个可能忘记执行
+    包装的位置。
     """
 
     argv: tuple[str, ...]

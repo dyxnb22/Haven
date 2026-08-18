@@ -1,10 +1,8 @@
-"""Recovery: resume interrupted runs without replaying ambiguous side effects.
+"""恢复：继续中断的运行，但不重放有歧义的副作用。
 
-The checkpoint gives fast state; the execution journal gives effect truth.
-An edit that started but was never confirmed is classified by comparing the
-file's current digest against the recorded preimage/postimage. Anything that
-cannot be proven is EFFECT_UNKNOWN and requires explicit human reconciliation
-— never an automatic replay.
+检查点提供快速状态；执行日志提供副作用事实。已经开始但从未确认的编辑，会通过比较
+文件当前摘要与记录的 preimage/postimage 来分类。任何无法证明的情况都属于 EFFECT_UNKNOWN，
+需要人工明确调和——绝不自动重放。
 """
 
 from __future__ import annotations
@@ -43,7 +41,7 @@ class RecoveryReport:
 
 @dataclass(frozen=True, slots=True)
 class RewindReport:
-    """The outcome of a user-level undo of one run's file changes."""
+    """用户级撤销一次运行文件变更的结果。"""
 
     run_id: str
     rewound: bool = False
@@ -76,7 +74,7 @@ class RecoveryService:
         if checkpoint.workspace_digest != self._workspace.workspace_digest:
             blockers.append("workspace identity changed since the checkpoint; refusing to resume")
 
-        # Classify effects that were started but never confirmed.
+        # 对已开始但从未确认的副作用进行分类。
         for record in await self._store.load_executions(run_id):
             if record.effect_state not in (EffectState.STARTED, EffectState.EFFECT_UNKNOWN):
                 continue
@@ -144,9 +142,9 @@ class RecoveryService:
                 "file matches neither preimage nor postimage",
             )
         if tool_name == "repo.create" and path:
-            # No preimage exists for a create; absence is the proof it never
-            # ran. The expected postimage is journaled at STARTED time, so a
-            # present file that matches it is proven complete.
+            # create 没有 preimage；目标不存在就是它从未执行的证明。预期
+            # postimage 会在 STARTED 时写入日志，因此存在且匹配该内容的文件
+            # 可以证明操作已完成。
             facts = self._workspace.path_facts(path)
             if facts.digest is None:
                 return EffectFinding(
@@ -197,9 +195,9 @@ class RecoveryService:
                 "file exists but does not match the approved preimage",
             )
         if tool_name == "repo.move" and path and record.dest_path:
-            # A move never changes content, so the approved preimage identifies
-            # the file at either end. Only the copy-landed-but-source-remains
-            # window is genuinely ambiguous (completing it would be a replay).
+            # move 不会改变内容，因此已批准的 preimage 可以识别两端的文件。
+            # 只有“副本已落地但源文件仍在”的窗口真正存在歧义（完成它会变成
+            # 重放操作）。
             src = self._workspace.path_facts(path)
             dest = self._workspace.path_facts(record.dest_path)
             if src.digest == preimage and dest.digest is None:
@@ -234,8 +232,8 @@ class RecoveryService:
                 "unknown",
                 "neither end matches the approved preimage cleanly",
             )
-        # Processes (repo.check, repo.exec) may or may not have run; there is no
-        # digest to prove it either way, so they stay unknown and block resume.
+            # 进程（repo.check、repo.exec）可能已经运行，也可能没有；没有摘要
+            # 能证明是哪一种情况，因此它们保持 unknown 并阻止恢复。
         return EffectFinding(
             call_id,
             tool_name,
@@ -245,15 +243,13 @@ class RecoveryService:
         )
 
     async def rewind(self, run_id: str) -> RewindReport:
-        """User-level undo: restore every file this run changed to its
-        pre-run content, refusing wherever disk state is not provably the
-        run's own output.
+        """用户级撤销：将本次运行修改过的每个文件恢复为运行前内容；凡是无法证明磁盘状态
+        是该运行自身产物的地方都拒绝操作。
 
-        Safety rule per path: the file on disk must still match the run's
-        last recorded digest for it (the postimage of its final edit). A file
-        that changed since — an external edit, a later run — blocks that path
-        instead of being clobbered; rewind is compensation, never blind
-        replay (the same stance reconcile takes).
+        每条路径的安全规则是：磁盘上的文件必须仍然匹配该运行最后记录的摘要（最后一次
+        编辑的 postimage）。之后发生过变化的文件——无论是外部编辑还是后续运行——都会
+        阻塞该路径，而不是被强行覆盖；rewind 是补偿操作，绝不是盲目重放（reconcile
+        也遵循相同立场）。
         """
         checkpoint = await self._store.load_checkpoint(run_id)
         if checkpoint is None:
@@ -264,9 +260,9 @@ class RecoveryService:
                 blockers=("workspace identity changed since the run; refusing to rewind",),
             )
 
-        # The run's final word on each path: the postimage of its last edit
-        # ("" = the run deleted it). Paths created by the run are those whose
-        # first edit had no preimage.
+        # 本次运行对每条路径的最终结果：最后一次 edit 的 postimage
+        # （"" 表示运行删除了它）。运行创建的路径，是第一次 edit 没有
+        # preimage 的路径。
         final_digest: dict[str, str] = {}
         first_preimage: dict[str, str] = {}
         for edit in checkpoint.evidence.edits:
@@ -274,12 +270,12 @@ class RecoveryService:
             first_preimage.setdefault(edit.path, edit.preimage_digest)
 
         blocked: list[str] = []
-        planned: list[tuple[str, str | None]] = []  # (path, restore content | None=delete)
+        planned: list[tuple[str, str | None]] = []  # （path，恢复内容 | None=delete）
         for path, artifact_digest in sorted(checkpoint.original_artifacts.items()):
             expected = final_digest.get(path)
             facts = self._workspace.path_facts(path)
             if expected == "":
-                # The run deleted it; it must still be absent.
+                # 运行删除了它；此时它必须仍然不存在。
                 if facts.digest is not None:
                     blocked.append(f"{path}: reappeared since the run deleted it")
                     continue
@@ -287,7 +283,7 @@ class RecoveryService:
                 blocked.append(f"{path}: changed since this run; refusing to overwrite")
                 continue
             if first_preimage.get(path) == "":
-                planned.append((path, None))  # created by the run -> remove
+                planned.append((path, None))  # 由运行创建 -> 删除
             else:
                 artifact = await self._store.get_artifact(artifact_digest)
                 if artifact is None:
@@ -328,7 +324,7 @@ class RecoveryService:
         await self._store.update_execution_state(call_id, state)
 
     async def build_context(self, checkpoint: CheckpointV1) -> RunContext:
-        """Rebuild run state and restore run-scoped originals for diffing."""
+        """重建运行状态，并恢复运行级原始内容以便生成 diff。"""
         originals: dict[str, str] = {}
         for path, digest in checkpoint.original_artifacts.items():
             content = await self._store.get_artifact(digest)

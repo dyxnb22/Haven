@@ -1,14 +1,11 @@
-"""Deterministic compaction: dropped tool outputs become recorded facts.
+"""确定性压缩：被丢弃的工具输出会变成记录事实。
 
-When the transcript outgrows the context budget, the oldest tool outputs are
-removed and replaced by one program-assembled digest of what they contained.
-The model is never asked to summarize — a summary it wrote could invent facts
-that later turns treat as established, including permission-shaped ones.
+当 transcript 超出上下文预算时，最旧的工具输出会被移除，并替换为一份由程序根据其
+内容组装的摘要。绝不会要求模型进行总结——模型写出的摘要可能会凭空编造事实，后续
+轮次却把这些事实当成既定内容，包括形似权限的事实。
 
-The digest is derived from the dropped messages themselves rather than from
-live run state. That keeps this a pure function, and it keeps the digest
-byte-identical between compaction events, so it does not move the cacheable
-prefix on every turn (ADR 0008).
+摘要直接由被丢弃的消息推导，而不是由运行时状态推导。这样它保持为纯函数，并且在多次
+压缩事件之间保持逐字节相同，不会在每一轮移动可缓存前缀（ADR 0008）。
 """
 
 from __future__ import annotations
@@ -19,8 +16,8 @@ from typing import Any
 
 from haven.contracts.model import ModelMessage
 
-#: Only structured metadata goes in, so the digest can honestly be labelled
-#: trusted. File content and model prose must never reach it.
+#: 这里只放入结构化元数据，因此可以诚实地将该摘要标记为 trusted。
+#: 文件内容和模型 prose 绝不能进入其中。
 DIGEST_HEADER = (
     "Earlier steps, condensed by the program (originals dropped to fit the "
     "context budget; these are recorded facts, not a summary):"
@@ -32,11 +29,10 @@ _DIGEST_PREFIX_CHARS = 8
 
 
 def message_chars(message: ModelMessage) -> int:
-    """Wire-size estimate for the context budget.
+    """估算消息在线协议中的大小，用于上下文预算。
 
-    Content is not the only thing sent: replayed reasoning (ADR 0014) and
-    tool-call arguments both cost tokens, so counting only `content` would
-    undercount input and let the transcript overrun the budget silently.
+    发送的内容不只有 content：重放的推理（ADR 0014）和工具调用参数都会消耗 token，
+    因此只统计 `content` 会低估输入量，让 transcript 悄悄超过预算。
     """
     size = len(message.content) + len(message.provider_reasoning)
     for call in message.tool_calls:
@@ -50,10 +46,9 @@ def _tool_name(message: ModelMessage) -> str:
 
 
 def _payload(message: ModelMessage) -> dict[str, Any]:
-    """The JSON body of a tool output, or an empty mapping.
+    """返回工具输出的 JSON 主体，无法获取时返回空映射。
 
-    A malformed entry degrades to no facts rather than raising: one bad message
-    must never be able to abort a run.
+    格式错误的条目会退化为没有事实，而不是抛出异常：单条坏消息绝不能中止运行。
     """
     body = message.content
     start = body.find(">")
@@ -84,7 +79,7 @@ def _render_line(label: str, items: list[str]) -> str | None:
 
 
 def build_run_digest(dropped: list[ModelMessage]) -> str:
-    """Condense dropped messages into recorded facts. Pure and total."""
+    """将被丢弃的消息压缩为记录事实；这是纯函数，并且对所有输入都有定义。"""
     reads: list[str] = []
     edits: list[str] = []
     checks: list[str] = []
@@ -143,19 +138,16 @@ def build_run_digest(dropped: list[ModelMessage]) -> str:
 def summarize_dropped(
     messages: list[ModelMessage], limit: int
 ) -> tuple[list[ModelMessage], str, int]:
-    """Fit `messages` into `limit` characters by dropping oldest tool outputs.
+    """通过丢弃最旧的工具输出来将 `messages` 放入 `limit` 个字符以内。
 
-    Returns the surviving messages, the digest of what was dropped, and the
-    index in the surviving list where the digest belongs — or -1 when nothing
-    was dropped.
+    返回保留的消息、被丢弃内容的摘要，以及摘要在保留列表中的插入位置；如果没有丢弃
+    内容，则位置为 -1。
 
-    A tool result is dropped together with the assistant turn that requested it,
-    as a whole unit, so a kept assistant message never carries a tool call whose
-    result was dropped — an orphaned tool call that OpenAI and DeepSeek reject.
-    Assistant turns without tool calls (narrative) and user turns (gate feedback)
-    are never dropped. The two most recent tool outputs are always kept whole,
-    protected by role rather than position because the volatile tail sits after
-    the transcript.
+    工具结果会与发起该调用的 assistant 轮次作为一个整体一起丢弃，因此保留的 assistant
+    消息不会携带一个结果已被丢弃的工具调用——OpenAI 和 DeepSeek 会拒绝这种孤立工具
+    调用。没有工具调用的 assistant 轮次（叙述）和 user 轮次（门禁反馈）永远不会丢弃。
+    最近的两条工具输出始终整体保留；由于易变尾部位于 transcript 之后，这里按角色而
+    不是按位置进行保护。
     """
     total = sum(message_chars(message) for message in messages)
     if total <= limit:
@@ -182,39 +174,35 @@ def summarize_dropped(
     digest = build_run_digest(dropped)
     if not digest:
         return kept, "", -1
-    # The digest takes the place of the first message it replaces. Everything
-    # before that index is kept (the first dropped index is, by definition, the
-    # smallest of a dropped unit), so its position in `kept` is exactly that
-    # index.
+    # 摘要会取代它所替换的第一条消息。该索引之前的所有消息都会保留（按定义，
+    # 被丢弃单元的第一个索引就是其中最小的索引），因此它在 `kept` 中的位置
+    # 恰好就是该索引。
     position = min(dropped_indices)
     return kept, digest, position
 
 
 def enforce_hard_limit(messages: list[ModelMessage], limit: int) -> list[ModelMessage]:
-    """Guarantee the assembled history fits `limit`, whatever it contains.
+    """无论历史包含什么，都保证组装后的内容符合 `limit`。
 
-    `summarize_dropped` only removes *droppable* tool units, so a transcript
-    dominated by user turns (gate feedback), narrative assistant turns, or a
-    digest can still exceed the budget — the clamp was soft. This is the
-    backstop: it drops whole messages oldest-first until the total fits, and
-    if even the single most recent message is over budget it hard-truncates
-    that message's content. It never drops the final message wholesale, so a
-    request is never empty.
+    `summarize_dropped` 只会移除“可丢弃”的工具单元，因此以 user 轮次（门禁反馈）、
+    叙述性 assistant 轮次或摘要为主的 transcript 仍可能超过预算——之前的截断是软限制。
+    这里是最后的后备保护：从最旧到最新整体丢弃消息，直到总量符合预算；如果连最近的
+    单条消息也超出预算，则硬截断该消息的 content。不会整体丢弃最后一条消息，因此请求
+    不会为空。
 
-    Ordinarily a no-op — `summarize_dropped` already fit the common case; this
-    fires only when non-droppable content alone overflows, which must fail
-    safe (a truncated request) rather than be sent over-budget and 400.
+    通常这是空操作——`summarize_dropped` 已经能处理常见情况；这里只在不可丢弃内容
+    本身溢出时触发，必须以安全方式失败（发送截断后的请求），不能超预算发送后收到 400。
     """
     total = sum(message_chars(m) for m in messages)
     if total <= limit or not messages:
         return messages
     kept = list(messages)
-    # Drop oldest-first while more than one message remains and we are over.
+    # 当仍有多条消息且超出预算时，从最旧的消息开始丢弃。
     while len(kept) > 1 and total > limit:
         total -= message_chars(kept[0])
         kept.pop(0)
     if total > limit and kept:
-        # One message still over budget: truncate its content in place.
+        # 如果只剩一条消息仍超出预算，则就地截断其内容。
         only = kept[-1]
         overflow = total - limit
         content = only.content
@@ -226,12 +214,11 @@ def enforce_hard_limit(messages: list[ModelMessage], limit: int) -> list[ModelMe
 
 
 def _droppable_units(messages: list[ModelMessage]) -> list[list[int]]:
-    """Group each assistant-with-tool-calls with its following tool results.
+    """将每个带工具调用的 assistant 轮次与其后续工具结果分组。
 
-    A unit is dropped or kept as a whole, which is what keeps tool calls and
-    their results paired. Standalone tool messages (none precede them) are their
-    own droppable units; user and plain-assistant turns are not droppable and
-    form no unit.
+    一个单元要么整体丢弃，要么整体保留，这样才能让工具调用和结果保持配对。没有前置
+    assistant 轮次的独立工具消息属于自己的可丢弃单元；user 轮次和普通 assistant 轮次
+    不可丢弃，也不会构成单元。
     """
     units: list[list[int]] = []
     index = 0
@@ -255,7 +242,7 @@ def _droppable_units(messages: list[ModelMessage]) -> list[list[int]]:
 
 
 def _protected_units(messages: list[ModelMessage], units: list[list[int]]) -> set[int]:
-    """The trailing units covering the two most recent tool outputs."""
+    """覆盖最近两条工具输出的尾部单元。"""
     protected: set[int] = set()
     tools_protected = 0
     for unit_index in range(len(units) - 1, -1, -1):

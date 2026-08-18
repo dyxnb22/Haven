@@ -1,30 +1,24 @@
-"""Propose verification recipes from a project's own files.
+"""根据项目自身文件提出验证配方。
 
-A fresh repository has no `.haven.toml`, so the Evidence Gate has no check to
-demand and every edit dead-ends at `verification_unavailable`. This module
-reads the ordinary project files a human would recognise — `pyproject.toml`,
-`tox.ini`, `setup.cfg`, `package.json`, `Makefile`, `Cargo.toml`, `go.mod` —
-plus a shallow listing of the tree, and suggests the check command they imply.
+全新的仓库没有 `.haven.toml`，因此 Evidence Gate 没有可要求的检查，每次编辑
+都会以 `verification_unavailable` 结束。本模块读取人类通常会识别的项目文件——
+`pyproject.toml`、`tox.ini`、`setup.cfg`、`package.json`、`Makefile`、`Cargo.toml`、
+`go.mod`——以及浅层目录列表，并据此建议相应的检查命令。
 
-It is pure and runs nothing. The model never supplies a command; detection is
-program-driven and the user authorizes what actually becomes a recipe by
-registering it. Suggestions are conservative: a signal has to be present before
-a command is proposed, so the output is a short list a human can trust rather
-than a guess.
+本模块是纯逻辑，不会运行任何命令。模型不会提供命令；检测由程序驱动，用户通过
+注册配方来授权哪些内容真正生效。建议采用保守策略：只有检测到信号才提出命令，
+因此输出是人类可以信任的短列表，而不是猜测。
 
-The pytest suggestions were tuned against five real repositories
-(docs/EVAL_LIVE.md):
+pytest 建议根据五个真实仓库进行了调校（`docs/EVAL_LIVE.md`）：
 
-- Always `python -m pytest`, never bare `pytest`: `python -m` puts the checkout
-  on `sys.path`, while the bare binary quietly tested the *installed* copy of
-  the same library (idna is a transitive dependency of this very project, and
-  one behavioral difference produced one failing test).
-- Projects with no pytest configuration anywhere still usually have a `tests/`
-  or `test/` directory of `test_*.py` files (jmespath ships only `setup.py`);
-  that structure is itself a signal, and the suggestion is scoped to the
-  directory it came from.
-- A `src/<package>/` layout is not importable from a bare checkout; pytest's
-  own `pythonpath` override closes that without generated shims (tomli).
+- 始终使用 `python -m pytest`，不要直接使用 `pytest`：`python -m` 会将检出目录
+  加入 `sys.path`，而裸二进制会悄悄测试同一库的*已安装*副本（idna 是本项目的
+  传递依赖，一个行为差异就导致了一个失败测试）。
+- 没有任何 pytest 配置的项目通常仍有包含 `test_*.py` 文件的 `tests/` 或 `test/`
+  目录（jmespath 只有 `setup.py`）；这个结构本身就是信号，建议会限定到发现
+  它的目录。
+- `src/<package>/` 布局无法从裸检出目录导入；pytest 自身的 `pythonpath` 覆盖可以
+  解决此问题，而不需要生成 shim（tomli）。
 """
 
 from __future__ import annotations
@@ -39,13 +33,13 @@ from dataclasses import dataclass
 class RecipeCandidate:
     id: str
     argv: tuple[str, ...]
-    #: Why this was suggested, shown to the user so the proposal is auditable.
+    #: 提出此建议的原因，会展示给用户，以便审计这份提案。
     rationale: str
 
 
 @dataclass(frozen=True, slots=True)
 class _TreeFacts:
-    """Structure gleaned from a shallow path listing."""
+    """从浅层路径列表中提取的结构信息。"""
 
     tests_dir: str | None
     src_layout: bool
@@ -63,13 +57,11 @@ def _tree_facts(paths: Iterable[str]) -> _TreeFacts:
 
 
 def _plugin_warning(files: dict[str, str]) -> str:
-    """Warn when the project's own pytest config demands plugins.
+    """当项目自身的 pytest 配置要求插件时发出警告。
 
-    Measured on wcwidth: its tox.ini addopts require pytest-cov, so the
-    suggested command fails with a usage error in any environment without the
-    plugin. The suggestion still respects the project's config — overriding
-    addopts could break projects whose options are load-bearing — but the
-    rationale must say what the environment has to provide.
+    在 wcwidth 上测得：它的 tox.ini addopts 要求 pytest-cov，因此在没有该插件的
+    环境中，建议命令会因用法错误而失败。建议仍然尊重项目配置——覆盖 addopts
+    可能破坏项目依赖的选项——但理由必须说明环境需要提供什么。
     """
     config_text = "\n".join(
         files.get(name, "") for name in ("pyproject.toml", "tox.ini", "setup.cfg")
@@ -85,13 +77,11 @@ def _plugin_warning(files: dict[str, str]) -> str:
 
 
 def _pytest_candidate(files: dict[str, str], tree: _TreeFacts) -> RecipeCandidate | None:
-    """One pytest suggestion, from the strongest signal present.
+    """根据最强的现有信号提出一个 pytest 建议。
 
-    A project that configures pytest itself gets an unscoped run — its config
-    (testpaths, addopts, pythonpath) is the authority, and overriding it could
-    break projects whose options are load-bearing. Only the structural fallback,
-    where no configuration exists to respect, scopes the run and repairs a
-    src layout.
+    自身配置了 pytest 的项目会得到不限定范围的运行方式——其配置（testpaths、
+    addopts、pythonpath）是权威，覆盖它们可能破坏项目依赖的选项。只有在没有可
+    尊重的配置时，结构化回退方案才会限定运行范围并修复 src 布局。
     """
     warning = _plugin_warning(files)
     pyproject = files.get("pyproject.toml", "")
@@ -141,7 +131,7 @@ def _node(content: str) -> RecipeCandidate | None:
 
 
 def _makefile(content: str) -> RecipeCandidate | None:
-    # A `test:` target at the start of a line, the usual Make convention.
+    # 行首的 `test:` 目标，这是 Make 中的常见约定。
     if re.search(r"^test:", content, re.MULTILINE):
         return RecipeCandidate("make-test", ("make", "test"), "Makefile has a test target")
     return None
@@ -155,9 +145,8 @@ def _go(_content: str) -> RecipeCandidate | None:
     return RecipeCandidate("go-test", ("go", "test", "./..."), "go.mod present")
 
 
-#: filename -> detector, for the single-file ecosystems. Ordered, so the output
-#: is deterministic; the pytest candidate (which weighs several files plus the
-#: tree) always comes first.
+#: 单文件生态中的 filename -> detector 映射。按顺序排列以保证输出确定；
+#: pytest 候选项会综合多个文件和目录树判断，因此始终排在最前面。
 _DETECTORS = (
     ("package.json", _node),
     ("Makefile", _makefile),
@@ -165,8 +154,8 @@ _DETECTORS = (
     ("go.mod", _go),
 )
 
-#: Files the callers should read and pass in. Exposed so the CLI and the eval
-#: harness stay in step with the detectors.
+#: 调用方应读取并传入的文件。将其公开是为了让 CLI 和评估测试框架与各个
+#: 检测器保持同步。
 KNOWN_FILES = (
     "pyproject.toml",
     "tox.ini",
@@ -179,11 +168,11 @@ KNOWN_FILES = (
 
 
 def discover_recipes(files: dict[str, str], paths: Iterable[str] = ()) -> list[RecipeCandidate]:
-    """Suggest check recipes from project-file contents and a shallow listing.
+    """根据项目文件内容和浅层目录列表提出检查配方。
 
-    `files` maps the `KNOWN_FILES` present to their contents; `paths` is a
-    relative-path listing (top level plus the `tests`/`test`/`src` directories
-    is enough). Pure and total.
+    `files` 将存在的 `KNOWN_FILES` 映射到其内容；`paths` 是相对路径列表（顶层
+    目录以及 `tests`/`test`/`src` 目录就足够）。这是纯函数，并且对所有输入都有
+    定义。
     """
     candidates: list[RecipeCandidate] = []
     pytest_candidate = _pytest_candidate(files, _tree_facts(paths))

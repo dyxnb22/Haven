@@ -1,5 +1,5 @@
-"""Standalone helpers that re-exec a command under a kernel sandbox.
+"""在内核沙箱下重新执行命令的独立辅助模块。
 
-Nothing here may import the rest of Haven: these modules start inside a
-scrubbed environment, moments before the target program replaces the process.
+这里的任何内容都不能导入 Haven 的其余部分：这些模块会在已清理的环境中启动，
+紧接着目标程序替换当前进程。
 """

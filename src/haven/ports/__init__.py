@@ -1,19 +1,18 @@
-"""Ports owned by the core; adapters implement these protocols.
+"""核心层拥有的端口；适配器实现这些协议。
 
-Each port is the application layer's entire knowledge of the outside world:
+每个端口都是应用层对外部世界的全部认知：
 
-    model.py       stream one completion (ModelPort) + ProviderError taxonomy
-    workspace.py   bounded file access: read/search/edit/patch previews and
-                   applies, path facts, run-scoped diff
-    executor.py    run a registered recipe / a sandboxed command
-    sandbox.py     wrap an argv so the OS confines the child process
-    session.py     durable store: runs, events, checkpoints, approvals,
-                   execution journal, artifacts
-    event_sink.py  where emitted envelopes go (UI, JSONL, replay)
-    clock.py       injectable time
+    model.py       流式获取一次补全（ModelPort）+ ProviderError 分类
+    workspace.py   有界文件访问：读取/搜索/编辑/补丁预览与应用、路径事实、
+                   运行作用域内的差异
+    executor.py    运行已注册配方/沙箱命令
+    sandbox.py     包装 argv，使操作系统限制子进程
+    session.py     持久存储：运行、事件、检查点、审批、执行日志、构件
+    event_sink.py  发出的事件封装前往的目标（UI、JSONL、重放）
+    clock.py       可注入的时间
 
-Swapping an adapter (e.g. SQLite -> memory in tests) can change performance
-and persistence, never permissions or evidence rules - those live in domain.
+替换适配器（例如在测试中将 SQLite 换成内存存储）可以改变性能和持久化方式，但
+永远不会改变权限或证据规则——这些规则位于领域层。
 """
 
 from haven.ports.clock import ClockPort

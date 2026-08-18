@@ -1,5 +1,7 @@
 # Learning from the frozen Haven baseline
 
+**English** | [中文](LEARNING.zh-CN.md)
+
 This repository is kept as a studyable engineering baseline. The code is the
 authority for behavior; generated tables and executable gates are the authority
 for changing counts. Documents have different roles, and reading them in the

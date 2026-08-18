@@ -1,12 +1,10 @@
-"""Apply a Landlock ruleset to this process, then exec the target command.
+"""为当前进程应用 Landlock 规则集，然后执行目标命令。
 
-Landlock is a stackable LSM: a process can irrevocably restrict itself and its
-children. Rights are additive — anything not granted is denied — so read
-confinement is expressed by enumerating what stays readable rather than by
-listing what does not.
+Landlock 是可叠加的 LSM：进程可以不可逆地限制自身及其子进程。权限具有累加性——
+未授予的任何权限都会被拒绝——因此读取限制通过枚举仍可读取的内容来表达，而不
+是列出不可读取的内容。
 
-Exits 125 when the sandbox cannot be applied, and never falls back to running
-the command unconfined.
+无法应用沙箱时退出码为 125，绝不会回退到不受约束地运行命令。
 """
 
 from __future__ import annotations
@@ -18,7 +16,7 @@ import sys
 
 SETUP_FAILURE_EXIT = 125
 
-# Generic syscall numbers; identical on x86_64 and aarch64.
+# 通用系统调用编号；在 x86_64 和 aarch64 上相同。
 _SYS_CREATE_RULESET = 444
 _SYS_ADD_RULE = 445
 _SYS_RESTRICT_SELF = 446
@@ -40,11 +38,11 @@ _FS_MAKE_SOCK = 1 << 9
 _FS_MAKE_FIFO = 1 << 10
 _FS_MAKE_BLOCK = 1 << 11
 _FS_MAKE_SYM = 1 << 12
-_FS_REFER = 1 << 13  # ABI 2
-_FS_TRUNCATE = 1 << 14  # ABI 3
+_FS_REFER = 1 << 13  # Landlock ABI 2 权限
+_FS_TRUNCATE = 1 << 14  # Landlock ABI 3 权限
 
-_NET_BIND_TCP = 1 << 0  # ABI 4
-_NET_CONNECT_TCP = 1 << 1  # ABI 4
+_NET_BIND_TCP = 1 << 0  # Landlock ABI 4 权限
+_NET_CONNECT_TCP = 1 << 1  # Landlock ABI 4 权限
 
 _READ_RIGHTS = _FS_READ_FILE | _FS_READ_DIR | _FS_EXECUTE
 _WRITE_RIGHTS = (
@@ -60,7 +58,7 @@ _WRITE_RIGHTS = (
     | _FS_TRUNCATE
 )
 
-#: Network rights arrived in ABI 4; below that a denial could not be enforced.
+#: 网络权限在 ABI 4 中加入；更低版本无法强制执行拒绝。
 MIN_ABI = 4
 
 
@@ -69,7 +67,7 @@ class _RulesetAttr(ctypes.Structure):
 
 
 class _PathBeneathAttr(ctypes.Structure):
-    # Packed: the kernel expects no padding between the rights and the fd.
+    # Packed：内核要求 rights 与 fd 之间没有填充。
     _pack_ = 1
     _fields_ = (("allowed_access", ctypes.c_uint64), ("parent_fd", ctypes.c_int32))
 
@@ -79,7 +77,7 @@ def _libc() -> ctypes.CDLL:
 
 
 def abi_version() -> int:
-    """Landlock ABI the running kernel supports; 0 when it has none."""
+    """当前内核支持的 Landlock ABI；不支持时返回 0。"""
     try:
         libc = _libc()
         result = int(
@@ -114,10 +112,10 @@ def _handled_fs_rights(abi: int) -> int:
 
 
 def _add_path_rule(libc: ctypes.CDLL, ruleset_fd: int, path: str, rights: int, abi: int) -> None:
-    """Grant `rights` beneath `path`.
+    """授予 `path` 下方的 `rights` 权限。
 
-    A path that does not exist is skipped rather than fatal: the system-root
-    list is generic and not every root exists on every distribution.
+    不存在的路径会跳过，而不会导致致命错误：系统根目录列表是通用的，并非每个
+    发行版都存在所有路径。
     """
     open_flags = getattr(os, "O_PATH", 0) | os.O_CLOEXEC
     try:
@@ -196,7 +194,7 @@ def main(argv: list[str]) -> int:
     except OSError as exc:
         print(f"exec failed: {exc}", file=sys.stderr)
         return 127
-    return 0  # unreachable: execvp replaces the process
+    return 0  # 不可达：execvp 会替换当前进程
 
 
 if __name__ == "__main__":

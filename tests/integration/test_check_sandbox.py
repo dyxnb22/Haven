@@ -1,11 +1,9 @@
-"""How the sandbox applies to repo.check, and why it differs from repo.exec.
+"""沙箱如何应用于 repo.check，以及它为何不同于 repo.exec。
 
-repo.exec runs model-proposed argv, so the sandbox is the only thing between
-the model and the machine and is mandatory. repo.check runs a user-authored
-recipe id on a repository the user already trusts, so the sandbox is
-defense-in-depth: applied when a backend exists, not a precondition for running
-(ADR 0013). These tests pin both halves so the asymmetry cannot drift into an
-accident.
+repo.exec 运行模型提议的 argv，因此沙箱是模型与机器之间的唯一屏障，必须存在。
+repo.check 在用户已经信任的仓库上运行用户编写的配方 id，因此沙箱属于纵深防御：
+后端存在时应用，但不是运行的前置条件（ADR 0013）。这些测试固定两部分行为，
+避免这种不对称意外漂移。
 """
 
 from pathlib import Path
@@ -17,7 +15,7 @@ from tests.integration.harness import Harness, default_recipes, finish, make_rep
 
 
 async def _spec_for(tmp_path: Path, recipe: RecipeSpec) -> SandboxSpec:
-    """Run one check and hand back the SandboxSpec the launcher was given."""
+    """运行一次检查，并返回传给启动器的 SandboxSpec。"""
     turns = [
         [tool("c1", "repo.check", recipe_id=recipe.id), finish("tool_calls")],
         [text("Checked."), finish()],
@@ -41,7 +39,7 @@ class TestCheckIsWrappedWhenABackendExists:
 
 
 class TestDeclaredToolchainRoots:
-    """ADR 0029: a check may name the dependency cache it needs to read."""
+    """ADR 0029：检查可以声明它需要读取的依赖缓存。"""
 
     async def test_a_declared_root_reaches_the_sandbox_spec(self, tmp_path: Path) -> None:
         cache = tmp_path / "m2"
@@ -52,8 +50,8 @@ class TestDeclaredToolchainRoots:
         assert cache.resolve() in spec.extra_readable_roots
 
     async def test_the_interpreter_prefixes_are_still_granted(self, tmp_path: Path) -> None:
-        """A declaration adds to the existing carve-out; it does not replace it,
-        or declaring `~/.m2` would break the Python recipe that ran before."""
+        """声明会追加到现有例外范围，而不是替换它；否则声明 `~/.m2` 会破坏此前运行
+        的 Python 配方。"""
         recipe = RecipeSpec(id="mvn", argv=("true",), readable_roots=(str(tmp_path),))
         spec = await _spec_for(tmp_path, recipe)
 
@@ -61,8 +59,7 @@ class TestDeclaredToolchainRoots:
         assert set(default_readable_roots()) <= granted
 
     async def test_a_recipe_that_declares_nothing_is_unchanged(self, tmp_path: Path) -> None:
-        """The profile for every recipe written before ADR 0029 must be
-        byte-identical to what it was."""
+        """ADR 0029 之前写入的每个配方的配置必须与原来逐字节一致。"""
         spec = await _spec_for(tmp_path, RecipeSpec(id="plain", argv=("true",)))
 
         assert spec.extra_readable_roots == default_readable_roots()
@@ -78,8 +75,7 @@ class TestPolicyAsymmetry:
         assert outcome.reason_code == "sandbox_unavailable"
 
     def test_check_is_not_gated_on_the_sandbox(self) -> None:
-        """A registered recipe is trusted config, so its policy turns on
-        registration, not on backend availability."""
+        """已注册配方属于可信配置，因此策略依据是否注册，而不是依据后端是否可用。"""
         outcome = evaluate_policy(
             PermissionMode.INTERACTIVE,
             ToolFacts(tool_name="repo.check", recipe_registered=True, sandbox_available=False),

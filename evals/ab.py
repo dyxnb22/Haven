@@ -1,11 +1,9 @@
-"""Offline A/B of context variants, priced with the model's real rate card.
+"""离线上下文变体的 A/B 比较，使用模型的真实费率卡计价。
 
-Everything here is deterministic and needs no network: it measures what each
-variant costs to *send*, not how well the agent performs. Quality is a live
-question and this script deliberately refuses to answer it — see the closing
-section of the generated report.
+这里的一切都是确定性的，不需要网络：它测量每个变体*发送*出去的成本，而不是
+代理执行得多好。质量是实时问题，本脚本有意不回答它——见生成报告的结尾部分。
 
-Run from the repository root:  uv run python evals/ab.py
+从仓库根目录运行：  uv run python evals/ab.py
 """
 
 from __future__ import annotations
@@ -22,8 +20,7 @@ from haven.domain.budget import BUDGET_TIERS, Budget, BudgetUsage
 
 OUT = Path(__file__).parent.parent / "eval_report" / "ab-report.md"
 
-#: Rough industry convention for English prose. Used for orders of magnitude
-#: only; the real token split comes from the provider's usage fields.
+#: 英文散文的粗略行业约定。这里只用于数量级估算；实际的 token 拆分来自提供方的用量字段。
 CHARS_PER_TOKEN = 4
 
 GOAL = "Fix the bug in add() and verify with the calc recipe"
@@ -38,14 +35,13 @@ class Variant:
     note: str
 
 
-#: Every variant is priced with the same rate card, because the question is
-#: what a given context budget costs *on this model*. Pricing the old default
-#: with the default profile's empty rate card would compare nothing.
+#: 所有变体都使用同一张费率表，因为这里要比较的是给定上下文预算
+#: “在这个模型上”的成本。若用默认配置中空的费率表为旧默认值定价，就没有可比结果。
 RATE_CARD = DEEPSEEK_V4_FLASH.pricing
 
 
 def synthetic_transcript(turns: int) -> list[ModelMessage]:
-    """A plausible read-heavy history: each turn is an 8 KB file read."""
+    """一种合理的偏读取历史：每一轮读取一个 8 KB 文件。"""
     messages: list[ModelMessage] = []
     for index in range(turns):
         body = json.dumps(
@@ -85,8 +81,8 @@ def measure(variant: Variant) -> dict[str, float]:
     tokens = chars // CHARS_PER_TOKEN
     compacted = any(segment.source == "run_digest" for segment in segments)
 
-    # A steady-state turn on a stable prefix: everything but the newest tool
-    # output is already cached. That is the shape ADR 0008 engineered for.
+    # 稳定前缀上的稳态轮次：除了最新的工具输出之外，其余内容都已缓存。
+    # 这正是 ADR 0008 所针对的使用形态。
     fresh = min(tokens, 8_000 // CHARS_PER_TOKEN)
     cached = tokens - fresh
     return {

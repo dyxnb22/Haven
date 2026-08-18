@@ -1,5 +1,7 @@
 # Haven
 
+**English** | [中文](README.zh-CN.md)
+
 **An evidence-driven, replayable, locally scoped TUI coding agent.** The model
 proposes actions; the program enforces policy, approval, execution, and success
 criteria. Haven is a from-scratch implementation of the machinery behind a

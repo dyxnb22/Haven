@@ -1,4 +1,4 @@
-"""HeadlessApprover: the automated approval policy for non-interactive runs."""
+"""HeadlessApprover：无交互运行的自动审批策略。"""
 
 from haven.application.approvals import HeadlessApprover
 from haven.domain.approval import ApprovalRequest

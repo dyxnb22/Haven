@@ -1,4 +1,4 @@
-"""End-to-end agent journeys driven by the ScriptedModel (fully offline)."""
+"""由 ScriptedModel 驱动的端到端代理流程（完全离线）。"""
 
 import asyncio
 from pathlib import Path
@@ -44,7 +44,7 @@ class TestReadOnlyJourney:
         kinds = h.sink.kinds()
         assert kinds[0] == "run.created"
         assert kinds[-1] == "run.finished"
-        # a full proposal -> policy -> execution -> completion chain per call
+        # 每次调用都走完整的 proposal -> policy -> execution -> completion 链
         assert kinds.count("tool.proposed") == 2
         assert kinds.count("policy.decided") == 2
         assert kinds.count("tool.completed") == 2
@@ -58,7 +58,7 @@ class TestReadOnlyJourney:
         assert "run.created" in stored_kinds
         assert "model.completed" in stored_kinds
         assert "run.finished" in stored_kinds
-        # transient deltas never hit the journal
+        # 临时增量绝不会进入日志
         assert "assistant.delta" not in stored_kinds
 
 
@@ -97,7 +97,7 @@ class TestEditJourney:
         assert outcome.stop_reason is StopReason.EVIDENCE_SATISFIED
         assert "return a + b" in (repo / "src" / "calc.py").read_text()
 
-        # two approvals: the edit and the check
+        # 两次审批：edit 和 check
         approvals = h.sink.events_of("approval.requested")
         assert len(approvals) == 2
         decisions = h.sink.events_of("approval.decided")
@@ -128,7 +128,7 @@ class TestEditJourney:
         h = Harness(repo, turns, approver=AutoApprover("reject_all"))
         outcome = await h.service.run("Fix the bug in add()")
 
-        # nothing was written, so a final answer is acceptable
+        # 没有写入任何内容，因此可以接受最终答案
         assert outcome.status is RunStatus.SUCCEEDED
         assert outcome.stop_reason is StopReason.FINAL_ANSWER
         assert (repo / "src" / "calc.py").read_text() == BUGGY_CALC
@@ -176,7 +176,7 @@ class TestEditJourney:
                 ),
                 finish("tool_calls"),
             ],
-            # model claims success three times without diff/check evidence
+            # 模型在没有 diff/check 证据的情况下三次声称成功
             [text("Done! I fixed it."), finish()],
             [text("Really, it is done."), finish()],
             [text("Trust me, done."), finish()],
@@ -186,7 +186,7 @@ class TestEditJourney:
 
         assert outcome.status is RunStatus.STOPPED
         assert outcome.stop_reason is StopReason.EVIDENCE_MISSING
-        # the model was nudged with the gate failure before stopping
+        # 停止前已将门禁失败反馈给模型并发送 nudge
         notices = h.sink.events_of("notice")
         assert any("evidence gate" in getattr(n, "message", "") for n in notices)
 
@@ -200,7 +200,7 @@ class TestEditJourney:
                     "repo.edit",
                     path="src/calc.py",
                     old_string="return a - b  # BUG: should be +",
-                    new_string="return a * b",  # wrong fix
+                    new_string="return a * b",  # 错误的修复
                 ),
                 finish("tool_calls"),
             ],
@@ -254,10 +254,10 @@ class TestCreateJourney:
         assert outcome.status is RunStatus.SUCCEEDED
         assert outcome.stop_reason is StopReason.EVIDENCE_SATISFIED
         assert (repo / "tests" / "test_add.py").is_file()
-        # the new file shows up in the run diff as a pure addition
+        # 新文件会在运行 diff 中显示为纯新增
         diffs = h.sink.events_of("diff.preview")
         assert any("tests/test_add.py" in getattr(d, "preview", "") for d in diffs)
-        # creation went through approval like any other write
+        # 创建像其他写操作一样经过审批
         approvals = h.sink.events_of("approval.requested")
         assert any("create tests/test_add.py" in getattr(a, "summary", "") for a in approvals)
 
@@ -278,7 +278,7 @@ class TestCreateJourney:
         completed = h.sink.events_of("tool.completed")
         assert isinstance(completed[0], ToolCompleted)
         assert completed[0].error_code == "invalid_arguments"
-        # never even reached approval
+        # 甚至没有到达审批阶段
         assert h.sink.events_of("approval.requested") == []
 
     async def test_create_outside_workspace_is_denied(self, tmp_path: Path) -> None:
@@ -376,7 +376,7 @@ class TestEditScopeJourney:
         assert any("[all occurrences]" in getattr(a, "summary", "") for a in approvals)
 
     async def test_ambiguous_edit_is_recoverable(self, tmp_path: Path) -> None:
-        """The failure message must be actionable enough for the next turn."""
+        """失败消息必须足够可操作，使下一轮能够据此处理。"""
         repo = make_repo(tmp_path)
         turns = [
             [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
@@ -433,7 +433,7 @@ class TestPlanTool:
 
         updates = h.sink.events_of("plan.updated")
         assert len(updates) == 1
-        # every request after the plan was set carries it
+        # 计划设置后，每个请求都会携带它
         later_requests = h.model.requests_seen[1:]
         assert later_requests
         for request in later_requests:
@@ -542,7 +542,7 @@ class TestDeterministicReview:
         assert outcome.gate_reason == "evidence_satisfied"
 
     async def test_review_does_not_apply_to_read_only_runs(self, tmp_path: Path) -> None:
-        """No writes means nothing to review; a plain answer is still fine."""
+        """没有写入就没有需要审查的内容；普通回答仍然可以成功。"""
         repo = make_repo(tmp_path)
         (repo / "secrets.txt").write_text('password = "hunter2hunter2"\n')
         turns = [
@@ -556,7 +556,7 @@ class TestDeterministicReview:
 
 
 class TestUnwinnableEvidenceGate:
-    """Regression for a live failure: no recipes + a write = unwinnable."""
+    """一次实时失败的回归：没有配方 + 发生写入 = 无法获胜。"""
 
     @staticmethod
     def _edit_turns() -> list[list[ModelEvent]]:
@@ -592,8 +592,7 @@ class TestUnwinnableEvidenceGate:
         h.service._recipes = {}  # type: ignore[attr-defined]  # noqa: SLF001
 
         outcome = await h.service.run("Fix add()")
-        # 3 steps to read, edit, and answer — then it stops, instead of
-        # nudging twice more and eventually exhausting the budget.
+        # 读取、编辑和回答共 3 步，然后停止，而不是再发送两次 nudge 最终耗尽预算。
         assert outcome.steps == 3
 
     async def test_prompt_does_not_promise_a_check_that_does_not_exist(
@@ -629,7 +628,7 @@ class TestPolicyEnforcement:
         outcome = await h.service.run("Fix the bug")
 
         assert (repo / "src" / "calc.py").read_text() == BUGGY_CALC
-        assert outcome.status is RunStatus.SUCCEEDED  # final answer, no writes
+        assert outcome.status is RunStatus.SUCCEEDED  # 最终答案，没有写入
         denies = [
             e
             for e in h.sink.events_of("policy.decided")
@@ -637,7 +636,7 @@ class TestPolicyEnforcement:
         ]
         assert len(denies) == 1
         assert denies[0].reason_code == "read_only_mode"
-        # no approval was even requested for a denied action
+        # 被拒绝的操作甚至不会请求审批
         assert h.sink.events_of("approval.requested") == []
 
     async def test_path_escape_denied_and_content_not_leaked(self, tmp_path: Path) -> None:
@@ -653,7 +652,7 @@ class TestPolicyEnforcement:
         completed = h.sink.events_of("tool.completed")
         assert isinstance(completed[0], ToolCompleted)
         assert completed[0].error_code == "denied"
-        # the secret never entered the model transcript
+        # 秘密从未进入模型 transcript
         for request in h.model.requests_seen:
             for message in request.messages:
                 assert "TOP-SECRET-CONTENT" not in message.content
@@ -686,12 +685,12 @@ class TestPolicyEnforcement:
 
 class TestApprovalBinding:
     async def test_stale_approval_fails_closed(self, tmp_path: Path) -> None:
-        """The file changes between human approval and execution (TOCTOU)."""
+        """文件在人类审批和执行之间发生变化（TOCTOU）。"""
         repo = make_repo(tmp_path)
 
         class TamperingApprover:
             async def respond(self, request: ApprovalRequest) -> ApprovalDecision:
-                # while the human "thinks", the file changes under us
+                # 用户“思考”期间，文件在我们这边发生变化
                 (repo / "src" / "calc.py").write_text("everything changed\n")
                 return ApprovalDecision.APPROVED
 
@@ -718,7 +717,7 @@ class TestApprovalBinding:
             if isinstance(e, ToolCompleted) and e.call_id == "c2"
         ]
         assert completed[0].error_code == "stale_preimage"
-        # the tampered content is untouched by the stale edit
+        # 被篡改的内容不会被过时的 edit 触碰
         assert (repo / "src" / "calc.py").read_text() == "everything changed\n"
 
 
@@ -740,13 +739,12 @@ class TestBudgetsAndStops:
         outcome = await h.service.run("Search in circles")
         assert outcome.status is RunStatus.STOPPED
         assert outcome.stop_reason is StopReason.NO_PROGRESS
-        assert outcome.steps < 12  # detector fires before the step budget
+        assert outcome.steps < 12  # 检测器会在步骤预算耗尽前触发
 
     async def test_an_alternating_pattern_is_not_detected_as_stuck(self, tmp_path: Path) -> None:
-        """The detector's measured limit, pinned at the loop level. A trace
-        study of 42 live runs found non-convergence is varied unproductive work,
-        not repetition, so the run below burns its budget without ever tripping
-        the stuck check (docs/notes/rejected/0002)."""
+        """在循环层固定检测器的实测边界。42 次实时运行的追踪研究发现，不收敛是多样
+        的无效工作，而不是重复；因此下面的运行会耗尽预算，却不会触发卡死检查
+        （`docs/notes/rejected/0002`）。"""
         alternating: list[list[ModelEvent]] = []
         for i in range(8):
             path = "." if i % 2 == 0 else "src"
@@ -762,7 +760,7 @@ class TestBudgetsAndStops:
     async def test_provider_error_fails_run(self, tmp_path: Path) -> None:
         turns: list[list[ModelEvent]] = [
             [tool("c1", "repo.list", path="."), finish("tool_calls")],
-            # script exhausted on the next call -> ProviderError
+            # 脚本在下一次调用时耗尽 -> ProviderError
         ]
         h = Harness(make_repo(tmp_path), turns)
         outcome = await h.service.run("Trigger a provider failure")

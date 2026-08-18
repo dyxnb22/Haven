@@ -1,4 +1,4 @@
-"""Core enums shared across the whole system."""
+"""整个系统共享的核心枚举。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ class RunStatus(StrEnum):
     EFFECT_UNKNOWN = "effect_unknown"
 
 
-#: Statuses in which a run can still make progress.
+#: 运行仍能继续推进的状态。
 ACTIVE_STATUSES = frozenset(
     {
         RunStatus.CREATED,
@@ -50,7 +50,7 @@ class StopReason(StrEnum):
 
 
 class PermissionMode(StrEnum):
-    """Only two modes on purpose: there is no fully-autonomous write mode."""
+    """特意只提供两种模式：不存在完全自主的写入模式。"""
 
     INTERACTIVE = "interactive"
     READ_ONLY = "read_only"
@@ -85,14 +85,14 @@ class ToolErrorCode(StrEnum):
     TIMEOUT = "timeout"
     TRUNCATED = "truncated"
     INTERNAL = "internal"
-    #: A process changed `.git` / `.haven` / `.haven.toml` — a boundary the
-    #: kernel could not enforce (Landlock, or no backend). The tool call fails
-    #: so the violation is a hard outcome, not an annotation (ADR 0018).
+    #: 进程修改了 `.git` / `.haven` / `.haven.toml`——这是内核无法强制保护的
+    #: 边界（使用 Landlock 或没有沙箱后端时）。工具调用会失败，因此该违规
+    #: 是硬性结果，而不是一条附注（ADR 0018）。
     PROTECTED_PATH_TAMPERED = "protected_path_tampered"
 
 
 class EffectState(StrEnum):
-    """Lifecycle of a side effect as recorded in the execution journal."""
+    """执行日志记录的副作用生命周期。"""
 
     STARTED = "started"
     CONFIRMED = "confirmed"

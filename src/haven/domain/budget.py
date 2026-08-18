@@ -1,7 +1,7 @@
-"""Hard budgets and usage accounting for a run.
+"""运行的硬性预算和用量统计。
 
-Budgets are checked by the agent loop before each step; usage is an immutable
-ledger so every charge produces a new value and can be checkpointed as-is.
+代理循环会在每一步之前检查预算；用量是不可变账本，因此每次计费都会产生新值，
+并且可以原样写入检查点。
 """
 
 from __future__ import annotations
@@ -13,10 +13,10 @@ from haven.domain.enums import StopReason
 
 @dataclass(frozen=True, slots=True)
 class Budget:
-    #: Sized so a run survives exploration plus ~3 fix-verify rounds. The
-    #: minimum successful trajectory is read/edit/create/diff/check/answer, and
-    #: each failed check costs another fix/diff/check. See ADR 0006 for the
-    #: derivation; these are engineering defaults, not eval-derived optima.
+    #: 该上限应能支撑探索以及约 3 轮“修复-验证”。最短的成功路径是
+    #: read/edit/create/diff/check/answer；每次检查失败还会额外消耗一轮
+    #: fix/diff/check。推导过程见 ADR 0006；这些是工程默认值，并非由评估
+    #: 数据求出的最优值。
     max_steps: int = 24
     max_tool_calls: int = 48
     max_wall_time_seconds: float = 600.0
@@ -25,10 +25,9 @@ class Budget:
     max_cost_usd: float = 2.0
 
     def tightened(self, other: Budget) -> Budget:
-        """Merge with another budget, keeping the stricter limit of each field.
+        """与另一个预算合并，并为每个字段保留更严格的限制。
 
-        Used for project-level config: a repository may lower budgets but can
-        never raise them above the user-level values.
+        用于项目级配置：仓库可以降低预算，但绝不能将其提高到用户级值之上。
         """
         return Budget(
             max_steps=min(self.max_steps, other.max_steps),
@@ -39,10 +38,11 @@ class Budget:
             max_cost_usd=min(self.max_cost_usd, other.max_cost_usd),
         )
 
+    #: 用户在 CLI 中选择的命名预设。它们以数据形式定义在这里，使上限在
+    #: 程序中保持为常量：运行只能选择一个档位，不能自行发明档位。
+    #: `standard` 是历史默认值，并且特意与原默认值完全一致。
 
-#: Named presets a user picks at the CLI. They live here as data so the ceiling
-#: stays a constant in the program: a run can select a tier, never invent one.
-#: `standard` is the historical default and is deliberately identical to it.
+
 BUDGET_TIERS: dict[str, Budget] = {
     "quick": Budget(
         max_steps=8,
@@ -99,7 +99,7 @@ class BudgetUsage:
 
     @property
     def cache_hit_rate(self) -> float:
-        """Fraction of input tokens served from cache, over the whole run."""
+        """整个运行期间由缓存提供的输入 token 占比。"""
         return self.cached_input_tokens / self.input_tokens if self.input_tokens else 0.0
 
     def with_wall_time(self, seconds: float) -> BudgetUsage:
@@ -107,9 +107,9 @@ class BudgetUsage:
 
 
 def check_budget(budget: Budget, usage: BudgetUsage) -> StopReason | None:
-    """Return the stop reason if any budget is exhausted, else None.
+    """如果任一预算耗尽则返回停止原因，否则返回 None。
 
-    Checks are ordered so the report always names one deterministic reason.
+    检查顺序固定，因此报告始终只会指出一个确定性的原因。
     """
     if usage.steps >= budget.max_steps:
         return StopReason.STEP_BUDGET_EXHAUSTED

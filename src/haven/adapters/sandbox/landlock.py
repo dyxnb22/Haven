@@ -1,4 +1,4 @@
-"""Linux backend: Landlock, applied by a helper that re-execs the target."""
+"""Linux 后端：Landlock，由重新执行目标命令的辅助程序应用。"""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from haven.sandbox.landlock_launcher import MIN_ABI, abi_version
 
 LAUNCHER_MODULE = "haven.sandbox.landlock_launcher"
 
-#: Readable so ordinary programs can start. The launcher skips entries that do
-#: not exist, so one list serves every distribution.
+#: 允许读取，以便普通程序能够启动。启动器会跳过不存在的条目，因此一份
+#: 列表可以适用于所有发行版。
 SYSTEM_ROOTS = (
     "/usr",
     "/bin",
@@ -28,10 +28,10 @@ SYSTEM_ROOTS = (
 
 
 def encode_spec(spec: SandboxSpec) -> str:
-    """Build the JSON payload the launcher applies.
+    """构造启动器要应用的 JSON 载荷。
 
-    `private_roots` needs no rule: Landlock grants are additive, so a path is
-    confined by never appearing in the readable list.
+    `private_roots` 不需要规则：Landlock 的授权是累加的，因此只要路径不出现在
+    可读列表中，就会受到限制。
     """
     readable = [
         *SYSTEM_ROOTS,
@@ -39,8 +39,8 @@ def encode_spec(spec: SandboxSpec) -> str:
         str(spec.scratch_dir.resolve()),
         *(str(root.resolve()) for root in spec.extra_readable_roots),
     ]
-    # Scratch is always writable — it exists so a confined process has
-    # somewhere to write. `writable` governs the workspace alone.
+    # 临时目录始终可写——它的存在就是为了让受限进程有地方写入。
+    # `writable` 只控制工作区。
     writable = [str(spec.scratch_dir.resolve())]
     if spec.writable:
         writable.insert(0, str(spec.workspace_root.resolve()))
@@ -51,7 +51,7 @@ def encode_spec(spec: SandboxSpec) -> str:
 
 
 class LandlockLauncher:
-    """Implements SandboxLauncher on Linux."""
+    """在 Linux 上实现 SandboxLauncher。"""
 
     @property
     def backend(self) -> str:
@@ -70,8 +70,8 @@ class LandlockLauncher:
             else "workspace read-only (scratch writable)"
         )
         network = "network allowed" if spec.allow_network else "no TCP"
-        # Subtree grants cannot express "the workspace except .git", so name the
-        # layer that is really holding that line.
+        # 子树授权无法表达“工作区中排除 .git”，因此要明确指出真正负责守住
+        # 这条边界的层。
         return (
             f"sandbox: landlock, {writes}, {network}, home directory unreadable "
             "(.git is protected by Haven's tool layer, not by the kernel)"

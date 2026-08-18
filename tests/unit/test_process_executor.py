@@ -1,4 +1,4 @@
-"""Executor tests: exit codes, timeout, output bombs, cancellation."""
+"""执行器测试：退出码、超时、输出爆炸和取消。"""
 
 import asyncio
 import sys
@@ -104,7 +104,7 @@ class TestRunExec:
         assert len(launcher.calls) == 1
 
     async def test_recipes_are_wrapped_too(self, tmp_path: Path) -> None:
-        """One wrapping site: a check is as confined as an exec."""
+        """只有一个包装位置：检查与 exec 受到同样的限制。"""
         launcher = RecordingLauncher()
         await ProcessExecutor(launcher=launcher).run_recipe(recipe("pass"), tmp_path)
         assert len(launcher.calls) == 1
@@ -121,9 +121,9 @@ class TestRunExec:
         assert launcher.calls[0][1].allow_network is False
 
     async def test_a_missing_program_is_a_result_not_an_exception(self, tmp_path: Path) -> None:
-        """Found on Linux, where `make` is absent: create_subprocess_exec raises
-        FileNotFoundError, which would escape into the agent loop and violate
-        the invariant that a tool call always returns a structured result."""
+        """在 Linux 上发现：系统没有 `make` 时，create_subprocess_exec 会抛出
+        FileNotFoundError；该异常会逃入代理循环，违反工具调用始终返回结构化结果的
+        不变量。"""
         executor = ProcessExecutor(launcher=RecordingLauncher())
         outcome = await executor.run_exec(
             ExecSpec(

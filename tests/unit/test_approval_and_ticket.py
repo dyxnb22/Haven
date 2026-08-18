@@ -41,7 +41,7 @@ def test_approval_record_validity() -> None:
         decision=ApprovalDecision.APPROVED,
     )
     assert record.is_valid_for(digest)
-    # any drift in the bound action invalidates the approval
+    # 绑定操作的任何漂移都会使审批失效
     assert not record.is_valid_for(make_digest(preimage_digest="changed"))
 
 
@@ -79,7 +79,7 @@ def test_ticket_digest_binds_all_fields() -> None:
         tool_version="1",
         canonical_args_json='{"path":"a.py"}',
         workspace_digest="ws1",
-        preimage_digest="pre2",  # different preimage
+        preimage_digest="pre2",  # 不同的 preimage
         approval_id=None,
     )
     assert ticket_a.ticket_digest != ticket_b.ticket_digest

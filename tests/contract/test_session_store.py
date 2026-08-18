@@ -1,4 +1,4 @@
-"""Contract tests run against BOTH store implementations to keep them equal."""
+"""针对两个存储实现运行的契约测试，以保持二者行为一致。"""
 
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -96,7 +96,7 @@ async def test_approval_single_consumption(store: SessionStorePort) -> None:
     await store.decide_approval("apr-1", ApprovalDecision.APPROVED)
 
     assert await store.consume_approval("apr-1", "digest-1") is True
-    # second consumption must fail
+    # 第二次消耗必须失败
     assert await store.consume_approval("apr-1", "digest-1") is False
 
 
@@ -133,8 +133,8 @@ async def test_execution_journal(store: SessionStorePort) -> None:
 
 
 async def test_successive_checkpoints_resolve_to_the_newest(store: SessionStorePort) -> None:
-    """A run checkpoints once per tool batch; resume must always land on the
-    latest snapshot, whichever store is underneath."""
+    """运行每个工具批次保存一次检查点；无论底层使用哪个存储，恢复都必须落到最新
+    快照。"""
     for seq in (1, 5, 9):
         await store.save_checkpoint(checkpoint(last_seq=seq))
     loaded = await store.load_checkpoint("run-1")
@@ -145,8 +145,8 @@ async def test_successive_checkpoints_resolve_to_the_newest(store: SessionStoreP
 async def test_an_out_of_order_save_does_not_lose_the_newer_checkpoint(
     store: SessionStorePort,
 ) -> None:
-    """Pruning superseded rows must never remove one that is *ahead* of the
-    row being written — resume would silently go backwards."""
+    """清理已被替代的行时绝不能删除比正在写入的行更*靠前*的行——否则恢复会悄悄
+    倒退。"""
     await store.save_checkpoint(checkpoint(last_seq=9))
     await store.save_checkpoint(checkpoint(last_seq=4))
     loaded = await store.load_checkpoint("run-1")
@@ -157,12 +157,10 @@ async def test_an_out_of_order_save_does_not_lose_the_newer_checkpoint(
 async def test_update_with_empty_postimage_preserves_the_recorded_one(
     store: SessionStorePort,
 ) -> None:
-    """Regression contract for a real drift: the two stores once disagreed on
-    whether CONFIRMED with an empty postimage wipes the expectation recorded
-    at STARTED. The contract is: an empty postimage on update means "keep
-    what the record already holds" — a delete's empty expectation stays
-    empty, and a patch effect confirmed without a digest keeps the expected
-    one journaled at STARTED (recovery classifies against it)."""
+    """针对一次真实漂移的回归契约：两个存储曾经对“空 postimage 的 CONFIRMED 是否
+    清除 STARTED 时记录的预期”意见不一。契约规定：更新时空 postimage 表示“保留
+    记录已有内容”——删除操作的空预期仍为空，而没有摘要就确认的补丁效果保留
+    STARTED 时写入日志的预期值（恢复会据此分类）。"""
     await store.record_execution(
         ExecutionRecord(
             call_id="c-keep",
@@ -180,15 +178,15 @@ async def test_update_with_empty_postimage_preserves_the_recorded_one(
     assert loaded["c-keep"].effect_state is EffectState.CONFIRMED
     assert loaded["c-keep"].postimage_digest == "expected-post"
 
-    # And a non-empty postimage on update still overwrites.
+    # update 时非空 postimage 仍然会覆盖原值。
     await store.update_execution_state("c-keep", EffectState.CONFIRMED, "actual-post")
     loaded = {r.call_id: r for r in await store.load_executions("run-1")}
     assert loaded["c-keep"].postimage_digest == "actual-post"
 
 
 async def test_dest_path_roundtrips_for_move_records(store: SessionStorePort) -> None:
-    """dest_path is what lets recovery classify an interrupted move end-to-end
-    (ADR 0018 follow-up); both stores must persist and return it."""
+    """dest_path 使恢复能够端到端地分类中断的移动操作（ADR 0018 后续）；两个存储
+    都必须持久化并返回它。"""
     await store.record_execution(
         ExecutionRecord(
             call_id="c-move",
@@ -204,7 +202,7 @@ async def test_dest_path_roundtrips_for_move_records(store: SessionStorePort) ->
     )
     loaded = {r.call_id: r for r in await store.load_executions("run-1")}
     assert loaded["c-move"].dest_path == "src/new.py"
-    # State updates must not lose the destination.
+    # 状态更新不能丢失目标路径。
     await store.update_execution_state("c-move", EffectState.EFFECT_UNKNOWN)
     loaded = {r.call_id: r for r in await store.load_executions("run-1")}
     assert loaded["c-move"].dest_path == "src/new.py"
@@ -217,8 +215,8 @@ async def test_artifact_roundtrip(store: SessionStorePort) -> None:
 
 
 async def test_delete_run_removes_every_trace(store: SessionStorePort) -> None:
-    """gc's primitive: one call removes the run row, its events, checkpoint,
-    approvals, and execution journal — and leaves other runs untouched."""
+    """gc 的基础操作：一次调用删除运行行、事件、检查点、审批和执行日志，同时不
+    触碰其他运行。"""
     for run_id in ("run-1", "run-2"):
         await store.create_run(run_id, "/tmp/ws", "d", "goal", "interactive")
         await store.append_event(run_id, StepStarted(run_id=run_id, step=1))
@@ -243,7 +241,7 @@ async def test_delete_run_removes_every_trace(store: SessionStorePort) -> None:
     assert await store.load_events("run-1") == []
     assert await store.load_checkpoint("run-1") is None
     assert await store.load_executions("run-1") == []
-    # the other run is fully intact
+    # 另一个运行完全不受影响
     assert await store.get_run("run-2") is not None
     assert len(await store.load_events("run-2")) == 1
     assert await store.load_checkpoint("run-2") is not None
@@ -259,7 +257,7 @@ async def test_artifact_listing_and_deletion(store: SessionStorePort) -> None:
     await store.delete_artifact(d1)
     assert await store.get_artifact(d1) is None
     assert d1 not in await store.list_artifacts()
-    # deleting a missing digest is a no-op, and path-shaped names are refused
+    # 删除不存在的摘要是空操作，而类似路径的名称会被拒绝
     await store.delete_artifact(d1)
     await store.delete_artifact("../escape")
     assert await store.get_artifact(d2) == b"two"
@@ -276,15 +274,14 @@ class TestSqliteSpecific:
         reopened = await SqliteSessionStore.open(db, art)
         events = await reopened.load_events("run-1")
         assert len(events) == 1
-        # seq continues after the persisted journal
+        # seq 会在持久化日志之后继续递增
         env = await reopened.append_event("run-1", StepStarted(run_id="run-1", step=2))
         assert env.seq == 2
         await reopened.close()
 
     async def test_superseded_checkpoint_rows_are_pruned(self, tmp_path: Path) -> None:
-        """Storage claim behind the behavioral contract above: one live row
-        per run, not one per tool batch. Measured before this: superseded
-        rows were 92% of a real store and grew with run length squared."""
+        """上述行为契约背后的存储主张：每次运行只有一行存活记录，而不是每个工具
+        批次一行。此前测得，被替代行占真实存储的 92%，并且随运行长度平方增长。"""
         store = await SqliteSessionStore.open(tmp_path / "haven.db", tmp_path / "artifacts")
         for seq in range(1, 11):
             await store.save_checkpoint(checkpoint(last_seq=seq))
@@ -302,7 +299,7 @@ class TestSqliteSpecific:
         store = await SqliteSessionStore.open(db, art)
         await store.create_run("run-1", "/tmp/ws", "d", "goal", "interactive")
         await store.append_event("run-1", StepStarted(run_id="run-1", step=1))
-        # tamper with the journal
+        # 篡改日志
         await store._db.execute(  # type: ignore[attr-defined]  # noqa: SLF001
             "UPDATE events SET payload_json = ? WHERE run_id = 'run-1'",
             ('{"kind": "step.started", "run_id": "run-1", "step": 99}',),
@@ -323,14 +320,14 @@ class TestSqliteSpecific:
             await SqliteSessionStore.open(db, art)
 
     async def test_v1_database_migrates_in_place(self, tmp_path: Path) -> None:
-        """A v1 store (no dest_path column) must open, gain the column, and
-        read back records written before the migration."""
+        """v1 存储（没有 dest_path 列）必须能够打开、获得该列，并读回迁移前写入的
+        记录。"""
         import aiosqlite
 
         from haven.adapters.sqlite_session import DB_SCHEMA_VERSION
 
         db_path, art = tmp_path / "haven.db", tmp_path / "artifacts"
-        # Build a genuine v1 database by hand: the v1 executions shape, v1 meta.
+        # 手动构造真实的 v1 数据库：使用 v1 的 executions 结构和 v1 meta。
         raw = await aiosqlite.connect(db_path)
         await raw.executescript(
             """

@@ -1,5 +1,5 @@
-"""The SBPL profile is a pure function of the spec, so it can be asserted
-without running anything. Rule order matters: in SBPL the last match wins."""
+"""SBPL profile 是 spec 的纯函数，因此无需运行任何内容即可断言。规则顺序很重要：
+在 SBPL 中最后匹配的规则生效。"""
 
 from pathlib import Path
 
@@ -35,8 +35,8 @@ class TestProfile:
         assert f'(allow file-write* (subpath "{resolved("/tmp/ws")}")' in build_profile(spec())
 
     def test_read_only_spec_grants_scratch_but_not_the_workspace(self) -> None:
-        """Read-only means the workspace: scratch stays writable so a confined
-        process has somewhere to write (the repo.exec profile, ADR 0017)."""
+        """只读指工作区只读：scratch 仍可写，使受限进程有地方写入（repo.exec profile，
+        ADR 0017）。"""
         profile = build_profile(spec(writable=False))
         assert f'(allow file-write* (subpath "{resolved("/tmp/scratch")}")' in profile
         assert f'(allow file-write* (subpath "{resolved("/tmp/ws")}")' not in profile
@@ -51,7 +51,7 @@ class TestProfile:
         assert "(deny network*)" not in build_profile(spec(allow_network=True))
 
     def test_protected_paths_are_denied_after_the_workspace_grant(self) -> None:
-        """Later rules win, so the carve-out must come after the grant."""
+        """后面的规则优先，因此例外范围必须放在授权规则之后。"""
         profile = build_profile(spec())
         assert index_of(
             profile, f'(deny file-write* (subpath "{resolved("/tmp/ws")}/.git")'
@@ -64,7 +64,7 @@ class TestProfile:
         ) > index_of(profile, "(allow file-read*)")
 
     def test_workspace_read_is_restored_after_a_private_root_denial(self) -> None:
-        """A workspace inside the denied home must stay readable."""
+        """位于被拒绝主目录中的工作区仍必须可读。"""
         profile = build_profile(
             spec(workspace_root=Path("/tmp/home/ws"), private_roots=(Path("/tmp/home"),))
         )

@@ -1,4 +1,4 @@
-"""Behavior tests for the filesystem workspace adapter."""
+"""文件系统工作区适配器的行为测试。"""
 
 import time
 from pathlib import Path
@@ -81,7 +81,7 @@ class TestRead:
     async def test_read_window(self, workspace: FsWorkspace) -> None:
         result = await workspace.read_file("src/calc.py", 2, 1)
         assert result.content == "    return a - b  # BUG\n"
-        assert result.truncated  # more lines remain
+        assert result.truncated  # 还有更多行
 
     async def test_read_missing_file(self, workspace: FsWorkspace) -> None:
         with pytest.raises(WorkspaceError) as exc:
@@ -121,10 +121,8 @@ class TestSearch:
     async def test_a_slow_search_degrades_on_its_deadline(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The model's pattern is only syntax-checked, so a search can be made
-        arbitrarily slow. The walk is bounded by wall clock, not just by the
-        result caps, and reports truncation rather than running to completion.
-        """
+        """模型的模式只做语法检查，因此搜索可能被构造得任意缓慢。遍历受墙上时间
+        限制，而不只是受结果上限限制；超时会报告截断，而不是一直运行到完成。"""
         from haven.adapters import workspace_fs
 
         root = tmp_path / "repo"
@@ -132,7 +130,7 @@ class TestSearch:
         for index in range(400):
             (root / f"f{index}.txt").write_text("needle\n" * 100)
         ws = FsWorkspace(root, use_ripgrep=False)
-        # Already expired: the very first deadline check must stop the walk.
+        # 已经超时：第一次截止时间检查就必须停止遍历。
         monkeypatch.setattr(workspace_fs, "RIPGREP_TIMEOUT_SECONDS", -1.0)
 
         started = time.monotonic()
@@ -145,7 +143,7 @@ class TestSearch:
     async def test_the_deadline_does_not_truncate_an_ordinary_search(
         self, workspace: FsWorkspace
     ) -> None:
-        """The bound must not turn normal searches into partial results."""
+        """时间限制不能将正常搜索变成部分结果。"""
         result = await workspace.search("BUG", ".", 50)
         assert not result.truncated
         assert len(result.matches) == 1
@@ -180,7 +178,7 @@ class TestEdit:
 
     async def test_stale_preimage_fails_closed(self, workspace: FsWorkspace) -> None:
         preview = await workspace.preview_edit("src/calc.py", "return a - b  # BUG", "return a + b")
-        # someone else changes the file between approval and execution
+        # 其他人在审批和执行之间修改了文件
         (workspace.root / "src" / "calc.py").write_text("everything changed\n")
         with pytest.raises(WorkspaceError) as exc:
             await workspace.apply_edit(
@@ -220,7 +218,7 @@ class TestEdit:
             "src/calc.py", "return a - b", "return a + b", preview.preimage_digest, occurrence=1
         )
         content = (workspace.root / "src" / "calc.py").read_text()
-        # only the first (buggy add) was changed; sub() keeps subtracting
+        # 只有第一个（有 bug 的 add）被修改；sub() 仍然执行减法
         assert content.count("return a + b") == 1
         assert content.count("return a - b") == 1
         assert content.index("return a + b") < content.index("return a - b")
@@ -273,7 +271,7 @@ class TestEdit:
 
 class TestRunDiff:
     async def test_diff_only_covers_this_run(self, workspace: FsWorkspace) -> None:
-        # pre-existing user change, made before the run starts editing
+        # 运行开始编辑前就存在的用户改动
         (workspace.root / "README.md").write_text("# Demo\nuser edited this before the run\n")
 
         preview = await workspace.preview_edit("src/calc.py", "return a - b  # BUG", "return a + b")
@@ -295,7 +293,7 @@ class TestRunDiff:
 
         run_diff = await workspace.run_diff()
         assert run_diff.files == ("src/calc.py",)
-        # diff is against the original content from before the first edit
+        # diff 对比的是第一次编辑前的原始内容
         assert "-    return a - b  # BUG" in run_diff.diff
         assert "+def subtract(a, b):" in run_diff.diff
 

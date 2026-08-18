@@ -1,9 +1,8 @@
-"""A single project-wide coverage percentage can hide a bare critical file.
+"""单个项目级覆盖率百分比可能掩盖一个几乎没有覆盖的关键文件。
 
-89% overall says nothing about whether `domain/policy.py` is at 99% or 20% —
-one well-covered large module subsidises a thin one. The layers that decide
-permission, evidence, and budgets therefore carry a per-file floor, so a future
-module cannot land in them essentially untested while the headline number holds.
+总体 89% 无法说明 `domain/policy.py` 是 99% 还是 20%——一个覆盖良好的大型模块
+可以补贴薄弱模块。因此，决定权限、证据和预算的层采用逐文件下限，避免未来模块
+在总体数字保持不变时，几乎未经测试就进入这些层。
 """
 
 from scripts.check_coverage_floor import CORE_FLOOR, floor_for, violations
@@ -17,8 +16,8 @@ class TestWhichFilesAreGated:
         assert floor_for("src/haven/ports/model.py") == CORE_FLOOR
 
     def test_platform_and_ui_surfaces_are_not_gated_here(self) -> None:
-        """They are covered by the overall figure and by platform-specific
-        suites; a per-file floor would encode a number no platform can meet."""
+        """它们由总体数字和平台专用套件覆盖；逐文件下限会编码一个没有任何平台都能
+        达到的数字。"""
         assert floor_for("src/haven/sandbox/landlock_launcher.py") is None
         assert floor_for("src/haven/interfaces/cli.py") is None
 

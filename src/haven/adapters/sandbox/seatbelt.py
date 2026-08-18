@@ -1,8 +1,7 @@
-"""macOS backend: Apple's Seatbelt via /usr/bin/sandbox-exec.
+"""macOS 后端：通过 /usr/bin/sandbox-exec 使用 Apple 的 Seatbelt。
 
-SBPL evaluates every matching rule and the last one wins, which is what makes
-"read everything except the user's home, but do read the workspace inside it"
-expressible as three ordered rules.
+SBPL 会评估每条匹配的规则，并以最后一条规则为准；因此可以用三条有序规则表达
+“读取除用户主目录之外的所有内容，但允许读取其中的工作区”。
 """
 
 from __future__ import annotations
@@ -13,9 +12,8 @@ from haven.ports.sandbox import SandboxSpec
 
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 
-#: Allowed regardless of the filesystem policy. IPC isolation is not a goal
-#: here; denying these breaks ordinary interpreters without closing the
-#: filesystem or network holes this sandbox exists to close.
+#: 无论文件系统策略如何都允许。这里不追求 IPC 隔离；拒绝这些内容会破坏
+#: 普通解释器，却无法堵住此沙箱要解决的文件系统或网络漏洞。
 _PREAMBLE = """\
 (version 1)
 (deny default)
@@ -31,11 +29,11 @@ _WRITABLE_DEVICES = ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/dtracehelp
 
 
 def _literal(path: Path) -> str:
-    """Resolve and quote one path for SBPL.
+    """解析并为 SBPL 引用一个路径。
 
-    Resolution matters: /tmp is a symlink to /private/tmp and Seatbelt matches
-    the resolved path, so an unresolved scratch dir yields a profile that denies
-    the sandbox its own scratch directory.
+    解析过程很重要：/tmp 是指向 /private/tmp 的符号链接，而 Seatbelt 匹配的是
+    解析后的路径。因此，如果临时目录未解析，生成的 profile 会连沙箱自己的临时目录
+    也拒绝访问。
     """
     escaped = str(path.resolve()).replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
@@ -46,12 +44,12 @@ def build_profile(spec: SandboxSpec) -> str:
 
     for root in spec.private_roots:
         lines.append(f"(deny file-read* (subpath {_literal(root)}))")
-    # After the denials, so a workspace nested inside a private root survives.
+    # 放在拒绝规则之后，使嵌套在私有根目录中的工作区仍能使用。
     for root in (spec.workspace_root, spec.scratch_dir, *spec.extra_readable_roots):
         lines.append(f"(allow file-read* (subpath {_literal(root)}))")
 
-    # Scratch is always writable — it exists so a confined process has
-    # somewhere to write. `writable` governs the workspace alone.
+    # 临时目录始终可写——它的存在就是为了让受限进程有地方写入。
+    # `writable` 只控制工作区。
     lines.append(f"(allow file-write* (subpath {_literal(spec.scratch_dir)}))")
     if spec.writable:
         lines.append(f"(allow file-write* (subpath {_literal(spec.workspace_root)}))")
@@ -66,7 +64,7 @@ def build_profile(spec: SandboxSpec) -> str:
 
 
 class SeatbeltLauncher:
-    """Implements SandboxLauncher on macOS."""
+    """在 macOS 上实现 SandboxLauncher。"""
 
     @property
     def backend(self) -> str:

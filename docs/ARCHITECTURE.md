@@ -1,5 +1,7 @@
 # Haven Architecture
 
+**English** | [中文](ARCHITECTURE.zh-CN.md)
+
 ## System context
 
 Haven runs inside a user-trusted local Git workspace. The model proposes text and

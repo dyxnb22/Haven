@@ -1,5 +1,4 @@
-"""Session store port: transactional persistence for runs, events, approvals,
-executions, checkpoints, and artifacts."""
+"""会话存储端口：对运行、事件、审批、执行、检查点和构件进行事务性持久化。"""
 
 from __future__ import annotations
 
@@ -32,13 +31,12 @@ class ExecutionRecord:
     tool_name: str
     effect_state: EffectState
     preimage_digest: str
-    #: For writes this is recorded at STARTED time as the *expected* postimage
-    #: (the preview computes it before any byte lands), then confirmed with the
-    #: actual digest on completion. Recording it up front is what lets recovery
-    #: classify a crash in the written-but-not-yet-journaled window.
+    #: 对于写操作，在 STARTED 时记录它作为“预期 postimage”（预览会在任何
+    #: 字节落盘前计算它），完成时再用实际摘要确认。提前记录它，才能让
+    #: 恢复逻辑判断“已写入但尚未记入日志”窗口中的崩溃。
     postimage_digest: str
     path: str
-    #: repo.move only: the destination, so recovery can inspect both ends.
+    #: 仅用于 repo.move：目标路径，使恢复逻辑可以检查移动的两端。
     dest_path: str = ""
 
 
@@ -79,13 +77,11 @@ class SessionStorePort(Protocol):
 
     async def get_artifact(self, digest: str) -> bytes | None: ...
 
-    # -- maintenance (haven gc) ------------------------------------------------
+    # -- 维护（haven gc）--------------------------------------------------------
 
     async def delete_run(self, run_id: str) -> None:
-        """Remove one run and everything recorded under it: events,
-        checkpoints, approvals, and execution journal rows. Artifacts are
-        content-addressed and possibly shared, so they are swept separately
-        against the set still referenced by surviving checkpoints."""
+        """删除一次运行及其下记录的所有内容：事件、检查点、审批和执行日志行。
+        构件按内容寻址且可能被共享，因此会根据仍由存活检查点引用的集合单独清理。"""
         ...
 
     async def list_artifacts(self) -> list[str]: ...

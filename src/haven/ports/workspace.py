@@ -1,4 +1,4 @@
-"""Workspace port: bounded, normalized file access inside one repository."""
+"""工作区端口：在一个仓库内进行有界、规范化的文件访问。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Protocol
 
 @dataclass(frozen=True, slots=True)
 class PathFacts:
-    """Program-verified facts about one path proposal."""
+    """关于一个路径提议、经程序验证的事实。"""
 
     raw: str
     normalized: str
@@ -80,29 +80,28 @@ class EditOutcome:
 
 @dataclass(frozen=True, slots=True)
 class PatchOpSpec:
-    """One operation of a multi-file patch, in port-neutral form."""
+    """多文件补丁中的一个操作，以与端口无关的形式表示。"""
 
-    kind: str  # "edit" | "create" | "delete" | "move"
-    path: str = ""  # edit / create / delete
-    src: str = ""  # move
-    dest: str = ""  # move
-    old: str = ""  # edit
-    new: str = ""  # edit
+    kind: str  # 操作类型："edit" | "create" | "delete" | "move"
+    path: str = ""  # 适用于 edit / create / delete
+    src: str = ""  # 适用于 move
+    dest: str = ""  # 适用于 move
+    old: str = ""  # 适用于 edit
+    new: str = ""  # 适用于 edit
     occurrence: int | None = None
     replace_all: bool = False
-    content: str = ""  # create
+    content: str = ""  # 适用于 create
 
 
 @dataclass(frozen=True, slots=True)
 class PatchEffect:
-    """One file-level effect of a planned patch, for journaling and evidence.
+    """计划补丁产生的一个文件级效果，用于日志和证据。
 
-    Shaped like the single-op tools so the recovery classifier can reuse its
-    existing rules: an interrupted patch is journaled as its constituent
-    effects, each provable from disk on its own.
+    形状与单操作工具一致，因此恢复分类器可以复用现有规则：中断的补丁会按组成
+    其的效果写入日志，每个效果都可以单独从磁盘得到证明。
     """
 
-    tool_shape: str  # "repo.edit" | "repo.create" | "repo.delete" | "repo.move"
+    tool_shape: str  # 工具形态："repo.edit" | "repo.create" | "repo.delete" | "repo.move"
     path: str
     preimage_digest: str
     expected_postimage: str
@@ -111,15 +110,15 @@ class PatchEffect:
 
 @dataclass(frozen=True, slots=True)
 class PatchPreview:
-    """The deterministic plan for a patch: one reviewable diff, the exact
-    preimage set it binds to, and the per-file effects it will journal."""
+    """补丁的确定性计划：一份可审阅的差异、它绑定的精确前像集合，以及将写入日志
+    的逐文件效果。"""
 
     diff: str
-    #: normalized path -> digest of every pre-existing file the patch touches.
+    #: 规范化路径 -> 补丁触及的每个预先存在文件的摘要。
     preimages: dict[str, str]
     effects: tuple[PatchEffect, ...]
-    #: normalized path -> full content for every file that exists after the
-    #: patch. Server-side only; never shown to the model.
+    #: 规范化路径 -> 补丁完成后仍存在的每个文件的完整内容。
+    #: 仅供服务端使用，绝不展示给模型。
     final_contents: dict[str, str]
     insertions: int
     deletions: int
@@ -136,25 +135,24 @@ class RunDiff:
 
 @dataclass(frozen=True, slots=True)
 class WorkspaceSnapshot:
-    """A point-in-time view of the workspace, used to attribute process writes.
+    """工作区某一时刻的视图，用于归因进程写入。
 
-    `digests` covers every regular file, so a change to any of them — text or
-    binary — is detectable. `contents` holds only the diffable subset (valid
-    UTF-8 under the edit size cap), so the run diff can render what changed.
+    `digests` 覆盖每个普通文件，因此任何文件的变更——文本或二进制——都能检测到。
+    `contents` 只保存可生成差异的子集（在编辑大小上限内且为有效 UTF-8），因此
+    运行差异可以渲染具体变更。
     """
 
     digests: dict[str, str] = field(default_factory=dict)
     contents: dict[str, str] = field(default_factory=dict)
-    #: Digests of the protected paths (`.git`, `.haven`, `.haven.toml`), kept
-    #: separately from `digests` (which excludes them). A process that touches
-    #: one of these is a tamper the tool layer must be able to detect, even
-    #: where the OS sandbox cannot prevent it (Landlock cannot carve `.git` out
-    #: of a writable workspace).
+    #: 受保护路径（`.git`、`.haven`、`.haven.toml`）的摘要，与排除这些路径
+    #: 的 `digests` 分开保存。即使操作系统沙箱无法阻止进程触碰它们，工具层
+    #: 也必须能够检测到篡改（Landlock 无法在可写工作区中挖出一个不可写的
+    #: `.git`）。
     protected_digests: dict[str, str] = field(default_factory=dict)
 
 
 class WorkspaceError(Exception):
-    """Raised for workspace violations; always maps to a stable tool error."""
+    """工作区违规时抛出；始终映射为稳定的工具错误。"""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -162,12 +160,11 @@ class WorkspaceError(Exception):
 
 
 class PatchRollbackError(Exception):
-    """A patch failed mid-commit AND its rollback failed: the tree is in a
-    partial state that deterministic code could not undo.
+    """补丁在提交过程中失败，并且回滚也失败：目录树处于确定性代码无法撤销的
+    部分状态。
 
-    Deliberately not a WorkspaceError: the pipeline maps WorkspaceError to a
-    clean FAILED result, while this must surface as an unknown effect so
-    recovery blocks and a human reconciles.
+    有意不继承 WorkspaceError：流水线会将 WorkspaceError 映射为干净的 FAILED
+    结果，而此错误必须暴露为未知效果，以便恢复流程阻止继续并让人类协调处理。
     """
 
 

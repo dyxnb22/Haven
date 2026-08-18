@@ -1,14 +1,12 @@
-"""Layered configuration.
+"""分层配置。
 
-Merge order is fixed and fail-closed:
-built-in safe defaults -> user config -> provider environment + CLI budget tier
--> project `.haven.toml` (tighten-only).
+合并顺序固定，并采用失败即关闭的原则：
+内置安全默认值 -> 用户配置 -> 提供商环境变量和 CLI 预算档位
+-> 项目 `.haven.toml`（仅允许收紧）。
 
-A project file can only *tighten* budgets and *register* verification recipes;
-it can never raise limits, change the provider, or change the agent approval
-policy. A recipe is explicit user-authored process authority and may declare its
-own network/readable-root needs. Secrets live in environment variables only and
-are reported as present/missing.
+项目文件只能收紧预算和注册验证配方；不能提高限制、改变提供商或改变代理的
+审批策略。配方是用户明确编写的进程授权，可以声明自身所需的网络权限和可读
+根目录。秘密只存在于环境变量中，并且只报告“存在/缺失”。
 """
 
 from __future__ import annotations
@@ -51,7 +49,7 @@ class ResolvedConfig:
     budget: Budget
     pricing: Pricing
     recipes: dict[str, RecipeSpec] = field(default_factory=dict)
-    #: config key -> where its final value came from
+    #: config key -> 最终值的来源
     sources: dict[str, str] = field(default_factory=dict)
 
 
@@ -60,10 +58,10 @@ def user_config_path() -> Path:
 
 
 def data_dir() -> Path:
-    """Where the run database and artifacts live (outside any workspace).
+    """运行数据库和构件的存放位置（位于所有工作区之外）。
 
-    `HAVEN_DATA_DIR` overrides the platform default; tests and sandboxed runs
-    use it to avoid touching real user data.
+    `HAVEN_DATA_DIR` 会覆盖平台默认路径；测试和沙箱运行会使用它，以免触碰
+    用户的真实数据。
     """
     override = os.environ.get("HAVEN_DATA_DIR")
     if override:
@@ -167,7 +165,7 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
         "pricing": "default",
     }
 
-    # -- user level ---------------------------------------------------------
+    # -- 用户级别 --------------------------------------------------------------
     user_path = user_config_path()
     if user_path.is_file():
         raw = _read_toml(user_path)
@@ -207,16 +205,15 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
             recipes.update(_parse_recipes(recipes_raw, str(user_path)))
             sources["recipes(user)"] = "user"
 
-    # -- environment overrides for the provider ------------------------------
+    # -- 提供商的环境变量覆盖 --------------------------------------------------
     if env_url := os.environ.get("HAVEN_BASE_URL"):
         provider = ProviderConfig(
             base_url=env_url, model=provider.model, api_key_env=provider.api_key_env
         )
         sources["provider.base_url"] = "env"
     if env_key_name := os.environ.get("HAVEN_API_KEY_ENV"):
-        # Lets a provider keep its conventional variable name (DEEPSEEK_API_KEY,
-        # OPENAI_API_KEY, ...). Only the *name* is configurable here; the secret
-        # itself is never read from config.
+        # 允许提供商继续使用其惯用变量名（DEEPSEEK_API_KEY、OPENAI_API_KEY 等）。
+        # 这里只能配置变量名；秘密本身永远不会从配置中读取。
         provider = ProviderConfig(
             base_url=provider.base_url, model=provider.model, api_key_env=env_key_name
         )
@@ -227,15 +224,15 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
         )
         sources["provider.model"] = "env"
 
-    # -- tier: a user-level choice, so it may raise; applied before the
-    # project file so a repository still cannot widen the selected budget -----
+    # -- tier：用户级选择，因此可以提高上限；在项目文件前应用，以便仓库
+    # 仍然不能扩大已选择的预算 -----------------------------------------------
     if tier is not None:
         if tier not in BUDGET_TIERS:
             raise ConfigError(f"unknown budget tier {tier!r}; choose one of {sorted(BUDGET_TIERS)}")
         budget = BUDGET_TIERS[tier]
         sources["budget"] = f"tier:{tier}"
 
-    # -- project level: may only tighten budgets and register recipes --------
+    # -- 项目级别：只能收紧预算并注册 recipe -----------------------------------
     if workspace is not None:
         project_path = project_config_path(workspace)
         if project_path.is_file():
@@ -265,8 +262,8 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
 
 
 def explain(config: ResolvedConfig, sandbox_backend: str = "unknown") -> list[tuple[str, str, str]]:
-    """(key, value, source) rows for `haven config explain`. Secrets are shown
-    as present/missing, never their value."""
+    """为 `haven config explain` 返回 `(键、值、来源)` 行。秘密只显示存在/缺失，
+    绝不显示实际值。"""
     key_state = "present" if config.provider.api_key() else "missing"
     rows = [
         ("provider.base_url", config.provider.base_url, config.sources["provider.base_url"]),

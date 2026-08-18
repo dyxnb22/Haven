@@ -1,15 +1,12 @@
-"""Verification-command discovery.
+"""验证命令发现。
 
-A fresh repository with no .haven.toml makes every edit dead-end at
-verification_unavailable. Discovery reads the project's own files plus a
-shallow listing and proposes check recipes, so a human can register them. It
-never runs anything and never lets the model supply a command — the detection
-is program-driven and the authorization stays with the user.
+没有 .haven.toml 的全新仓库会使每次编辑都以 verification_unavailable 结束。发现
+功能读取项目自身文件和浅层目录列表并提出检查配方，使人类可以注册它们。它绝不
+运行任何命令，也不允许模型提供命令——检测由程序驱动，授权仍由用户掌握。
 
-The pytest rules encode lessons measured against five real repositories
-(docs/EVAL_LIVE.md): `python -m pytest` rather than the bare binary, tox.ini /
-setup.cfg as config signals, a tests-directory structural fallback, and
-`pythonpath=src` repair for src layouts.
+pytest 规则编码了针对五个真实仓库测得的经验（`docs/EVAL_LIVE.md`）：使用
+`python -m pytest` 而不是裸二进制，以 tox.ini/setup.cfg 作为配置信号，使用
+tests 目录作为结构回退，并为 src 布局修复 `pythonpath=src`。
 """
 
 from haven.domain.discovery import discover_recipes
@@ -44,8 +41,8 @@ class TestPytestConfigSignals:
         assert pytest_argv(discover_recipes(files)) is not None
 
     def test_never_the_bare_pytest_binary(self) -> None:
-        """Measured on idna: bare `pytest` leaves the checkout off sys.path and
-        quietly tests the *installed* copy of the same library."""
+        """在 idna 上测得：裸 `pytest` 不会将检出目录加入 sys.path，并会悄悄测试同一
+        库的*已安装*副本。"""
         files = {"pyproject.toml": "[tool.pytest.ini_options]\n"}
         argv = pytest_argv(discover_recipes(files))
         assert argv is not None
@@ -55,8 +52,8 @@ class TestPytestConfigSignals:
 
 class TestStructuralFallback:
     def test_a_tests_directory_is_itself_a_signal(self) -> None:
-        """Measured on jmespath: setup.py-only packaging, no config signal at
-        all, but a perfectly ordinary tests/ directory."""
+        """在 jmespath 上测得：只有 setup.py 的打包没有任何配置信号，但有一个完全
+        普通的 tests/ 目录。"""
         recipes = discover_recipes({}, ["tests/test_parser.py", "tests/__init__.py"])
         assert pytest_argv(recipes) == ("python", "-m", "pytest", "-q", "tests")
 
@@ -65,8 +62,8 @@ class TestStructuralFallback:
         assert pytest_argv(recipes) == ("python", "-m", "pytest", "-q", "test")
 
     def test_src_layout_gets_the_import_path_repaired(self) -> None:
-        """Measured on tomli: src/<pkg> is not importable from a bare checkout;
-        pytest's own pythonpath override fixes it without generated shims."""
+        """在 tomli 上测得：src/<pkg> 无法从裸检出目录导入；pytest 自身的 pythonpath
+        覆盖可以修复它，而不需要生成 shim。"""
         recipes = discover_recipes(
             {}, ["tests/test_data.py", "src/tomli/__init__.py", "src/tomli/_parser.py"]
         )
@@ -84,8 +81,8 @@ class TestStructuralFallback:
         assert pytest_argv(discover_recipes({}, ["tests/fixtures.json", "src/x.py"])) is None
 
     def test_config_signals_take_precedence_over_structure(self) -> None:
-        """A project that configures pytest is the authority on how to run it;
-        the suggestion must not scope or override what its config already says."""
+        """配置了 pytest 的项目对运行方式拥有权威；建议不得限定范围或覆盖其配置已
+        经声明的内容。"""
         files = {"pyproject.toml": "[tool.pytest.ini_options]\naddopts = '--doctest-modules'\n"}
         recipes = discover_recipes(files, ["tests/test_x.py", "src/pkg/__init__.py"])
         assert pytest_argv(recipes) == ("python", "-m", "pytest", "-q")
@@ -97,11 +94,10 @@ class TestStructuralFallback:
 
 
 class TestPluginWarnings:
-    """A suggestion the environment cannot run needs to say so up front.
+    """环境无法运行的建议必须提前说明这一点。
 
-    Measured on wcwidth: its tox.ini addopts demand pytest-cov, so the
-    suggested command dies with a usage error unless the plugin is installed —
-    the user found out only by running it."""
+    在 wcwidth 上测得：其 tox.ini addopts 要求 pytest-cov，因此除非安装该插件，
+    建议命令会因用法错误退出——用户过去只有实际运行后才会发现。"""
 
     def test_cov_addopts_warn_about_pytest_cov(self) -> None:
         files = {"tox.ini": "[pytest]\naddopts = --cov=pkg --cov-report=html\n"}

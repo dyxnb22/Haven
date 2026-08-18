@@ -1,4 +1,4 @@
-"""Clock port so time is injectable in tests and eval."""
+"""时钟端口，使时间可以注入测试和评估。"""
 
 from __future__ import annotations
 

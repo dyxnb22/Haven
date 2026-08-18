@@ -1,4 +1,4 @@
-"""Event emitter: persists authoritative events, fans out envelopes to sinks."""
+"""事件发射器：持久化权威事件，并将事件信封分发给各个 sink。"""
 
 from __future__ import annotations
 

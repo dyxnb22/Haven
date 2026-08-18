@@ -1,34 +1,31 @@
-"""Localization tasks over a real Java service, and their verified answer key.
+"""真实 Java 服务上的定位任务及其经验证的答案键。
 
-Tier 3 asks the agent to localize inside single-language Python libraries with
-grep-friendly unique names — the regime where `repo.search` is most
-competitive. This benchmark asks the same question where an index should win:
-Spring dependency injection, interfaces whose implementation lives in another
-module under another name, and method names shared by fifty files.
+Tier 3 要求代理在单语言 Python 库中定位，使用 grep 友好的唯一名称——这是
+`repo.search` 最有竞争力的场景。本基准提出相同问题，但场景改为索引应当获胜的
+情况：Spring 依赖注入、实现位于其他模块且名称不同的接口，以及五十个文件共享的
+方法名。
 
-Every task is read-only. Each answer file was opened and confirmed to contain
-the answer, and `naive_hits` records how many files the obvious query returns —
-that number is the difficulty, and it belongs in the report next to the result.
+所有任务都是只读的。每个答案文件都已打开并确认包含答案，`naive_hits` 记录明显
+查询会返回多少个文件——这个数字就是难度，应与结果一起进入报告。
 
-The four kinds are the independent variable:
+四种类型是自变量：
 
-- ``unique-name``   a distinctive identifier; grep should localize in one hop
-- ``interface-impl`` the natural query lands on the interface, and the class
-  that does the work is elsewhere with a different name
-- ``overloaded``    the natural query term is shared by dozens of files
-- ``di-wiring``     the answer is a ``@Configuration`` that chooses a bean, so
-  no amount of searching for the *behaviour* reaches it directly
+- ``unique-name``   独特标识符；grep 应一次跳转就能定位
+- ``interface-impl`` 自然查询落在接口上，而实际工作的类位于别处且名称不同
+- ``overloaded``    自然查询词被几十个文件共享
+- ``di-wiring``     答案是选择 bean 的 ``@Configuration``，因此无论搜索多少次
+  *行为*，都无法直接到达它
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-#: Pinned commit of the benchmark repository. Every task is read-only, so a
-#: run cannot move it; the pin exists so a later result is comparable.
+#: 基准仓库固定使用的提交。所有任务都是只读的，因此运行不会移动仓库；
+#: 固定提交是为了让后续结果保持可比。
 REPO_COMMIT = "d6d675d"
 
-#: The benchmark runs against a copy, never the user's working repository.
+#: 基准运行针对的是副本，绝不会操作用户的工作仓库。
 REPO_ORIGIN = "/Users/diaoyuxuan/big-market-ai-platform"
 REPO_PATH = "/tmp/bigmarket-bench"
 
@@ -37,10 +34,10 @@ REPO_PATH = "/tmp/bigmarket-bench"
 class LocalizationTask:
     id: str
     goal: str
-    #: Repo-relative; reading any one of them counts as having found it.
+    #: 相对于仓库根目录；读取其中任意一个文件都视为找到了答案。
     answer_files: tuple[str, ...]
     kind: str
-    #: The obvious search a person would type, and how many files it returns.
+    #: 人通常会输入的直接搜索词，以及该搜索词返回的文件数量。
     naive_query: str
     naive_hits: int
 

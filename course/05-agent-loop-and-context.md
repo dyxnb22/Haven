@@ -1,119 +1,103 @@
-# Module 05 — The bounded agent loop and context engineering
+# 模块 05——有界代理循环与上下文工程
 
-> Files: `src/haven/application/run_service.py`,
-> `src/haven/application/context_builder.py`, `src/haven/domain/budget.py`,
-> `src/haven/domain/stuck.py`, `src/haven/domain/transitions.py`
-> Tests: `tests/integration/test_agent_journeys.py`,
-> `tests/integration/test_provider_retry.py`, `tests/unit/test_context_builder.py`,
-> `tests/unit/test_budget.py`
-> ADR: [0006 — long-horizon planning and budgets](../docs/adr/0006-long-horizon-planning-and-budgets.md)
+[English](archive/en/05-agent-loop-and-context.md) | **中文**
 
-## Learning objectives
+> 文件：`src/haven/application/run_service.py`、`src/haven/application/context_builder.py`、
+> `src/haven/domain/budget.py`、`src/haven/domain/stuck.py`、`src/haven/domain/transitions.py`
+> 测试：`tests/integration/test_agent_journeys.py`、`tests/integration/test_provider_retry.py`、
+> `tests/unit/test_context_builder.py`、`tests/unit/test_budget.py`
+> ADR：[0006——长程规划与预算](../docs/adr/0006-long-horizon-planning-and-budgets.md)
 
-- Write a finite loop where **every run ends with exactly one stop reason**.
-- Enforce hard budgets and detect stuck loops.
-- Select context deterministically instead of accumulating it.
-- Retry a model call safely — and know when you must not.
+## 学习目标
 
-## The loop
+- 写出一个有限循环，让每次运行都以且只以一个停止原因结束；
+- 强制执行代理无法提高的硬预算，并识别卡死循环；
+- 让上下文由程序确定性选择，而不是无限累积；
+- 安全重试模型调用，并明确什么时候绝不能重试。
 
-`RunService._drive` is the loop: `Model → Tool(s) → Observation → Model …` until
-the program decides to stop. Before each step it checks the budget; it charges a
-step; it builds context; it streams the model; it either runs the proposed tools
-or, on a final answer, consults the Evidence Gate (Module 06).
+## 循环的职责
 
-The discipline to copy: **there is one `_finish` and it always names a
-`StopReason`.** Read the `StopReason` enum. `final_answer`,
-`evidence_satisfied`, `evidence_missing`, `step_budget_exhausted`, `no_progress`,
-`provider_error`, `cancelled`, `verification_unavailable`, … A run cannot dribble
-to a halt in an unknown state; if you cannot name why it stopped, you have a bug.
+`RunService._drive` 可以概括为：
 
-The status transitions themselves go through `domain/transitions.py`, where an
-illegal move *raises*. A state-machine bug fails loudly instead of silently
-corrupting a run.
-
-## Budgets are a ceiling the agent cannot raise
-
-`domain/budget.py`: steps, tool calls, wall time, tokens, cost. A project
-`.haven.toml` may only *lower* them (Module 07's config story), and nothing in
-the loop extends them. ADR 0006 records the defaults (24 steps / 48 tool calls)
-and, importantly, *how they were derived*: the minimum successful trajectory is
-read/edit/create/diff/check/answer, plus ~3 fix-verify rounds. The first version
-(12/24) cut runs off exactly when they would have recovered — and reported
-`step_budget_exhausted`, hiding the real outcome. Lesson: size budgets to the
-work, and treat a budget stop as a real, named result, not a shrug.
-
-## Stuck-loop detection
-
-`domain/stuck.py`: if the model proposes the same tool with the same arguments
-and gets the same result three times, that is `no_progress` and the run stops.
-Cheap, deterministic, and it fires regardless of remaining budget — so a model
-spinning in place cannot burn your whole token budget before you notice.
-
-## Context is selected, not accumulated
-
-This is the heart of the module. Open `context_builder.py`. The context is laid
-out as:
-
-```
-stable head:   system rules · AGENTS.md guidance · Task: {goal}
-               transcript (append-only)
-volatile tail: task plan · run status (step/tool counters)
+```text
+Model → Tool(s) → Observation → Model → …
 ```
 
-Three ideas are doing work here:
+它持续运行，直到程序决定停止。每一步开始前检查预算、计入步数、构建 Context，然后流式调用模型。
+模型如果提出工具，就交给工具通道；如果给出最终回答，就交给 Evidence Gate 判断。
 
-1. **Trust labelling.** Every segment carries a source and a `trusted` /
-   `untrusted` flag, emitted in the `context.built` trace event and visible via
-   `haven debug-context`. Repository-authored `AGENTS.md` is a labelled
-   *untrusted* user message — never part of the system prompt. (An earlier
-   version put it in the system role and labelled it trusted; that was a real bug,
-   see Module 10 and the postmortem.)
-2. **Deterministic truncation.** When the transcript is too big, the oldest tool
-   outputs are replaced with a stub — never a model-written summary, which could
-   invent "facts" that later turns treat as established. The plan is safe because
-   it lives in State and is re-rendered each turn, so truncation cannot lose it.
-3. **Prompt-cache-friendly ordering.** Everything that changes turn to turn (the
-   plan, the budget counters) is at the *tail*, so the leading bytes stay
-   identical across turns and a provider's automatic prefix cache can reuse them.
-   This is ADR 0008; Module 09 has the measured 71%→89% result and the honest
-   caveats.
+最值得复制的纪律是：**只有一个 `_finish`，而且它总会写出一个 `StopReason`。** 例如
+`final_answer`、`evidence_satisfied`、`evidence_missing`、`step_budget_exhausted`、
+`no_progress`、`provider_error`、`cancelled` 和 `verification_unavailable`。
 
-`tests/unit/test_context_builder.py::TestPrefixStability` asserts idea 3
-directly: build turn N and N+1 and confirm the prefix is byte-identical up to the
-new transcript.
+一次运行不能在“好像停了”的未知状态里结束。如果你说不出它为什么停止，那不是日志问题，而是 bug。
+状态迁移还会经过 `domain/transitions.py`；非法迁移直接抛异常，让状态机错误尽早暴露。
 
-## Retrying the model — carefully
+## 预算是代理无法抬高的天花板
 
-Read the retry logic in `run_service.py`. A model call has no side effects, so a
-*connection* failure is safe to retry — unlike a tool call, which is never
-retried. The subtlety, learned from a live run: a mid-stream drop is *also* safe
-to retry, because the assembled text and tool calls are local to the attempt and
-never reach the transcript until the turn completes. The UI is told to discard
-what it showed via a `stream.restarted` event. `tests/integration/test_provider_retry.py`
-pins both the retry and its bounds.
+`domain/budget.py` 管理步数、工具调用次数、墙上时间、token 和成本。`.haven.toml` 只能进一步
+收紧这些限制，循环里的任何内容都不能把它们调大。
 
-## Exercises
+ADR 0006 不只记录默认值（24 步、48 次工具调用），还记录推导过程：最小成功轨迹需要
+read/edit/create/diff/check/answer，再加大约三轮修复—验证。第一版预算是 12/24，刚好在本应恢复时
+截断运行，只留下一个 `step_budget_exhausted`，掩盖了真正结果。
 
-1. **Name the stop.** Run three scripted journeys from `test_agent_journeys.py`
-   and, for each, predict the `StopReason` before you look.
-2. **Force a budget stop.** Write a scripted run with `Budget(max_steps=2)` and a
-   model that never finishes; assert `step_budget_exhausted` and that it stopped
-   at step 2, not later.
-3. **Prove the prefix.** Extend `TestPrefixStability`: advance the budget counter
-   between two turns and assert that only the trailing message differs.
-4. **Reason about retry.** Explain why retrying a tool call would be unsafe even
-   though retrying a model call is fine. Which invariant from Module 03 is at
-   stake?
+预算不是“让程序别跑太久”的模糊开关，而是一个有名字、有解释的运行结果。它应该根据真实工作量设置，
+并在评估中验证。
 
-## Self-check
+## 卡死循环要尽早停
 
-- Give three distinct `StopReason`s and the condition that produces each.
-- Why is model-written summarization banned as a truncation strategy?
-- Where does the plan live, and why does that placement matter twice (truncation
-  *and* caching)?
+`domain/stuck.py` 记录工具、参数和结果。如果三次连续调用完全相同，运行判定为 `no_progress`。
+这种检测便宜、确定，而且不依赖剩余预算；模型原地打转时，不会先把 token 全部烧光才被发现。
 
-## Further reading
+## Context 是选择结果，不是聊天记录的堆积
 
-- ADR 0006 (planning + budgets) and ADR 0008 (prefix ordering).
-- Commit `958d98a` (loop), `9d8e684` (`perf(context)`), `a52b886` (retry).
+打开 `context_builder.py`，先看布局：
+
+```text
+稳定头部：系统规则 · AGENTS.md 指导 · Task: {goal}
+           transcript（追加记录）
+易变尾部：task plan · run status（步数/工具计数器）
+```
+
+这里有三个关键设计：
+
+1. **信任标注。** 每个片段都带来源和 `trusted`/`untrusted` 标记，并写入 `context.built`
+   Trace，也能通过 `haven debug-context` 查看。仓库中的 `AGENTS.md` 是不可信的 user message，
+   永远不能进入 system prompt。早期实现曾把它混进 system role 并标成 trusted；那是一个真实 bug。
+2. **确定性截断。** transcript 太大时，用 stub 替换最老的工具输出，而不是让模型写摘要。模型摘要
+   可能把猜测写成事实；计划属于 State，每轮都会重新渲染，所以截断不会把它丢掉。
+3. **对 prompt cache 友好的顺序。** 计划和预算计数器每轮都会变化，因此放在尾部；前面的字节保持
+   稳定，provider 才能复用前缀缓存。模块 09 会讨论 71%→89% 的测量以及它的边界。
+
+`tests/unit/test_context_builder.py::TestPrefixStability` 直接测试第三点：构建第 N 和第 N+1 轮，
+确认新增 transcript 之前的前缀逐字节相同。
+
+## 重试模型，但不要重试副作用
+
+模型调用本身没有副作用，所以连接失败可以安全重试；工具调用可能已经写入文件，绝不能因为调用方没
+收到响应就盲重试。
+
+在线运行还发现，中途断流也可以重试：本轮组装中的文本和工具调用只存在于当前尝试，整轮完成前不会
+进入 transcript。UI 收到 `stream.restarted`，丢弃已经显示的半截内容。重试逻辑和上限由
+`tests/integration/test_provider_retry.py` 固定。
+
+## 练习
+
+1. **预测停止原因。** 运行 `test_agent_journeys.py` 中三个脚本流程，先预测各自的 `StopReason`，
+   再查看结果。
+2. **强制预算停止。** 使用 `Budget(max_steps=2)` 和一个永不结束的模型，断言它在第 2 步停止，原因
+   是 `step_budget_exhausted`。
+3. **证明前缀稳定。** 在两轮之间推进预算计数器，断言只有尾部消息变化。
+4. **解释重试边界。** 为什么模型调用可以重试，工具调用不行？这依赖模块 03 的哪一条不变量？
+
+## 自测
+
+- 给出三个不同的 `StopReason`，以及各自的触发条件。
+- 为什么不能用模型写的摘要做截断策略？
+- 计划存在哪里？它为什么同时影响截断安全性和缓存命中率？
+
+## 延伸阅读
+
+- ADR 0006（规划与预算）和 ADR 0008（前缀排序）。
+- 提交 `958d98a`（循环）、`9d8e684`（`perf(context)`）、`a52b886`（重试）。

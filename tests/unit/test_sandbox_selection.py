@@ -1,4 +1,4 @@
-"""Backend selection is per-platform and fails closed."""
+"""后端按平台选择，并采用失败即关闭。"""
 
 from haven.bootstrap import select_launcher
 
@@ -15,5 +15,5 @@ class TestSelection:
         assert launcher.backend == "landlock"
 
     def test_unsupported_platform_has_no_backend(self) -> None:
-        """No backend means repo.exec is denied, not that it runs unconfined."""
+        """没有后端意味着拒绝 repo.exec，而不是不受限制地运行它。"""
         assert select_launcher("win32") is None

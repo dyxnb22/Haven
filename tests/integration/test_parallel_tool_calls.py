@@ -1,8 +1,7 @@
-"""Several tool calls in one model turn.
+"""一次模型轮次中的多个工具调用。
 
-The adapter assembles an array and the loop iterates it, so this is expected to
-work already — but "Haven handles parallel tool calls" is a claim, and an
-untested claim regresses silently.
+适配器组装数组，循环遍历数组，因此按设计它本来就应当工作——但“Haven 处理并行
+工具调用”是一项主张，未经测试的主张会悄悄回归。
 """
 
 from pathlib import Path
@@ -53,7 +52,7 @@ class TestSeveralCallsInOneTurn:
         assert outcome.tool_calls == 2
 
     async def test_each_side_effecting_call_gets_its_own_approval(self, tmp_path: Path) -> None:
-        """One approval must never authorize a second action."""
+        """一次审批绝不能授权第二个操作。"""
         turns = [
             [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
             [
@@ -99,7 +98,7 @@ class TestSeveralCallsInOneTurn:
 
         rejected = [e for e in completed(h) if e.error_code == "approval_rejected"]
         assert len(rejected) == 2
-        # The auto-allowed read does execute; neither declined action may.
+        # 自动允许的 read 会执行；两个被拒绝的操作都不能执行。
         executed = {
             event.tool_name
             for event in h.sink.events_of("execution.started")

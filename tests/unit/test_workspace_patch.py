@@ -1,10 +1,8 @@
-"""FsWorkspace.preview_patch / apply_patch: the multi-file transaction.
+"""FsWorkspace.preview_patch / apply_patch：多文件事务。
 
-The preview simulates the whole patch in memory (later operations see earlier
-effects) and plans *net* per-file effects; apply stages every write, then
-commits writes-before-removals with a journaled rollback, so a failure leaves
-either the original tree (clean rollback) or a per-file-classifiable partial
-state (PatchRollbackError).
+预览会在内存中模拟整个补丁（后续操作能看到前序效果），并规划逐文件的*净*效果；
+apply 会暂存每次写入，再按先写入后移除的顺序提交并通过日志回滚，因此失败后只会
+留下原始目录树（干净回滚）或可逐文件分类的部分状态（PatchRollbackError）。
 """
 
 import os
@@ -73,8 +71,8 @@ class TestPreviewSimulation:
         )
         shapes = {e.path: e.tool_shape for e in plan.effects}
         assert shapes == {"src/a.py": "repo.delete", "src/renamed.py": "repo.create"}
-        # Each end carries its own proof: the delete a preimage, the create an
-        # expected postimage — no ambiguous mid-move window exists for a patch.
+        # 两端各自携带证明：删除端有 preimage，创建端有预期 postimage——补丁不
+        # 存在移动过程中那种有歧义的窗口。
         by_path = {e.path: e for e in plan.effects}
         assert by_path["src/a.py"].preimage_digest
         assert by_path["src/renamed.py"].expected_postimage == sha256_text(
@@ -215,7 +213,7 @@ class TestApply:
 
         def failing_replace(src: object, dst: object) -> None:
             calls["n"] += 1
-            if calls["n"] == 2:  # the second file's commit
+            if calls["n"] == 2:  # 第二个文件的提交
                 raise OSError("disk full")
             real_replace(src, dst)  # type: ignore[arg-type]
 
@@ -231,8 +229,8 @@ class TestApply:
     async def test_a_failed_rollback_surfaces_as_a_partial_state(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When the commit AND the compensation both fail, the caller must see
-        PatchRollbackError (-> unknown effect), never a clean failure."""
+        """当提交和补偿都失败时，调用方必须看到 PatchRollbackError（-> 未知效果），
+        而不是干净的失败。"""
         ws = make_ws(tmp_path)
         plan = await ws.preview_patch(
             (
@@ -247,7 +245,7 @@ class TestApply:
 
         def failing_replace(src: object, dst: object) -> None:
             calls["n"] += 1
-            if calls["n"] >= 2:  # second commit fails; rollback's write fails too
+            if calls["n"] >= 2:  # 第二次提交失败；回滚时的写入也失败
                 raise OSError("disk full")
             real_replace(src, dst)  # type: ignore[arg-type]
 

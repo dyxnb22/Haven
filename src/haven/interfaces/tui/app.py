@@ -1,8 +1,7 @@
-"""Haven Textual TUI.
+"""基于 Textual 的 Haven TUI。
 
-The TUI is interface-only: it turns user intent into service calls and renders
-PresenterState from the shared application event stream. It never executes
-tools, never decides policy, and never talks to the provider.
+TUI 仅负责界面：将用户意图转换为服务调用，并渲染共享应用事件流中的
+PresenterState。它不会执行工具、决定策略，也不会直接与提供商通信。
 """
 
 from __future__ import annotations
@@ -34,13 +33,12 @@ from haven.ports.session import SessionStorePort
 
 
 class SessionServices(Protocol):
-    """The slice of the composed application the TUI actually uses.
+    """TUI 实际使用的组合应用子集。
 
-    Structural on purpose: production passes bootstrap's AppServices, tests
-    pass a lightweight stand-in, and the TUI stays decoupled from the
-    composition root while mypy still checks every attribute it touches.
-    Members are read-only properties so implementations may declare narrower
-    concrete types (e.g. AppServices' SqliteSessionStore for `store`).
+    有意采用结构化协议：生产环境传入 bootstrap 的 AppServices，测试传入轻量替身；
+    这样 TUI 与组合根解耦，同时 mypy 仍会检查它访问的每个属性。成员都是只读属性，
+    因此实现可以声明更具体的类型（例如 `store` 使用 AppServices 的
+    SqliteSessionStore）。
     """
 
     @property
@@ -89,8 +87,7 @@ Keys:
 
 
 class QueueSink:
-    """Bounded bridge from the runtime to the UI. Transient deltas are dropped
-    under pressure; authoritative events apply backpressure instead."""
+    """运行时到 UI 的有界桥接。压力过大时丢弃临时增量；权威事件则施加反压。"""
 
     def __init__(self, maxsize: int = 256) -> None:
         self.queue: asyncio.Queue[EventEnvelope] = asyncio.Queue(maxsize=maxsize)
@@ -102,7 +99,7 @@ class QueueSink:
 
 
 class ApprovalScreen(ModalScreen[bool]):
-    """Digest-bound approval dialog: shows exactly what will run, once."""
+    """绑定摘要的审批对话框：一次性准确展示即将执行的内容。"""
 
     BINDINGS = [
         Binding("a", "approve", "Approve"),
@@ -146,19 +143,17 @@ class ApprovalScreen(ModalScreen[bool]):
 
 
 class HavenApp(App[None]):
-    """Main Haven TUI application.
+    """Haven 的主 TUI 应用。
 
-    Data flows one way: user input -> service call -> application events ->
-    presenter.reduce -> PresenterState -> widgets. The app never mutates run
-    state directly; it only renders what the event stream says happened.
+    数据单向流动：用户输入 -> 服务调用 -> 应用事件 -> presenter.reduce
+    -> PresenterState -> widgets。应用不会直接修改运行状态，只渲染事件流所
+    表示已经发生的事情。
 
-    Input handling (`_on_submit`): `/commands` are dispatched locally; plain
-    text starts a run, continues the last one, forks (after `/fork RUN_ID`),
-    or - while a run is active - is queued as steering for the next turn
-    boundary. `@path` mentions are expanded into an explicit note for the
-    agent. Approvals arrive as `approval.requested` events and are answered
-    through a modal (`ApprovalScreen`) wired to QueueApprovalBroker, so the
-    human decision travels the same channel an auto-approver would use.
+    输入处理（`_on_submit`）：`/commands` 在本地分发；普通文本会启动一次运行、
+    继续上一次运行、在 `/fork RUN_ID` 后创建分支，或者在运行活动时作为 steering
+    排队，等待下一次轮次边界。`@path` 提及会展开成明确的说明交给代理。审批以
+    `approval.requested` 事件到达，并通过连接到 QueueApprovalBroker 的模态框
+    （`ApprovalScreen`）回答，因此人类决定与自动审批者使用同一通道。
     """
 
     TITLE = "Haven"
@@ -201,11 +196,10 @@ class HavenApp(App[None]):
         self._state = PresenterState()
         self._run_worker: Worker[None] | None = None
         self._rendered_timeline = 0
-        #: Set by /fork; the next submit branches from this run id instead of
-        #: continuing the current session.
+        #: 由 /fork 设置；下一次提交会从该运行 ID 分支，而不是继续当前会话。
         self._fork_run_id = ""
 
-    # -- layout ---------------------------------------------------------------
+    # -- 布局 ------------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         yield Static("Haven — starting…", id="header")
@@ -226,7 +220,7 @@ class HavenApp(App[None]):
         self._consume_events()
         self._bootstrap()
 
-    # -- workers ---------------------------------------------------------------
+    # -- 工作线程 -----------------------------------------------------------------
 
     @work(exclusive=False)
     async def _bootstrap(self) -> None:
@@ -244,13 +238,13 @@ class HavenApp(App[None]):
                     approvals=self._broker,
                     sinks=[self._sink],
                 )
-        except Exception as exc:  # noqa: BLE001 - surface startup problems in the UI
+        except Exception as exc:  # noqa: BLE001 - 在 UI 中显示启动问题
             self._log_line("system", f"startup failed: {exc}")
             self._set_status(f"startup failed: {exc}")
             return
 
         services = self._services
-        assert services is not None  # just assigned above
+        assert services is not None  # 刚刚在上面赋值
         self._state = PresenterState(
             workspace=str(self._workspace),
             branch=services.git_branch,
@@ -267,8 +261,8 @@ class HavenApp(App[None]):
 
     @property
     def _svc(self) -> SessionServices:
-        """Services after bootstrap. Callers run only once the prompt is live,
-        which `_on_submit` gates on `self._services is None`."""
+        """bootstrap 完成后的服务。只有提示符可用后调用者才会运行；
+        `_on_submit` 会在 `self._services is None` 时阻止调用。"""
         assert self._services is not None
         return self._services
 
@@ -303,7 +297,7 @@ class HavenApp(App[None]):
 
         self.run_worker(_do(), exclusive=False)
 
-    # -- events -> state -> widgets ------------------------------------------------
+    # -- 事件 -> 状态 -> 控件 ----------------------------------------------------
 
     def _apply(self, envelope: EventEnvelope) -> None:
         previous = self._state
@@ -326,7 +320,7 @@ class HavenApp(App[None]):
 
         self.push_screen(ApprovalScreen(request), _decide)
 
-    # -- rendering ---------------------------------------------------------------
+    # -- 渲染 -------------------------------------------------------------------
 
     _ICONS = {
         "user": ">",
@@ -344,8 +338,8 @@ class HavenApp(App[None]):
         self.query_one("#timeline", RichLog).write(f"{icon} {entry.text}")
 
     def _log_line(self, kind: str, text: str) -> None:
-        """UI-local system message: render it and record it in view state so it
-        stays consistent with event-driven timeline entries."""
+        """仅供 UI 使用的系统消息：渲染它，并记录到视图状态中，
+        使其与事件驱动的时间线条目保持一致。"""
         from dataclasses import replace
 
         entry = TimelineEntry(kind, text)
@@ -377,7 +371,7 @@ class HavenApp(App[None]):
     def _set_status(self, text: str) -> None:
         self.query_one("#status", Static).update(text)
 
-    # -- input ---------------------------------------------------------------------
+    # -- 输入 -------------------------------------------------------------------
 
     @on(Input.Submitted, "#prompt")
     def _on_submit(self, message: Input.Submitted) -> None:
@@ -393,31 +387,28 @@ class HavenApp(App[None]):
             return
         text = self._expand_mentions(text)
         if self._state.running:
-            # Steering: queue the input for the active run instead of refusing
-            # it. Delivery happens at the next turn boundary, so nothing
-            # in-flight is interrupted (ROADMAP2 phase 3).
+            # Steering：将输入排入活跃运行，而不是拒绝它。输入会在下一轮边界
+            # 投递，因此不会打断进行中的操作（ROADMAP2 phase 3）。
             self._queue_steering(text)
             return
-        # An explicit /fork target branches a new session from that run instead
-        # of continuing the current one (ROADMAP3 phase 4).
+        # 明确指定的 /fork 目标会从该运行分支出新会话，而不是继续当前会话
+        # （ROADMAP3 phase 4）。
         fork_target = self._fork_run_id
         self._fork_run_id = ""
         if fork_target:
             self._run_worker = self._execute_continue(fork_target, text)
             return
-        # A follow-up after a finished run continues the same conversation, so
-        # the model keeps the prior turn's context instead of starting blank
-        # (Phase 2). The first submit of the session starts a fresh run.
+        # 已完成运行后的后续提交会继续同一段对话，因此模型保留上一轮上下文，
+        # 而不是从空白开始（Phase 2）。会话中的第一次提交会启动新运行。
         if self._state.run_id:
             self._run_worker = self._execute_continue(self._state.run_id, text)
         else:
             self._run_worker = self._execute_run(text)
 
     def _expand_mentions(self, text: str) -> str:
-        """Expand @path mentions into a note naming the file(s), so the goal
-        points the agent at them explicitly. The agent still reads through
-        repo.read (provenance and preimage binding stay in the tool channel);
-        the mention only saves it a search."""
+        """将 @path 提及展开为列出文件的说明，让目标明确指向这些文件。
+        代理仍会通过 repo.read 读取文件（来源和 preimage 绑定仍保留在工具通道中）；
+        提及内容只是替它省去一次搜索。"""
         import re
 
         mentions = re.findall(r"(?:^|\s)@([\w./-]+)", text)
@@ -482,12 +473,11 @@ class HavenApp(App[None]):
             self._log_line("system", f"unknown command {name}; try /help")
 
     def _rewind_command(self, command: str) -> None:
-        """User-level undo of this session's last finished run (ADR 0020).
+        """用户级撤销本会话最近一次已完成的运行（ADR 0020）。
 
-        Two-step on purpose: `/rewind` states exactly what would happen,
-        `/rewind yes` performs it. The operation itself is fail-closed —
-        RecoveryService.rewind refuses any file that changed since the run —
-        so the confirmation is about intent, not safety.
+        特意设计为两步：`/rewind` 只说明将要发生什么，`/rewind yes` 才执行撤销。
+        操作本身采用失败即拒绝策略——RecoveryService.rewind 会拒绝处理运行结束后
+        发生过变化的任何文件——因此确认针对的是用户意图，而不是安全性。
         """
         if self._services is None:
             self._log_line("system", "still starting up, try again in a moment")
@@ -555,7 +545,7 @@ class HavenApp(App[None]):
 
         self.run_worker(_do(), exclusive=False)
 
-    # -- actions ----------------------------------------------------------------------
+    # -- 动作 -------------------------------------------------------------------
 
     def action_cancel_or_quit(self) -> None:
         if self._state.running and self._run_worker is not None:

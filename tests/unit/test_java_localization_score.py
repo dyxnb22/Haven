@@ -1,14 +1,11 @@
-"""Scoring Java localization from the tool trace.
+"""根据工具追踪记录评估 Java 定位。
 
-Grading the final prose would be a keyword probe: an agent that lists ten
-candidate files scores like one that knew. The trace answers the question
-directly — how much work did localization take — which is the quantity an index
-would reduce.
+评分最终 prose 会变成关键词测试：列出十个候选文件的代理，得分可能和真正找到答案
+的代理一样。追踪记录直接回答“定位花了多少工作”，这是索引要减少的量。
 
-The event shapes here are the real ones: `tool.proposed` carries the step and
-the arguments, `tool.completed` carries only the call id and the status, so the
-scorer has to join them. A scorer written against a guessed schema would report
-"never found" for every run and look like a devastating result.
+这里的事件形状是真实形状：`tool.proposed` 携带步骤和参数，`tool.completed` 只携带
+调用 id 和状态，因此评分器必须将二者连接起来。针对猜测模式编写的评分器会把每次
+运行都报告为“从未找到”，造成看似灾难性的结果。
 """
 
 import json
@@ -61,8 +58,8 @@ class TestStepsToFirstCorrectRead:
         assert steps_to_first_correct_read(events, ("src/main/java/Right.java",)) is None
 
     def test_a_failed_read_is_not_a_hit(self) -> None:
-        """A denied or not-found read never showed the agent the file, so
-        counting it would credit localization that did not happen."""
+        """被拒绝或未找到的读取从未将文件展示给代理，因此计入它会把未发生的定位算
+        成成功。"""
         events = [
             _proposed(1, "c1", "src/main/java/Right.java"),
             _completed("c1", status="error"),
@@ -70,8 +67,8 @@ class TestStepsToFirstCorrectRead:
         assert steps_to_first_correct_read(events, ("src/main/java/Right.java",)) is None
 
     def test_an_absolute_path_still_matches_the_repo_relative_answer(self) -> None:
-        """The agent may read through a path the workspace resolved; the answer
-        key is repo-relative, and a suffix match is what makes them comparable."""
+        """代理可能通过工作区解析后的路径读取；答案键是相对于仓库的路径，后缀匹配
+        使二者可比较。"""
         events = _read(2, "c1", "/tmp/bigmarket-bench/src/main/java/Right.java")
         assert steps_to_first_correct_read(events, ("src/main/java/Right.java",)) == 2
 
@@ -95,8 +92,7 @@ class TestScoreRun:
 
 class TestLoadEvents:
     def test_it_unwraps_the_journal_envelope(self, tmp_path: Any) -> None:
-        """`--events` writes `{"seq":…, "at":…, "event":{…}}` per line, not the
-        bare event."""
+        """`--events` 每行写入 `{"seq":…, "at":…, "event":{…}}`，而不是裸事件。"""
         path = tmp_path / "run.jsonl"
         path.write_text(
             json.dumps({"seq": 1, "at": "now", "event": _proposed(1, "c1", "a/Right.java")}) + "\n",

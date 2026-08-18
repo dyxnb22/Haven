@@ -1,5 +1,5 @@
-"""`collect_garbage` policy: keep-newest, active-run protection, age cutoff,
-dry-run defaults, and the referenced-artifact sweep."""
+"""`collect_garbage` 策略：保留最新运行、保护活动运行、按年龄截断、默认演练，以及
+清理被引用构件。"""
 
 from datetime import UTC, datetime
 
@@ -50,7 +50,7 @@ async def test_keeps_the_newest_and_deletes_the_rest() -> None:
 
     report = await collect_garbage(store, keep=2, apply=True)
 
-    # list_runs is newest-first; creation order means run-4 is newest.
+    # list_runs 按最新在前排列；按创建顺序，run-4 是最新的。
     assert set(report.kept) == {"run-4", "run-3"}
     assert set(report.deleted) == {"run-2", "run-1", "run-0"}
     assert await store.get_run("run-0") is None
@@ -87,12 +87,12 @@ async def test_older_than_protects_young_runs_beyond_keep() -> None:
     for index in range(3):
         await _seed_run(store, f"run-{index}")
 
-    # Everything was created "now", so a 7-day cutoff protects all of them
-    # even though keep=0 would otherwise delete every run.
+    # 所有内容都是“现在”创建的，因此 7 天截止时间会保护它们，即使 keep=0
+    # 按其他条件本来会删除所有运行。
     report = await collect_garbage(store, keep=0, older_than_days=7, apply=True)
     assert report.deleted == ()
 
-    # With `now` far in the future every run is older than the cutoff.
+    # 当 `now` 远在未来时，每个运行都早于截止时间。
     future = datetime(2099, 1, 1, tzinfo=UTC)
     report = await collect_garbage(store, keep=0, older_than_days=7, apply=True, now=future)
     assert len(report.deleted) == 3
@@ -110,7 +110,7 @@ async def test_artifact_sweep_keeps_shared_references() -> None:
     report = await collect_garbage(store, keep=1, apply=True)
 
     assert report.deleted == ("run-old",)
-    # shared survives (run-new still references it); the other two are swept.
+    # shared 会保留（run-new 仍然引用它）；另外两个会被清理。
     assert await store.get_artifact(shared) == b"shared original"
     assert await store.get_artifact(only_old) is None
     assert await store.get_artifact(unreferenced) is None

@@ -1,4 +1,4 @@
-"""Scoped project guidance: root + nested AGENTS.md, bounded and untrusted."""
+"""有作用域的项目指导：根目录 + 嵌套 AGENTS.md，有界且不可信。"""
 
 from pathlib import Path
 
@@ -38,7 +38,7 @@ async def test_nested_agents_md_is_scoped_and_labelled(tmp_path: Path) -> None:
     assert "root rule" in guidance
     assert "src-specific rule" in guidance
     assert "src/AGENTS.md" in guidance
-    # Root guidance precedes the scoped one.
+    # 根目录指导位于作用域指导之前。
     assert guidance.index("root rule") < guidance.index("src-specific rule")
 
 

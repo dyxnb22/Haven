@@ -1,10 +1,8 @@
-"""Decision notes must record what the decision beat, not just what it was.
+"""决策笔记必须记录该决策击败了什么，而不只是记录决策内容。
 
-ADRs carry the load-bearing architectural calls, but most decisions are smaller
-than an ADR and currently have no home — they live in a chat log that no future
-reader has. A note is that home. The one section it cannot omit is the
-alternatives: a decision with no record of what it defeated invites being
-re-litigated by the next person who has the same idea.
+ADR 承载关键架构决策，但大多数决策比 ADR 小，目前没有固定归处——它们存在未来
+读者无法查阅的聊天记录中。笔记就是这个归处。唯一不能省略的章节是备选方案：不
+记录决策否定了什么，就会邀请下一个想到相同点子的人重新争论。
 """
 
 import pytest
@@ -58,7 +56,7 @@ class TestTheRealNotes:
         assert collect_problems() == []
 
     def test_notes_actually_exist(self) -> None:
-        """A gate over an empty directory proves nothing."""
+        """对空目录运行门禁无法证明任何事情。"""
         from scripts.check_notes import note_paths
 
         assert len(note_paths()) >= 2

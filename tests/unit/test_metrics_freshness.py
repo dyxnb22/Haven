@@ -1,10 +1,8 @@
-"""The generated metrics table must never publish a stale coverage figure.
+"""生成的指标表绝不能发布过时的覆盖率数字。
 
-`coverage report` reads whatever `.coverage` already holds; it never re-runs the
-suite. Refreshing the table after editing source — but before re-running
-coverage — therefore reports the new lines as uncovered and writes a wrong
-number into a table CI then enforces. Found exactly that way: an 88% figure
-became "84%" purely from stale data.
+`coverage report` 读取 `.coverage` 已有的内容，不会重新运行套件。因此在编辑源码后、
+重新运行覆盖率前刷新表格，会将新增行报告为未覆盖，并将错误数字写入 CI 随后强制
+执行的表格。曾经正是这样发现问题：88% 的数字仅因数据过时变成了“84%”。
 """
 
 import os

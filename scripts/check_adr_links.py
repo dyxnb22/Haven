@@ -1,14 +1,12 @@
-"""Assert that an overturned ADR points at the ADR that overturned it.
+"""断言被推翻的 ADR 指向推翻它的 ADR。
 
-Decision records are read one at a time, usually by someone who found exactly
-one of them. So when a later ADR amends, supersedes, corrects, or reverses an
-earlier one, the earlier one has to say so — otherwise the stale reasoning is
-what the reader takes away.
+决策记录通常由刚好找到其中一篇的人逐篇阅读。因此，当后来的 ADR 修订、取代、
+纠正或推翻较早的 ADR 时，较早的记录必须明确说明，否则读者带走的就会是过时的
+推理。
 
-This gate exists because that happened: ADR 0026 refuted the central premise of
-ADR 0009 ("a misclassification costs a skipped prompt, not an escape") and ADR
-0009 carried no pointer to it. Only strong verbs are checked; an ADR may cite
-another for context freely without owing it a backlink.
+设置此门禁是因为这种情况确实发生过：ADR 0026 反驳了 ADR 0009 的核心前提
+（“分类错误会漏掉提示，但不会造成逃逸”），而 ADR 0009 没有指向它。这里只检查
+强语义动词；ADR 可以自由引用其他记录作为上下文，不因此欠下反向链接。
 
     uv run python scripts/check_adr_links.py
 """
@@ -21,15 +19,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 ADR_DIR = ROOT / "docs" / "adr"
 
-#: Verbs that change what an earlier ADR means, and therefore oblige a backlink.
-#: "extends" and a bare citation are deliberately excluded: they add to a
-#: decision without invalidating anything a reader would act on.
+#: 会改变早期 ADR 含义、因而必须建立反向链接的动词。
+#: 特意排除 "extends" 和单纯引用：它们只是在决策上追加内容，并不会使
+#: 读者据此采取行动的任何内容失效。
 #:
-#: The `(?!\s+by\b)` is load-bearing and was found by this gate failing on its
-#: own repository. "Corrected **by** ADR 0026" is the passive form: the document
-#: saying it is the one being overturned, so that sentence *is* the backlink and
-#: creates no obligation. Without the lookahead, ADR 0001's "reversed by ADR
-#: 0009" read as 0001 overturning 0009 — the relationship backwards.
+#: `(?!\s+by\b)` 是关键约束，是这个门禁在自身仓库中失败后发现的。
+#: “Corrected **by** ADR 0026” 是被动语态：该文档说明自己是被推翻的一方，
+#: 所以这句话本身就是反向链接，不会产生额外义务。如果没有这个前瞻，ADR 0001
+#: 的 “reversed by ADR 0009” 会被读成 0001 推翻 0009——把关系方向反过来了。
 _STRONG = re.compile(
     r"\b(?:amend(?:s|ed|ment)?|supersed(?:e|es|ed)|correct(?:s|ed)|revers(?:e|es|ed))\b"
     r"(?!\s+by\b)"
@@ -39,12 +36,12 @@ _STRONG = re.compile(
 
 
 def strong_references(text: str) -> set[int]:
-    """ADR numbers this text claims to amend, supersede, correct, or reverse."""
+    """本文声称要修订、取代、纠正或推翻的 ADR 编号。"""
     return {int(match) for match in _STRONG.findall(text)}
 
 
 def backlink_problems(docs: dict[int, str]) -> list[str]:
-    """Every strong reference whose target does not point back."""
+    """找出每个强引用中、目标记录没有反向指向当前记录的引用。"""
     problems: list[str] = []
     for number, text in sorted(docs.items()):
         for target in sorted(strong_references(text)):

@@ -1,8 +1,7 @@
-"""Phase 3 session runtime: steering a running agent, rewind, fork.
+"""Phase 3 会话运行时：引导活动代理、撤回、创建分支。
 
-Steering must land only at a turn boundary (the tool channel is never
-interrupted), rewind must be fail-closed compensation, and fork is a
-follow-up from any checkpointed run, not just the latest.
+steering 只能在轮次边界进入（工具通道永不被中断），撤回必须是失败即关闭的补偿，
+而 fork 可以从任意有检查点的运行创建后续请求，而不只是最近一次运行。
 """
 
 from pathlib import Path
@@ -13,13 +12,13 @@ from tests.integration.harness import Harness, finish, make_repo, text, tool
 
 
 class _SteerOnToolCompleted:
-    """Event sink that queues steering when a given tool call completes —
-    i.e. mid-turn, exactly where a user typing during a run lands."""
+    """某个工具调用完成时排队 steering 的事件接收器——也就是轮次中间，用户在运行
+    期间输入内容实际到达的位置。"""
 
     def __init__(self, call_id: str, message: str) -> None:
         self.call_id = call_id
         self.message = message
-        self.service = None  # attached after Harness construction
+        self.service = None  # 在 Harness 构造之后附加
 
     async def emit(self, envelope: EventEnvelope) -> None:
         event = envelope.event
@@ -41,10 +40,10 @@ class TestSteering:
             [text("Done reading."), finish()],
         ]
         h = Harness(repo, turns)
-        # Queued while step 1's tool call is finishing (mid-turn), so it must
-        # be delivered at the next boundary — request 2 — and not sooner.
+        # 在第 1 步的工具调用收尾时排队（轮次中途），因此必须在下一边界——
+        # 请求 2——投递，不能更早。
         steerer = _SteerOnToolCompleted("c1", "also check the README licensing section")
-        h.emitter._sinks.append(steerer)  # noqa: SLF001 - test-only wiring
+        h.emitter._sinks.append(steerer)  # noqa: SLF001 - 仅测试 wiring
         steerer.service = h.service
 
         outcome = await h.service.run("Look around the repository")
@@ -71,8 +70,8 @@ class TestSteering:
     async def test_undelivered_steering_does_not_leak_into_the_next_run(
         self, tmp_path: Path
     ) -> None:
-        """Steering queued on the final turn has no later boundary; it must
-        be dropped (visible in the journal), not delivered to a future run."""
+        """最后一轮排队的 steering 没有后续边界；必须丢弃（并在日志中可见），不能
+        交付给未来运行。"""
         repo = make_repo(tmp_path)
         turns = [
             [text("First run answer."), finish()],
@@ -88,8 +87,7 @@ class TestSteering:
                 if event.kind == "model.completed" and "First run answer" in getattr(
                     event, "text", ""
                 ):
-                    # Queued during the run's very last turn: there is no
-                    # later boundary, so it can never be delivered.
+                    # 在运行最后一轮期间排队：没有后续边界，因此永远无法投递。
                     await self.service.steer("too late for this run")
 
         steerer = _SteerOnFinalAnswer()
@@ -165,7 +163,7 @@ class TestRewind:
         h = Harness(repo, turns)
         outcome = await h.service.run("Fix add()")
 
-        # Someone edits the file after the run: rewind must refuse to clobber.
+        # 运行结束后有人编辑文件：rewind 必须拒绝覆盖它。
         (repo / "src" / "calc.py").write_text("def add(a, b):\n    return a + b + 0\n")
         recovery = RecoveryService(h.store, h.workspace)
         report = await recovery.rewind(outcome.run_id)
@@ -176,8 +174,8 @@ class TestRewind:
 
 class TestFork:
     async def test_continue_from_an_older_run_forks_the_session(self, tmp_path: Path) -> None:
-        """Fork semantics: a follow-up can branch from ANY checkpointed run,
-        not only the latest; the branch records its parent."""
+        """Fork 语义：后续请求可以从任意有检查点的运行分支，而不只是最近一次；分支
+        会记录其父运行。"""
         repo = make_repo(tmp_path)
         turns = [
             [text("First answer: ALPHA."), finish()],
@@ -197,8 +195,7 @@ class TestFork:
         ]
         assert created and created[0].parent_run_id == first.run_id
 
-        # The fork's transcript branches from run 1: it carries ALPHA but not
-        # the sibling's BETA.
+        # fork 的 transcript 从运行 1 分支：携带 ALPHA，但不携带同级运行的 BETA。
         last_request = "\n".join(m.content for m in h.model.requests_seen[-1].messages)
         assert "ALPHA" in last_request
         assert "BETA" not in last_request

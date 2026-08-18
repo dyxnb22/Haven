@@ -1,5 +1,5 @@
-"""Search: ripgrep and the pure-Python fallback must agree, and both must skip
-vendor/build directories so search stays usable on a real repository."""
+"""搜索：ripgrep 和纯 Python 回退必须结果一致，并且都要跳过 vendor/build 目录，使
+搜索在真实仓库中保持可用。"""
 
 import shutil
 from pathlib import Path
@@ -19,7 +19,7 @@ def repo(tmp_path: Path) -> Path:
     (tmp_path / "src" / "util.py").write_text("# helper: BUG tracking\nVALUE = 1\n")
     (tmp_path / "README.md").write_text("# demo\nno issues here\n")
 
-    # vendor noise that must never be searched
+    # 绝不能搜索的 vendor 噪声
     (tmp_path / "node_modules" / "left-pad").mkdir(parents=True)
     (tmp_path / "node_modules" / "left-pad" / "index.js").write_text("// BUG in vendor code\n")
     (tmp_path / ".venv" / "lib").mkdir(parents=True)

@@ -8,8 +8,8 @@ on:
 
 jobs:
   test:
-    # Both platforms, because each has its own sandbox backend and the
-    # enforcement tests skip where a backend is missing.
+    # 两个平台都运行，因为每个平台都有自己的沙箱后端；缺少后端的平台会
+    # 跳过强制执行测试。
     strategy:
       fail-fast: false
       matrix:
@@ -35,7 +35,7 @@ jobs:
           print('backend:', l.backend if l else 'none', 'available:', bool(l and l.available()))"
 
       - name: Quality gates
-        # One declarative graph (scripts/gates.py) that CI and developers both
-        # traverse, so "what CI runs" and "what I can run locally" cannot drift.
-        # `--list` shows the graph; `--mode fast` is the no-tests subset.
+        # CI 和开发者共同遍历同一张声明式图（scripts/gates.py），因此“CI 运行
+        # 什么”和“本地能运行什么”不会逐渐偏离。`--list` 显示该图；
+        # `--mode fast` 是不含测试的子集。
         run: uv run python scripts/gates.py --mode full

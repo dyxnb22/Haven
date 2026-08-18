@@ -1,4 +1,4 @@
-"""Presenter reducer unit tests (pure, no Textual required)."""
+"""Presenter reducer 单元测试（纯逻辑，不需要 Textual）。"""
 
 from haven.contracts.events import (
     ApprovalRequested,
@@ -65,7 +65,7 @@ def test_streaming_then_completion() -> None:
             )
         ),
     )
-    assert state.streaming_text == ""  # cleared on completion
+    assert state.streaming_text == ""  # 完成时清空
     assert "Hello done" in state.chat_text
     assert state.input_tokens == 10
 
@@ -172,6 +172,6 @@ def test_reducer_is_pure() -> None:
             )
         ),
     )
-    # original is frozen and untouched
+    # 原始状态是冻结的，且未被修改
     assert original.tool_calls == 0
     assert original.timeline == ()

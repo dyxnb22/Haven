@@ -1,8 +1,8 @@
-"""Haven CLI: TUI by default, plus headless and management commands.
+"""Haven CLI：默认启动 TUI，同时提供无头和管理命令。
 
-Stable exit codes:
-0 success | 2 usage error | 3 policy/permission | 4 provider error
-5 tool error | 6 budget or stopped | 7 recovery required
+稳定的退出码：
+0 成功 | 2 用法错误 | 3 策略/权限错误 | 4 提供商错误
+5 工具错误 | 6 预算耗尽或已停止 | 7 需要恢复
 """
 
 from __future__ import annotations
@@ -67,11 +67,10 @@ def _exit_code_for(status: RunStatus, stop_reason: StopReason) -> int:
     return EXIT_STOPPED
 
 
-#: Control characters are stripped before anything reaches the terminal. The
-#: TUI has always done this (`presenter.sanitize`); the headless sink echoed
-#: model-controlled text raw, so a model could emit ANSI escapes that rewrite
-#: the operator's terminal or forge log lines. Rich markup needs no escaping
-#: here — typer.echo writes plain bytes, it does not render markup.
+#: 控制字符会在任何内容到达终端前被移除。TUI 一直这样做
+#:（`presenter.sanitize`）；无头输出以前会原样回显模型控制的文本，因此模型
+#: 可以发出 ANSI 转义序列来改写操作员的终端或代码托管日志行。这里不需要
+#: 转义 Rich 标记——typer.echo 写入普通字节，不会渲染标记。
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
@@ -80,7 +79,7 @@ def _plain(text: str) -> str:
 
 
 class ConsoleSink:
-    """Compact human-readable event stream for headless runs and replay."""
+    """供无头运行和重放使用的紧凑、适合人类阅读的事件流。"""
 
     def __init__(self, verbose: bool = True) -> None:
         self._verbose = verbose
@@ -113,7 +112,7 @@ class ConsoleSink:
                 f"finished: {event.status} ({event.stop_reason}) "
                 f"steps={event.steps} tools={event.tool_calls} "
                 f"tokens={event.input_tokens}/{event.output_tokens}{cached} "
-                # An unpriced model must not read as a free one.
+                # 没有费率的模型不能看起来像是免费模型。
                 + (
                     f"cost=${event.cost_usd:.4f}"
                     if event.cost_known
@@ -131,12 +130,11 @@ class NullSink:
 
 
 class JsonlEventSink:
-    """Streams every persisted event as one JSON line to a file, live.
+    """实时将每个已持久化事件以一行 JSON 写入文件。
 
-    This is the CI/automation counterpart to `--jsonl` (which prints only the
-    final outcome): a parseable, ordered record of the whole run as it happens,
-    written through the same event stream the TUI and journal see. Transient
-    UI-only deltas are dropped; everything with a journal seq is kept.
+    这是 `--jsonl`（只打印最终结果）的 CI/自动化对应方式：通过 TUI 和日志所见的
+    同一事件流，按运行发生的顺序写下整个运行过程，结果可解析且有序。只供 UI 使用
+    的瞬态增量会丢弃；所有带日志 seq 的事件都会保留。
     """
 
     def __init__(self, path: Path) -> None:
@@ -157,7 +155,7 @@ def main(
     ctx: typer.Context,
     version: bool = typer.Option(False, "--version", "-V", help="Show version and exit."),
 ) -> None:
-    """Launch the Haven TUI when called without a subcommand."""
+    """未提供子命令时启动 Haven TUI。"""
     if version:
         typer.echo(f"haven {__version__}")
         raise typer.Exit()
@@ -171,7 +169,7 @@ def main(
 def tui(
     path: Path = typer.Argument(Path("."), help="Workspace directory."),
 ) -> None:
-    """Launch the interactive TUI in a workspace."""
+    """在工作区中启动交互式 TUI。"""
     from haven.interfaces.tui.app import HavenApp
 
     HavenApp(workspace=path.resolve()).run()
@@ -209,13 +207,12 @@ def run(
         ),
     ),
 ) -> None:
-    """Run a goal headlessly.
+    """无头运行一个目标。
 
-    Read-only by default (proposes, never mutates). With --write the run may
-    change files, but only through the same approval + Evidence Gate channel a
-    TUI run uses — the --approval-policy supplies the decision a human would:
-    `reject` (see what it would do), `trusted-recipe` (verify but do not
-    mutate), or `all` (full unattended auto-fix). CI-friendly with --jsonl.
+    默认只读（提出操作但从不修改）。使用 --write 后，运行可以修改文件，但仍然
+    只能通过 TUI 运行使用的同一审批 + Evidence Gate 通道；--approval-policy 提供
+    相当于人类决定的策略：`reject`（只查看它会做什么）、`trusted-recipe`（执行
+    验证但不修改）或 `all`（完全无人值守的自动修复）。配合 --jsonl 适合 CI。
     """
     policy_map = {"reject": "reject", "trusted-recipe": "trusted_recipe", "all": "all"}
     if approval_policy not in policy_map:
@@ -231,10 +228,9 @@ def run(
         events_sink = JsonlEventSink(events_path) if events_path is not None else None
         if events_sink is not None:
             sinks.append(events_sink)
-        # Read-only stays a policy-layer guarantee (writes denied regardless of
-        # approver); --write moves to interactive mode where the headless
-        # approver's policy decides. `all` is only reachable with --write, so
-        # unattended mutation can never be the accidental default.
+        # 只读仍是策略层保证（无论审批者是谁都拒绝写入）；--write 会切换到
+        # 交互模式，由无头审批者的策略作出决定。只有使用 --write 才能到达
+        # `all`，因此无人值守的修改绝不会意外成为默认行为。
         if write:
             mode = PermissionMode.INTERACTIVE
             approver: ApprovalResponder = HeadlessApprover(policy_map[approval_policy])  # type: ignore[arg-type]
@@ -255,8 +251,8 @@ def run(
             typer.echo(f"error: {exc}")
             return EXIT_USAGE
         if write and services.lease is None and services.lease_warning:
-            # Another process holds the writer lease; a headless write would be
-            # silently downgraded to read-only, which a CI caller must be told.
+            # 另一个进程持有写入租约；无头写入会静默降级为只读，因此必须告知
+            # CI 调用方。
             typer.echo(f"error: {services.lease_warning}")
             await services.close()
             if events_sink is not None:
@@ -299,10 +295,10 @@ def continue_(
     workspace: Path = typer.Option(Path("."), "--workspace", "-w"),
     json_output: bool = typer.Option(False, "--json", help="Print the outcome as JSON."),
 ) -> None:
-    """Ask a follow-up in the context of a prior run (read-only, headless).
+    """在之前运行的上下文中提出后续请求（只读、无头）。
 
-    The prior transcript is carried forward, so the model answers with the
-    earlier turn's context rather than from a blank slate (Phase 2).
+    之前的对话记录会继续传递，因此模型会基于上一轮的上下文回答，而不是从空白
+    上下文开始（Phase 2）。
     """
 
     async def _continue() -> int:
@@ -348,7 +344,7 @@ def continue_(
 def doctor(
     workspace: Path = typer.Option(Path("."), "--workspace", "-w"),
 ) -> None:
-    """Check the local environment without side effects or paid calls."""
+    """在没有副作用和付费调用的情况下检查本地环境。"""
     import os
     import shutil
     import sys
@@ -369,7 +365,7 @@ def doctor(
     )
     check("git", shutil.which("git") is not None, shutil.which("git") or "not found")
     ripgrep = shutil.which("rg")
-    # Informational, not a failure: search falls back to a pure-Python scanner.
+    # 这是提示而不是失败：搜索会回退到纯 Python 扫描器。
     typer.echo(
         f"[ok ] ripgrep: {
             ripgrep
@@ -398,9 +394,8 @@ def doctor(
 
     from haven.config import data_dir
 
-    # Probe writability without creating anything: doctor must have no side
-    # effects, so it inspects the nearest existing ancestor rather than running
-    # mkdir. The directory is created for real on the first actual run.
+    # 不创建任何内容来探测可写性：doctor 必须没有副作用，因此检查最近的
+    # 已存在祖先目录，而不是运行 mkdir。目录会在第一次真正运行时创建。
     target = data_dir()
     ancestor = target
     while not ancestor.exists() and ancestor != ancestor.parent:
@@ -417,7 +412,7 @@ def doctor(
 
 @sessions_app.command("list")
 def sessions_list(limit: int = typer.Option(20, help="Max runs to show.")) -> None:
-    """List stored runs, newest first."""
+    """列出已存储的运行，最新的排在最前。"""
 
     async def _list() -> None:
         from haven.bootstrap import open_store
@@ -441,7 +436,7 @@ def sessions_list(limit: int = typer.Option(20, help="Max runs to show.")) -> No
 
 @sessions_app.command("show")
 def sessions_show(run_id: str) -> None:
-    """Show the stored event timeline of one run."""
+    """显示一次运行已存储的事件时间线。"""
 
     async def _show() -> int:
         from haven.application.replay_service import ReplayService
@@ -473,11 +468,10 @@ def gc(
     ),
     yes: bool = typer.Option(False, "--yes", help="Actually delete. Default is a dry run."),
 ) -> None:
-    """Prune old runs and unreferenced artifacts from the local store.
+    """从本地存储中清理旧运行和未被引用的构件。
 
-    Dry run by default: prints what would be removed and touches nothing
-    until --yes. Active runs are always kept; artifacts survive as long as
-    any surviving run's checkpoint still references them.
+    默认是演练：打印将要移除的内容，在传入 --yes 前不会触碰任何数据。活动运行
+    始终保留；只要仍有运行的检查点引用某个构件，该构件就会继续保留。
     """
 
     async def _gc() -> None:
@@ -510,7 +504,7 @@ def gc(
 
 @app.command()
 def replay(run_id: str) -> None:
-    """Replay a run's journal to the console (no model, no tools)."""
+    """将一次运行的日志重放到控制台（不调用模型，不执行工具）。"""
 
     async def _replay() -> int:
         from haven.application.replay_service import ReplayService
@@ -534,7 +528,7 @@ def resume(
     run_id: str,
     workspace: Path = typer.Option(Path("."), "--workspace", "-w"),
 ) -> None:
-    """Resume an interrupted run in the TUI after recovery checks."""
+    """通过恢复检查后，在 TUI 中继续一次中断的运行。"""
 
     async def _inspect() -> int:
         from haven.application.recovery_service import RecoveryService
@@ -576,13 +570,11 @@ def rewind(
     run_id: str,
     workspace: Path = typer.Option(Path("."), "--workspace", "-w"),
 ) -> None:
-    """Undo a finished run's file changes (user-level rewind, fail-closed).
+    """撤销已完成运行的文件变更（用户级撤回，失败即关闭）。
 
-    Every file the run touched is restored to its pre-run content — but only
-    where the file on disk still matches what the run left behind. Anything
-    changed since (by you, or by a later run) blocks the rewind instead of
-    being overwritten. Rewinding does not delete the run's journal; the
-    history stays auditable.
+    运行接触过的每个文件都会恢复为运行前的内容，但前提是磁盘上的文件仍与运行
+    留下的内容匹配。之后发生的任何变更（无论由你还是后续运行完成）都会阻止撤回，
+    而不是被覆盖。撤回不会删除运行日志，因此历史仍可审计。
     """
 
     async def _rewind() -> int:
@@ -616,7 +608,7 @@ def reconcile(
     call_id: str,
     resolution: str = typer.Option(..., "--as", help="confirmed | not_run | abandon"),
 ) -> None:
-    """Manually resolve an ambiguous side effect."""
+    """手动解决一个有歧义的副作用。"""
     if resolution not in ("confirmed", "not_run", "abandon"):
         typer.echo("error: --as must be confirmed, not_run, or abandon")
         raise typer.Exit(EXIT_USAGE)
@@ -642,7 +634,7 @@ def export(
     fmt: str = typer.Option("markdown", "--format", help="jsonl | markdown"),
     output: Path | None = typer.Option(None, "--output", "-o"),
 ) -> None:
-    """Export a redacted run report."""
+    """导出经过脱敏的运行报告。"""
     if fmt not in ("jsonl", "markdown"):
         typer.echo("error: --format must be jsonl or markdown")
         raise typer.Exit(EXIT_USAGE)
@@ -681,15 +673,13 @@ def discover(
         "so they are usable on the next run without hand-editing.",
     ),
 ) -> None:
-    """Suggest verification recipes from the project's files.
+    """根据项目文件提出验证配方。
 
-    Reads the ordinary project files (pyproject.toml, tox.ini, setup.cfg,
-    package.json, Makefile, Cargo.toml, go.mod) plus a shallow look at the
-    tests/ and src/ layout, and prints the `[recipes]` block they imply, so a
-    fresh repo can get a check the Evidence Gate will accept. Runs nothing.
-    Prints for review by default; with --accept it writes the block into
-    `.haven.toml` (the model still never supplies a command — you authorize
-    it once, and it becomes a normal registered recipe).
+    读取常见项目文件（pyproject.toml、tox.ini、setup.cfg、package.json、Makefile、
+    Cargo.toml、go.mod），并浅层查看 tests/ 和 src/ 布局，打印它们所暗示的
+    `[recipes]` 块，使全新仓库也能获得 Evidence Gate 接受的检查命令。不会运行
+    任何命令。默认只打印供审阅；使用 --accept 时会将该块写入 `.haven.toml`
+    （模型仍然不会提供命令——你授权一次后，它才成为普通的已注册配方）。
     """
     from haven.domain.discovery import discover_recipes
 
@@ -723,10 +713,10 @@ def discover(
 
 
 def _discovery_inputs(ws: Path) -> tuple[dict[str, str], list[str]]:
-    """The file contents and shallow tree listing recipe discovery reads.
+    """配方发现功能读取的文件内容和浅层目录列表。
 
-    Shared by `discover` and `init` so both see identical signals. Reads only
-    the known project files plus one directory level; runs nothing.
+    供 `discover` 和 `init` 共享，以确保二者看到完全相同的信号。只读取已知项目
+    文件和一层目录，不运行任何命令。
     """
     from haven.domain.discovery import KNOWN_FILES
 
@@ -738,8 +728,8 @@ def _discovery_inputs(ws: Path) -> tuple[dict[str, str], list[str]]:
                 files[name] = candidate.read_text(encoding="utf-8", errors="replace")[:65536]
             except OSError:
                 continue
-    # A shallow listing is all the structural signals need: the tests/test
-    # directories' entries and any src/<pkg>/__init__.py.
+    # 结构信号只需要浅层列表：tests/test 目录的条目，以及任何
+    # src/<pkg>/__init__.py（包初始化文件）。
     paths: list[str] = []
     for sub in ("tests", "test", "src"):
         directory = ws / sub
@@ -762,13 +752,12 @@ def init(
         False, "--accept", help="Also persist the suggested recipes into .haven.toml."
     ),
 ) -> None:
-    """One-step onboarding: environment summary + recipe discovery.
+    """一步完成初始化：环境摘要 + 配方发现。
 
-    The condensed equivalent of `haven doctor` followed by
-    `haven discover [--accept]`: shows what Haven will run with (model,
-    sandbox backend, API key presence) and which check recipes the project's
-    own files imply. Runs nothing from the repository, and writing recipes
-    still requires --accept — the model never supplies a command either way.
+    这是先执行 `haven doctor`、再执行 `haven discover [--accept]` 的精简组合：
+    展示 Haven 将使用的内容（模型、沙箱后端、API 密钥是否存在），以及项目自身
+    文件暗示的检查配方。不会运行仓库中的任何命令，写入配方仍然需要 --accept——
+    无论是否接受，模型都不会提供命令。
     """
     from haven.bootstrap import sandbox_backend_name, select_launcher
     from haven.domain.discovery import discover_recipes
@@ -827,12 +816,12 @@ def init(
 def _persist_recipes(
     config_path: Path, recipes: list[RecipeCandidate]
 ) -> tuple[list[str], list[str]]:
-    """Append discovered recipes to .haven.toml, never overwriting an existing
-    one of the same id. Returns (added ids, skipped ids).
+    """将发现的配方追加到 .haven.toml，绝不覆盖同 id 的现有配方。
+    返回 `(新增 id 列表，跳过 id 列表)`。
 
-    A deliberately minimal appender rather than a TOML round-trip: it only ever
-    adds new `[recipes.<id>]` tables, so it cannot mangle hand-authored config
-    above it. An id already present is left untouched — the user's version wins.
+    这是有意设计的最小追加器，而不是 TOML 往返解析：它只会添加新的
+    `[recipes.<id>]` 表，因此不会破坏上方由用户手写的配置。已存在的 id 会原样
+    保留——以用户版本为准。
     """
     existing = config_path.read_text(encoding="utf-8") if config_path.is_file() else ""
     added: list[str] = []
@@ -857,7 +846,7 @@ def config_explain(
     workspace: Path = typer.Option(Path("."), "--workspace", "-w"),
     action: str = typer.Argument("explain", help="Only 'explain' is supported."),
 ) -> None:
-    """Show every resolved config value and where it came from."""
+    """显示每个解析后的配置值及其来源。"""
     from haven.bootstrap import sandbox_backend_name, select_launcher
 
     if action != "explain":
@@ -881,10 +870,10 @@ def debug_context(
     run_id: str = typer.Option("", "--run", help="Show the recorded context of a stored run."),
     show_prompt: bool = typer.Option(False, "--show-prompt", help="Print the full system prompt."),
 ) -> None:
-    """Explain what the model sees this turn, where it came from, and why.
+    """解释模型本轮看到什么、内容来自哪里以及原因是什么。
 
-    Makes no provider call. Without --run it previews the first turn for a goal;
-    with --run it replays the context recorded at each step of a stored run.
+    不会调用提供商。不使用 --run 时预览目标的第一轮；使用 --run 时重放已存储
+    运行中每一步记录的上下文。
     """
     if run_id:
         raise typer.Exit(_debug_stored_context(run_id))
@@ -966,7 +955,7 @@ def _debug_stored_context(run_id: str) -> int:
 def verify_provider(
     yes: bool = typer.Option(False, "--yes", help="Confirm this may incur provider cost."),
 ) -> None:
-    """Send one tiny real model request to verify provider connectivity."""
+    """发送一次很小的真实模型请求，以验证提供商连通性。"""
     if not yes:
         typer.echo("this sends a real (paid) provider request; re-run with --yes to confirm")
         raise typer.Exit(EXIT_USAGE)
@@ -996,9 +985,8 @@ def verify_provider(
         try:
             request = ModelRequest(
                 messages=(ModelMessage(role="user", content="Reply with the word: ready"),),
-                # Generous on purpose: a reasoning model spends output tokens on
-                # hidden thinking before any answer text appears, so a tight cap
-                # makes a healthy provider look like it returned nothing.
+                # 特意设置得宽松：推理模型会在任何答案文本出现前用输出 token 进行隐藏
+                # 思考，因此过紧的上限会让健康的提供商看起来像是什么都没返回。
                 max_output_tokens=512,
             )
             async for event in model.generate_stream(request):
@@ -1026,7 +1014,7 @@ def verify_provider(
                 f"chars={chars} reasoning_chars={reasoning_chars}"
             )
             return EXIT_OK
-        except Exception as exc:  # noqa: BLE001 - report any provider failure
+        except Exception as exc:  # noqa: BLE001 - 报告任何提供商故障
             typer.echo(f"provider verification failed: {exc}")
             return EXIT_PROVIDER
         finally:
@@ -1047,11 +1035,11 @@ def eval_command(
     cases: Path = typer.Option(Path("evals/cases"), "--cases", help="Directory of case JSON."),
     out: Path = typer.Option(Path("eval_report"), "--out", help="Report output directory."),
 ) -> None:
-    """Run the eval suite and write JSON + Markdown reports.
+    """运行评估套件并写入 JSON + Markdown 报告。
 
-    Offline is deterministic, free, and the CI gate. Live runs the same cases'
-    goals against the real provider inside a disposable copy of each fixture —
-    it costs money, is not reproducible, and never touches your own repository.
+    离线模式是确定性的、免费的，也是 CI 门禁。实时模式会在每个夹具的临时副本
+    中，将相同用例的目标交给真实提供商——会产生费用、不可复现，并且绝不会触碰
+    你自己的仓库。
     """
     categories = tuple(c.strip() for c in category.split(",") if c.strip())
 

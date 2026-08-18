@@ -1,17 +1,16 @@
-"""Run every Java localization task against the live model, read-only.
+"""以只读方式针对实时模型运行每个 Java 定位任务。
 
     uv run python -m evals.java.run_benchmark [--tier deep] [--only TASK_ID]
 
-Run as a module, not as a path: the tasks and the answer key are imported from
-`evals.java`, which is only on the path when the repository root is the cwd.
+请以模块而不是路径运行：任务和答案键从 `evals.java` 导入，只有仓库根目录是 cwd
+时它才位于导入路径中。
 
-Each task is one `haven run` in read-only mode against a copy of the benchmark
-repository, streaming its events to `evals/java/events/<task-id>.jsonl` for
-`score.py` to grade. Read-only is the default for `haven run`, so no approval
-policy is needed and the repository cannot be modified.
+每个任务都会在基准仓库的副本上以只读模式执行一次 `haven run`，并将事件流写入
+`evals/java/events/<task-id>.jsonl` 供 `score.py` 评分。`haven run` 默认只读，
+因此不需要审批策略，仓库也不会被修改。
 
-A run that fails still leaves its trace, which is the point: a run that died on
-the budget before localizing is a finding, not a missing data point.
+即使运行失败，其追踪记录仍会留下，这正是目的：在完成定位前因预算停止的运行是
+一个发现，而不是缺失的数据点。
 """
 
 from __future__ import annotations

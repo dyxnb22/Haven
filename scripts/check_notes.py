@@ -1,14 +1,11 @@
-"""Check that decision notes carry the sections that make them worth keeping.
+"""检查决策笔记是否包含使其值得保留的章节。
 
-An ADR is the right home for a load-bearing architectural call and the wrong
-home for the twenty smaller decisions a week produces — so those decisions have
-been living in chat logs, which no future reader (human or agent) can consult.
-Notes are the lightweight tier: one page, written in the same change as the
-code, filed under the state it is in.
+ADR 适合承载关键架构决策，却不适合承载一周内产生的二十个小决策——因此这些
+决策一直存在聊天记录中，未来的读者（人类或代理）无法查阅。笔记是轻量级层：
+一页内容，与代码在同一个变更中写入，并放在对应状态的目录下。
 
-The section this gate really exists for is *Alternatives considered*. A record
-of what a decision defeated is what stops the same rejected idea coming back
-every few months; without it a note is just a description of the code.
+本门禁真正关心的章节是 *Alternatives considered*。记录某个决策否定了什么，才能
+阻止相同的被拒绝想法每隔几个月卷土重来；没有这一点，笔记就只是代码描述。
 
     uv run python scripts/check_notes.py
 """
@@ -21,21 +18,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 NOTES_DIR = ROOT / "docs" / "notes"
 
-#: A note lives in exactly one of these, and moves between them as it changes
-#: state. `rejected/` is kept deliberately: it is the most re-read of the three.
+#: 每条笔记恰好位于其中一个目录，并随状态变化在目录之间移动。
+#: 特意保留 `rejected/`：三个目录中它被重新阅读得最多。
 VALID_STATES = ("proposed", "implemented", "rejected")
 
 REQUIRED_SECTIONS = ("Context", "Decision", "Alternatives considered", "Consequences")
 
 
 def missing_sections(text: str) -> list[str]:
-    """Required `## ` headings absent from a note, in declaration order."""
+    """按声明顺序返回笔记缺失的必需 `## ` 标题。"""
     present = {match.strip().lower() for match in re.findall(r"^##\s+(.+)$", text, re.MULTILINE)}
     return [section for section in REQUIRED_SECTIONS if section.lower() not in present]
 
 
 def state_of(path: str) -> str | None:
-    """The lifecycle state a note's path puts it in, or None if it has none."""
+    """笔记路径所属的生命周期状态；不属于任何状态时返回 None。"""
     parts = Path(path).parts
     for state in VALID_STATES:
         if state in parts:
@@ -44,7 +41,7 @@ def state_of(path: str) -> str | None:
 
 
 def note_paths() -> list[Path]:
-    """Every note file, excluding the README and the template."""
+    """返回所有笔记文件，不包括 README 和模板。"""
     if not NOTES_DIR.is_dir():
         return []
     return sorted(
@@ -53,7 +50,7 @@ def note_paths() -> list[Path]:
 
 
 def collect_problems() -> list[str]:
-    """Every note problem found, as human-readable lines."""
+    """以适合人类阅读的行返回发现的所有笔记问题。"""
     problems: list[str] = []
     for path in note_paths():
         relative = path.relative_to(ROOT).as_posix()

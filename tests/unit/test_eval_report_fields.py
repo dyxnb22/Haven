@@ -1,14 +1,12 @@
-"""The eval report must carry the input to its own cost calculation.
+"""评估报告必须携带计算自身成本所需的输入。
 
-`CaseResult` records `cached_input_tokens`, and the JSON writer dropped it. A
-cache hit bills at one fiftieth of a miss (ADR 0011), so a report that omits the
-hit count cannot be used to check its own `cost_usd`, and the project's headline
-cache-hit metric cannot be recomputed from the artifact that measured it.
+`CaseResult` 记录 `cached_input_tokens`，但 JSON 写入器曾丢弃它。缓存命中的计费是
+未命中的五十分之一（ADR 0011），因此缺少命中数量的报告无法校验自身的 `cost_usd`，
+项目的主要缓存命中指标也无法从测量它的构件中重新计算。
 
-Found while trying to price a live A/B run from its report and getting zero
-cached tokens across 42 runs — the field was never written, not the cache
-missing. Same defect family as the stale coverage figure: absent data rendering
-as a plausible zero (docs/DEFENSIVE_PATTERNS.md).
+尝试根据报告计算实时 A/B 运行成本时发现，42 次运行的缓存 token 都是 0——不是没有
+命中缓存，而是字段从未写入。它与过时覆盖率数字属于同一类缺陷：缺失数据被渲染成
+看似合理的零（`docs/DEFENSIVE_PATTERNS.md`）。
 """
 
 import json

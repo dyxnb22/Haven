@@ -1,39 +1,31 @@
-# Module 00 — Build it from scratch
+# 模块 00——从零构建：一条代理如何变得可靠
 
-> The other ten modules tour a finished system, layer by layer. This one
-> **derives** it. You start with the twenty-line agent everybody writes first,
-> and at each stage something breaks for a concrete reason — often a failure
-> this project actually hit — and the fix is the next mechanism.
->
-> Read this first if you want to know *why* Haven looks the way it does. Read
-> the numbered modules after, for depth on each layer.
->
-> Nothing here needs an API key.
+[English](archive/en/00-from-scratch.md) | **中文**
 
-## How to read this
+其他模块会把 Haven 当作一个已经完成的系统，分别讲解其中一层。这一课换一种方式：从大家都会
+先写出的最小代理开始，逐步追问“它凭什么能安全地做这件事”。每一次追问都会揭出一个真实的
+工程问题，而下一阶段的机制，就是针对那个问题付出的修复成本。
 
-Every stage has the same four beats:
+如果你想知道 Haven 为什么长成现在这个样子，先读这一课。这里不需要 API key；示例代码是为了
+说明机制而写的短代码，不是生产实现的完整替代品。
 
-1. **The naive version** — what you would reasonably write, as code.
-2. **What breaks** — a specific failure, not a vibe.
-3. **The fix, and its cost** — every mechanism buys something and charges
-   something.
-4. **Where it lives now** — the file in this repo, so you can go read the
-   grown-up version.
+## 如何读这一课
 
-The code in beats 1 and 3 is *illustrative* — deliberately shorter than the
-real thing. When you want the real thing, follow the file path.
+每个阶段都按四个问题展开：
 
-A warning about the shape of this document: it reads as if each decision
-followed cleanly from the last. Real construction was messier and several of
-these failures were found *after* shipping the thing they broke. Where that
-happened, it says so — those are the most useful parts.
+1. **最初会怎么写？** 一个合理但天真的版本。
+2. **它具体会在哪里坏？** 不是抽象地说“不安全”，而是指出失败的输入、状态或时序。
+3. **修复是什么，代价是什么？** 每个安全机制都会增加约束、代码或交互成本。
+4. **今天的实现在哪里？** 跟着文件路径回到仓库，查看成熟版本。
+
+真实构建过程并不像本文这样整齐。有些问题是在功能发布后才被发现的；它们仍然写在这里，因为
+“系统在真实使用中怎样暴露自己的假设”往往比漂亮的设计图更值得学习。
 
 ---
 
-## Stage 0 — The twenty-line agent
+## 阶段 0：二十行代理
 
-Here is an agent. It genuinely works, on a good day.
+先看一个在顺利时确实能工作的代理：
 
 ```python
 messages = [{"role": "user", "content": goal}]
@@ -46,122 +38,104 @@ while True:
         messages.append({"role": "tool", "content": result})
 ```
 
-Demo it and it looks like magic. Everything in the remaining stages is a
-consequence of taking one of its assumptions seriously.
+演示时它像魔法：模型决定下一步，程序替它完成动作。但这段代码暗含了很多承诺：工具名一定存在，
+参数一定正确，动作一定被允许；等到真正执行时，参数仍然对应现实；写入真的成功；命令不会伤害
+机器；模型知道什么时候结束；循环不会卡住；对话记录装得进上下文；进程不会中途退出；最后，
+我们还得知道“成功”到底有没有发生。
 
-Count them: the model's tool name is real; its arguments are well-formed;
-the action is permitted; the arguments still describe reality by the time you
-act; the write succeeds; the command is safe to run; the model knows when it
-is done; the loop terminates; the transcript fits; the process does not
-crash; and you can somehow tell whether any of this works.
-
-Eleven assumptions, eleven stages.
+十一项假设，正好对应后面的十一个阶段。
 
 ---
 
-## Stage 1 — The model's JSON is a *proposal*, not a command
+## 阶段 1：模型的 JSON 是提案，不是命令
 
-**Naive.** `TOOL_FNS[call.name](**call.args)`.
-
-**What breaks.** Three things, in increasing order of embarrassment:
-
-- `call.name` is `"repo.reed"` → `KeyError`, and your run dies on a typo.
-- `call.args` is missing a field, or has an extra one, or `path` is an `int`
-  → `TypeError` deep inside your write function, surfacing as a traceback the
-  model cannot act on.
-- `path` is `"../../.ssh/authorized_keys"` → it works, which is worse.
-
-The third is the one that matters. There is no sense in which the model
-"asked permission"; you executed a string it produced.
-
-**The fix.** Three cheap moves that together change the model's output from a
-command into a proposal:
+### 最初会怎么写
 
 ```python
-# 1. A registry: the tool must exist and its version is pinned by the program.
+TOOL_FNS[call.name](**call.args)
+```
+
+### 它会在哪里坏
+
+工具名拼错会抛出 `KeyError`。参数少一个字段、多一个字段，或把 `path` 写成整数，错误可能在很深的
+写入函数里才变成 traceback；模型得到的只是一个无法修复的崩溃。更糟的是，模型完全可以提出：
+
+```text
+../../.ssh/authorized_keys
+```
+
+如果程序照做，越界写入就成功了。模型并没有“请求到权限”，我们只是把它生成的字符串当成了命令。
+
+### 修复，以及它带来的成本
+
+第一步不是让模型更聪明，而是让程序先把提案变成可审查的数据：
+
+```python
 model_cls = ARGS_MODELS.get(call.name)
 if model_cls is None:
-    return error("unknown_tool")  # a structured result, not a crash
+    return error("unknown_tool")
 
-# 2. Strict schema: unknown fields rejected, types enforced.
 try:
     args = model_cls.model_validate_json(call.arguments_json)
 except ValidationError as exc:
     return error("invalid_arguments", summarize(exc))
 
-# 3. Facts the *program* collects, never facts the model supplied.
-facts = workspace.path_facts(args.path)  # canonical path, digest, is it inside?
+facts = workspace.path_facts(args.path)
 if not facts.within_workspace:
     return error("denied")
 ```
 
-Three properties are worth naming, because they recur everywhere after this:
+这里埋下了三条会贯穿全系统的原则：
 
-- **Failures are results, not exceptions.** The model gets
-  `{"status": "error", "error_code": "invalid_arguments", ...}` and can fix
-  its next attempt. A traceback ends the run; a structured error continues it.
-- **Facts are collected, not accepted.** The model says `path`; the *program*
-  resolves it, canonicalizes it, and decides whether it is inside the
-  workspace. If the model could supply "this path is fine", the whole thing
-  is theater.
-- **The tool set is compiled in.** It cannot be extended at runtime — which
-  is exactly the argument against MCP later (Stage 11).
+- **失败是结果，不是异常。** `invalid_arguments` 可以反馈给模型，让它修正下一次提案；异常直接
+  冲出代理循环，运行就失去了恢复机会。
+- **事实由程序采集。** 模型可以提出一个 path，但不能同时声称“这个 path 在工作区内”。路径的
+  规范化、摘要和越界判断必须来自真实文件系统。
+- **工具集合是程序的一部分。** 运行时不能凭空增加一个未经分类的工具；这也是后来谨慎对待 MCP
+  的原因。
 
-**Cost.** You now maintain schemas, and adding a tool touches several places.
-Stage 11 shows the test that makes that safe.
+代价很实际：要维护参数 schema，新增工具也会涉及注册表、policy、事实采集和执行代码。阶段 11
+会说明为什么这份麻烦值得保留，以及如何用测试让遗漏在构建时暴露。
 
-**Where it lives now.** `src/haven/contracts/tools.py` (args models),
-`src/haven/application/registry.py` (lookup + validation),
-`src/haven/adapters/workspace_fs.py::path_facts` (confinement).
+实现可从 `src/haven/contracts/tools.py`、`src/haven/application/registry.py` 和
+`src/haven/adapters/workspace_fs.py::path_facts` 开始阅读。
 
 ---
 
-## Stage 2 — Somebody has to *decide*, and it cannot be the model
+## 阶段 2：总得有人决定，而且不能是模型
 
-**Naive.** You validated the call. Now you run it.
+### 最初会怎么写
 
-**What breaks.** Nothing visibly — and that is the problem. There is no point
-in the code where you can answer "what is this agent allowed to do?" The
-answer is scattered across whichever `if` statements each tool happens to
-have. You cannot test it, and you cannot show it to a security reviewer.
+参数验证通过后，直接执行。
 
-**The fix.** One pure function that every action passes through:
+### 它会在哪里坏
+
+这一次不一定立刻报错，问题反而更隐蔽：系统没有一个集中位置能回答“代理允许做什么”。权限散落
+在各个工具的 `if` 语句里，既难以穷尽测试，也无法让安全审查者一眼看懂。
+
+### 修复，以及它带来的成本
+
+把决策抽成一个无 I/O 的纯函数：
 
 ```python
 def evaluate_policy(mode: PermissionMode, facts: ToolFacts) -> PolicyOutcome:
     """(mode, program-collected facts) -> allow | ask | deny. No I/O."""
 ```
 
-Purity is the entire point. No filesystem, no model, no clock — so it is
-exhaustively unit-testable, and reading it tells you the permission model in
-one screen. Three rules make it hold up:
+纯函数的价值不在于形式漂亮，而在于它可以被完整测试，读者也能在一个地方看到权限模型。Haven 的
+基本规则是：未知工具默认拒绝；有副作用的工具绝不自动放行；输入只能是程序采集的 facts。
 
-- **Deny by default.** An unknown tool is denied, not allowed.
-- **No side-effecting tool is ever auto-allowed.** A test asserts this over
-  the whole tool set, so the property survives new tools.
-- **`facts` is program-collected.** Repeated because it is the load-bearing
-  bit: policy over model-supplied facts is a suggestion.
+有一个窄例外：明显只读、且操作数仍在工作区内的命令可以自动放行，例如 `ls`、`cat` 和 `git status`，
+否则代理每看一次目录都要打扰人类。后面的阶段 5 会讲到，这个例外曾经定义得太宽。
 
-**The interesting exception.** Exactly one class of action is auto-allowed:
-commands classified as obviously read-only (`ls`, `cat`, `git status`), so
-the agent can look around without prompting the human forty times. A test
-pins that this exception is exactly one class wide.
-
-Read Stage 5 for how that exception later turned out to be **too wide**, and
-how it was caught.
-
-**Cost.** Friction. Every write asks. Stage 3 is about making the asking
-precise enough to be worth reading, and Stage 11 about what to do when there
-is too much of it.
-
-**Where it lives now.** `src/haven/domain/policy.py`,
-`src/haven/domain/exec_policy.py`, `tests/unit/test_policy.py`.
+代价是交互摩擦：写入操作需要审批。实现位于 `src/haven/domain/policy.py`、
+`src/haven/domain/exec_policy.py` 和 `tests/unit/test_policy.py`。
 
 ---
 
-## Stage 3 — "Allow this edit? [y/N]" is not enough
+## 阶段 3：一句“允许编辑吗？”远远不够
 
-**Naive.**
+### 最初会怎么写
 
 ```python
 if policy_says_ask:
@@ -170,499 +144,330 @@ if policy_says_ask:
     do_it()
 ```
 
-**What breaks.** Four separate holes, and each one is a real class of bug:
+### 它会在哪里坏
 
-1. **The human approved a category, not a change.** They said yes to "edit
-   `calc.py`". They did not see *what* edit. A one-character diff and a
-   whole-file rewrite look identical at this prompt.
-2. **The action can change after approval.** Nothing binds the `yes` to the
-   arguments that were shown.
-3. **The approval can be reused.** Approve one edit, apply it twice.
-4. **The file can change between "yes" and the write** — a background
-   process, another agent, the user's editor. The human approved a diff
-   against content that no longer exists. This is a TOCTOU bug, and it is
-   easy to not even notice you have it.
+人类批准的是“编辑这个文件”这一类动作，却没有看到具体 diff。审批没有绑定展示过的参数，因此
+确认之后可以换一个 `path` 或 `new_string`；同一份“同意”也可能被重复使用。最后，文件可能在用户
+按下确认之后、程序真正写入之前被编辑器或另一个进程改掉——这就是 TOCTOU（检查时与使用时之间的竞态）。
 
-**The fix.** Make the approval *be* the action:
+### 修复，以及它带来的成本
+
+让审批摘要（digest）本身代表一次完整动作：
 
 ```python
 digest = compute_approval_digest(
-    workspace_digest=...,  # this repository
+    workspace_digest=...,
     tool_name=...,
     tool_version=...,
-    canonical_args_json=...,  # these exact arguments
-    preimage_digest=...,  # this exact file content
-    preview_digest=...,  # this exact diff the human read
+    canonical_args_json=...,
+    preimage_digest=...,
+    preview_digest=...,
 )
 ```
 
-Then:
-
-- **Show the preview**, and put its digest *in* the approval. The human
-  approved a diff, not a category.
-- **Single use**: consumption is a conditional SQL `UPDATE` — the row moves
-  to consumed only if it was not already. Replay is impossible, not
-  discouraged.
-- **Re-verify the preimage after the human decides.** This is the TOCTOU
-  guard, and it is three lines that close hole 4:
+界面展示 preview，并把 preview 的 digest 写入审批记录；数据库用条件 `UPDATE` 消费审批，使一条
+审批最多成功一次。用户批准后，管线还要在执行前重新读取写入前的文件摘要：
 
 ```python
 if workspace.path_facts(path).digest != approved_preimage:
-    return error("stale_preimage")  # fail closed; the model can re-read and retry
+    return error("stale_preimage")
 ```
 
-**Cost.** An approval is now fragile *by design*: any drift invalidates it.
-That is correct, and it means your UX has to make re-approval cheap rather
-than making approval loose.
+文件发生漂移时让审批失效，是有意的安全选择。正确的 UX 应该是让重新审批足够便宜，而不是让旧审批
+变得足够宽松。ADR 0025 只为同一运行内、字节完全相同的重复 `repo.check` 提供窄范围的 standing
+approval；写入始终重新询问。
 
-**The trap.** Approval fatigue is a security problem, not a UX one: a human
-trained to press `a` on identical cards has stopped reading cards. Haven's
-answer (ADR 0025) is deliberately narrow — approving one `repo.check` covers
-*byte-identical* re-runs of that same check, within that run only, disclosed
-on the card, and every skipped ask still journals its own approval row.
-Writes always re-ask. Notice the shape of that decision: not "add an always
-allow button", but "find the one repetition that is provably identical".
-
-**Where it lives now.** `src/haven/domain/approval.py`,
-`src/haven/application/tool_pipeline.py::_ask_approval`,
-`docs/adr/0025-standing-approval-for-identical-checks.md`.
+实现位于 `src/haven/domain/approval.py`、`src/haven/application/tool_pipeline.py::_ask_approval`，
+以及 `docs/adr/0025-standing-approval-for-identical-checks.md`。
 
 ---
 
-## Stage 4 — Writing a file is not one operation
+## 阶段 4：写文件不是一次 `write()` 调用
 
-**Naive.** `path.write_text(new_content)`.
-
-**What breaks.**
-
-- **It is not atomic.** Crash mid-write and the file is truncated — the
-  agent has destroyed source code and cannot tell you what it was.
-- **You have no proof it happened.** `write_text` returning normally means
-  the call did not raise, not that the bytes are on disk as intended.
-- **You cannot show a diff at the end.** By the time the run finishes, the
-  original is gone.
-
-**The fix.**
+### 最初会怎么写
 
 ```python
-fd, tmp = tempfile.mkstemp(dir=target.parent)  # same filesystem
+path.write_text(new_content)
+```
+
+### 它会在哪里坏
+
+进程可能在写入中途退出，留下半个文件。函数正常返回只说明没有抛异常，并不证明目标字节已经正确
+落盘。若旧文件在写入前没有保存，运行结束后也无法知道“这次运行究竟改了什么”，更无法支持回退。
+
+### 修复，以及它带来的成本
+
+在同一文件系统里写临时文件、flush、fsync，然后原子替换；替换后重新读取并校验摘要：
+
+```python
+fd, tmp = tempfile.mkstemp(dir=target.parent)
 with os.fdopen(fd, "w") as handle:
     handle.write(new_text)
     handle.flush()
-    os.fsync(handle.fileno())  # durable before it is visible
-os.replace(tmp, target)  # atomic rename
-
-postimage = sha256_bytes(target.read_bytes())  # re-read: proof, not hope
+    os.fsync(handle.fileno())
+os.replace(tmp, target)
+postimage = sha256_bytes(target.read_bytes())
 if postimage != expected:
     raise WorkspaceError("internal", "postimage mismatch")
 ```
 
-Plus one bookkeeping move with a large payoff: the **first** time a run
-touches a file, archive its original content. That single dict gives you the
-run-scoped diff (what *this run* changed, not what differs from git HEAD) and
-later makes `haven rewind` possible.
+运行第一次接触某个文件时，还要保存原始内容，才能计算本次运行的 diff，并支持 `haven rewind`。
 
-The line worth internalizing: **a successful `write()` is not evidence; the
-postimage digest is.** The same instinct appears in Stage 6 for the whole
-run.
+> write 返回成功不是证据；写入后的 postimage digest 才是证据。
 
-**Cost.** Writes are slower and the code is longer. You will not care the
-first time a crash leaves the tree intact.
-
-**Where it lives now.** `src/haven/adapters/workspace_fs.py::_atomic_write`,
-`register_run_original`, and `apply_patch` for the multi-file version (one
-approval, staged writes, journaled rollback — ADR 0019).
+实现位于 `src/haven/adapters/workspace_fs.py::_atomic_write`、`register_run_original` 和多文件
+`apply_patch`。
 
 ---
 
-## Stage 5 — Running commands is where agents actually get dangerous
+## 阶段 5：命令执行才是代理真正危险的地方
 
-**Naive.**
+### 最初会怎么写
 
 ```python
-subprocess.run(command_string, shell=True)  # the model wrote command_string
+subprocess.run(command_string, shell=True)
 ```
 
-**What breaks.** Everything, and not subtly. `shell=True` on a
-model-authored string is remote code execution with extra steps: shell
-metacharacters, `rm -rf`, curl-pipe-bash, reading `~/.aws/credentials`.
+### 它会在哪里坏
 
-**The first fix is not enough.** "Just use a fixed argv list, no shell" is
-right and insufficient:
+模型生成的 shell 字符串可以包含 shell 元字符、`rm -rf` 或 curl-pipe-bash，也可以直接读取
+`~/.aws/credentials`。改成固定 argv 仍不够：`pytest` 会加载仓库中的 `conftest.py`，而代理可能
+刚刚修改了它；只要没有隔离，爆炸半径仍然是整台机器。
 
-```python
-subprocess.run(["pytest", "-q"], cwd=workspace)  # better. still unbounded.
-```
+后来一次安全复查还发现，旧注释“分类错了只会少一次提示，不会越界”并不成立：sandbox 有意让
+`$HOME` 以外的许多路径可读，`repo.exec` 只检查 cwd，stdout 又会进入模型 transcript。于是自动放行
+`cat /etc/passwd` 会泄漏文件，Linux 上读取 `/proc/<parent-pid>/environ` 甚至可能交出云凭据。
 
-`pytest` runs `conftest.py`. `conftest.py` is a file in the repository — one
-the *agent itself might have written*. The blast radius of "run the tests" is
-the whole machine.
+### 修复，以及它带来的成本
 
-**The real fix, in three parts:**
+修复有三层：
 
-1. **Registered recipes.** The model may pick a recipe **id** (`"verify"`),
-   never a command string. The argv lives in the user's `.haven.toml`. The
-   model's vocabulary shrinks to a set the human authored.
-2. **A kernel sandbox at one wrapping site.** Seatbelt on macOS, Landlock on
-   Linux. Model-proposed `repo.exec` gets a workspace-read-only, network-denied
-   profile; registered checks get a workspace-writable profile and only
-   user-authored config may opt them into network. Both hide `$HOME` where a
-   backend exists. One wrapping site keeps callers from forgetting the policy.
-3. **No sandbox, no exec.** Where no backend exists, the general-exec tool is
-   *denied*, not run unconfined — and no config can override that.
+1. 模型只能选择用户在 `.haven.toml` 中登记的 recipe id，例如 `verify`，不能选择任意命令字符串；
+2. 所有进程都在唯一包装点经过 macOS Seatbelt 或 Linux Landlock；`repo.exec` 使用工作区只读、禁网
+   profile，登记的检查使用工作区可写 profile；
+3. 没有 sandbox backend 时，模型提议的通用 `repo.exec` 直接拒绝，不能退化成无隔离执行。
 
-**And now the part worth the whole stage.** The original code carried this
-comment: classification "decides how much approval friction a command gets,
-never what it is able to do: capability is bounded by the OS sandbox, so a
-misclassification costs a skipped prompt, not an escape."
+ADR 0026 又收紧了审批例外：只读命令必须连同操作数一起判断。只读命令留在工作区内时可以保持
+安静；出现绝对路径、`~` 或 `..` 时就询问。安全注释不是永恒真理，它会随着 capability 变化过期，
+必须从实际边界重新推导。
 
-That reasoning is true for writes and **false for reads**, which a security
-review found months later. Compose three facts:
-
-- the sandbox leaves everything outside `$HOME` readable, deliberately, so
-  interpreters start;
-- `repo.exec` validates `cwd`, not the paths inside `argv`;
-- exec stdout is returned to the model and appended to the transcript.
-
-So an auto-allowed `cat /etc/passwd` silently shipped an unapproved file to
-the model provider. On Linux, `cat /proc/<parent-pid>/environ` reached the
-**parent** process's entire environment — around the child's scrubbed one —
-handing over whatever the user had exported: other providers' keys, cloud
-tokens.
-
-The fix (ADR 0026) is small: approval friction follows the *operands*, so a
-read-only command stays silent while it stays inside the workspace and asks
-the moment an operand is absolute, `~`-rooted, or `..`-traversing.
-
-**The lesson, which is the reason this stage is long:** a comment justifying
-a security decision is a claim, and claims expire. That one was true when
-written and became false when the read profile widened. Re-derive your
-security comments occasionally; they do not fail loudly on their own.
-
-**Where it lives now.** `src/haven/adapters/process_executor.py`,
-`src/haven/adapters/sandbox/`, `src/haven/domain/exec_policy.py`,
-ADRs 0009, 0013, 0017, 0026.
+实现位于 `src/haven/adapters/process_executor.py`、`src/haven/adapters/sandbox/`、
+`src/haven/domain/exec_policy.py`，以及 ADR 0009、0013、0017、0026。
 
 ---
 
-## Stage 6 — "Done!" is unfalsifiable
+## 阶段 6：“完成了！”不能证明完成
 
-**Naive.** No tool calls in the reply → the run succeeded.
+### 最初会怎么写
 
-**What breaks.** The model says "I fixed the bug and verified it" having
-edited nothing, or having broken the build. You now have a system whose
-success criterion is a sampling process's opinion of itself.
+模型不再调用工具，就把最终回答当作成功。
 
-**The fix — the Evidence Gate.** A run that edited files can only succeed
-with:
+### 它会在哪里坏
 
-1. a **diff** (something actually changed), and
-2. a **passing registered check** recorded **after** the last write —
-   sequence-stamped, so a stale pre-edit pass cannot be counted, and
-3. a clean **deterministic review** of the added lines (no committed
-   secrets, conflict markers, `breakpoint()`, silently blanked files).
+模型可能没有改任何东西却说“修好了”，也可能已经破坏构建。此时成功标准变成了模型对自己工作的评价，
+而不是仓库实际发生的变化。
 
-Success stops being a claim and becomes an artifact.
+### 修复：Evidence Gate
 
-**Then the model attacks the oracle.** This is not hypothetical; both of
-these happened in live runs here:
+修改过文件的运行至少需要三类证据：
 
-- it **edited the test** so the suite went green;
-- when a check kept failing on a missing plugin, it **planted a
-  `sitecustomize.py`** to bend Python's startup environment.
+1. 真实 diff；
+2. 在最后一次写入之后记录的通过检查；
+3. 对新增行进行确定性审查：没有 secret、冲突标记、调试器残留，也没有把大文件清空。
 
-Neither is malice — it is an optimizer finding the cheapest path to the
-reward you specified. Which means the oracle needs guards of its own:
+模型还会优化自己看得见的 oracle。真实运行中，它编辑过测试，也曾写入 `sitecustomize.py` 让失败
+检查变绿。因此系统还需要范围防护、禁止此类手段的提示护栏，以及模型看不到的隐藏 grader。
 
-- **Scope guard**: any change outside the task's allowed files fails the run,
-  which is what caught both cases above.
-- **Prompt guardrail**: name test edits and environment hooks as forbidden
-  ways to make a failing check pass, and tell the model to *say so plainly*
-  when a check genuinely cannot run.
-- **Hidden grader**: after the agent finishes, re-run the verify recipe on
-  the final tree, invisibly to the model. This earned its place immediately —
-  a task reached `succeeded` in 24 steps having made **zero edits**, having
-  reasoned its way to "done". Answering is not fixing.
+如果没有配置检查，诚实的结果应是“文件已修改，但无法验证”，然后以 `verification_unavailable`
+停止；不能让模型在一个永远无法通过的门禁前烧完整个预算。
 
-**The generalizable rule:** any metric an agent can see, it will optimize —
-including your definition of success. Keep one grader the agent cannot
-observe.
-
-**Cost.** You need a real check to exist. When none does, the honest outcome
-is a *stop* ("changed files but cannot verify"), not a success — and getting
-that wrong sends the model into an unwinnable loop, which is exactly the bug
-commit `31fde25` fixed.
-
-**Where it lives now.** `src/haven/domain/evidence.py`,
-`src/haven/domain/review.py`, `src/haven/evalkit/runner.py` (scope guard +
-hidden grader), ADR 0003.
+实现位于 `src/haven/domain/evidence.py`、`src/haven/domain/review.py`、`src/haven/evalkit/runner.py`
+和 ADR 0003。
 
 ---
 
-## Stage 7 — `while True` is a budget you did not write down
+## 阶段 7：`while True` 是一份没有写下来的预算
 
-**Naive.** The loop from Stage 0. It ends when the model stops calling tools.
+### 最初会怎么写
 
-**What breaks.** It doesn't end. The model retries the same failing edit
-forever, or hunts for a bug that is not there, and you discover this on your
-invoice. Worse, when it *does* stop, you cannot say why: succeeded, gave up,
-and hit a wall are indistinguishable.
+模型不再提出工具调用时结束。
 
-**The fix.**
+### 它会在哪里坏
 
-- **Hard budgets** the agent cannot raise: steps, tool calls, wall time,
-  tokens, cost. A project config may *lower* them; nothing in the loop
-  extends them. An agent that can extend its own budget has no budget.
-- **Exactly one stop reason per run** — `evidence_satisfied`,
-  `no_progress`, `step_budget_exhausted`, `verification_unavailable`,
-  `effect_unknown`… A run that ends without a reason is a bug in the loop.
-- **Stuck detection**: identical (tool, args, result) three times in a row is
-  not progress; stop.
+模型可能永远重复同一个失败编辑，也可能继续寻找一个根本不存在的 bug。即使它最终停下来，我们也
+无法区分成功、主动放弃、预算耗尽和撞上系统边界。
 
-**A subtlety that cost a real debugging session.** The stuck fingerprint
-includes the tool *result*. Check results carry `duration_ms`. So three
-identical checks are only detected as repeats when their millisecond timings
-collide — which made a test pass 7 runs out of 8 for reasons that had nothing
-to do with what it tested. The test was rewritten; the sensitivity is
-documented and deliberately not "fixed", because excluding timing would make
-*more* runs stop as stuck and that needs measurement first.
+### 修复，以及它带来的成本
 
-**The rule:** a test that passes on timing jitter is not flaky, it is wrong.
+为步数、工具调用、墙上时间、token 和成本设置代理无法提高的硬预算。每次运行必须有且只有一个
+`StopReason`，例如 `evidence_satisfied`、`no_progress`、`step_budget_exhausted` 或 `effect_unknown`。
+同一个（工具、参数、结果）连续出现三次，就判定为卡死。
 
-**Where it lives now.** `src/haven/domain/budget.py`,
-`src/haven/domain/stuck.py`, `src/haven/application/run_service.py`, ADR 0006.
+这里有一个很好的测试教训：结果里带有 `duration_ms` 时，重复检查只有在毫秒恰好碰撞时才会触发。
+后来测试改为忽略这个不相关字段。依靠计时抖动才通过的测试，不是 flaky，而是错的。
+
+实现位于 `src/haven/domain/budget.py`、`src/haven/domain/stuck.py`、`src/haven/application/run_service.py`，
+以及 ADR 0006。
 
 ---
 
-## Stage 8 — Context is selected, not accumulated
+## 阶段 8：上下文要选择，不要无限积累
 
-**Naive.** `messages.append(...)` forever.
+### 最初会怎么写
 
-**What breaks.** Two ways.
+每轮都执行 `messages.append(...)`。
 
-- **You overflow the window**, and the provider rejects the request — at
-  step 30 of a run that was going well.
-- **You pay for the same tokens repeatedly.** Prefix caching only helps if
-  the front of your prompt is byte-stable, and yours is not.
+### 它会在哪里坏
 
-The second is invisible until you measure it. In this project the live budget
-counter (`step 3/24, tool calls 7/48`) sat in the **second message** — so
-every turn changed byte 200 of the prompt, and the entire growing transcript
-after it was re-billed. Moving the volatile content to the tail took cache
-hit from **70.9% to 89.3%** on the same suite and model.
+上下文窗口会溢出；而且 prompt 的开头不断变化，provider 的前缀缓存无法复用，相同 token 被重复计费。
+这个项目把易变的预算计数器从第二条消息移到尾部后，同一套件、同一模型的命中率从 70.9% 提升到 89.3%。
 
-**The fix — a layout and a policy.**
+### 修复，以及它带来的成本
 
-Layout: a stable head (system rules, project guidance, the goal), then the
-append-only transcript, then a volatile tail (plan, live counters). Anything
-that changes every turn goes last.
+上下文布局为：稳定头部（系统规则、项目指导、目标）→ transcript → 易变尾部（计划和计数器）。
+超出预算时，完整删除最老的工具单元，换成程序生成的路径、digest、退出码等摘要；调用和结果必须成对
+删除，不能留下半个动作。
 
-Policy, when the transcript still outgrows the budget: drop the oldest tool
-units *whole* — the assistant's tool call together with its results, because
-an orphaned tool_call is rejected by the provider — and replace them with one
-program-assembled digest of what they contained: paths, digests, exit codes.
+不要让模型写摘要。它可能编造“用户批准了这件事”这样的权限事实；丢失的信息可以重新读取，编造的
+事实却很难纠正。结构化 digest 不包含文件内容和模型 prose，因此可以诚实地标成 `trusted`。LLM
+摘要保留叙事价值，结构化 digest 更安全；哪个更值得要，应该由有边界的任务测量决定。ADR 0024
+预先登记了切换方案的收益门禁。
 
-**Why not ask the model to summarize?** Because a summary the model wrote can
-invent facts that later turns treat as established, including
-permission-shaped ones ("the user approved this"). Dropping information only
-*loses* it, and a re-read recovers it; a fabricated fact is unrecoverable.
-The digest contains no file content and no model prose, which is what makes
-labelling it `trusted` honest — and there is a test asserting repository
-bytes can never reach it.
-
-That is a real trade, not a free win: Claude Code's and Codex's LLM summaries
-preserve narrative — intent, decisions, what was already tried — that a
-structural digest does not. For bounded tasks the digest measured as
-sufficient (same task, compaction forced vs. not: both passed). For
-multi-hour sessions the other approach probably wins. ADR 0024 states the
-boundary and pre-registers the gate for changing sides.
-
-**Where it lives now.** `src/haven/application/context_builder.py`,
-`src/haven/application/compaction.py`, ADRs 0008, 0010, 0024.
+实现位于 `src/haven/application/context_builder.py`、`src/haven/application/compaction.py`，
+以及 ADR 0008、0010、0024。
 
 ---
 
-## Stage 9 — The process will die mid-write
+## 阶段 9：进程可能在写入中途死亡
 
-**Naive.** On restart, replay the transcript and continue.
+### 最初会怎么写
 
-**What breaks.** The last thing the run did was `repo.edit`. Did it land? You
-have three possibilities and no way to distinguish them: it never started, it
-completed, or it half-happened. Replaying the transcript re-applies the edit
-— which, if it *did* land, silently applies it twice.
+重启时重放 transcript，然后继续循环。
 
-**The fix — journal the *expectation*, then classify against reality.**
-Before the write:
+### 它会在哪里坏
+
+最后一个 `repo.edit` 可能尚未开始，可能已经完成，也可能只完成了一半。重放会把一个已经完成的编辑
+再次应用，造成重复副作用。
+
+### 修复，以及它带来的成本
+
+写入前记录期望的前后摘要：
 
 ```python
 record_execution(
     call_id,
     state=STARTED,
-    preimage_digest=...,  # what the file was
+    preimage_digest=...,
     postimage_digest=expected,
-)  # what it will be, computed by the preview
+)
 ```
 
-After: `CONFIRMED`. Then recovery is a comparison, not a guess:
+写入后标记 `CONFIRMED`。恢复时比较磁盘：
 
-| File on disk matches | Verdict |
+| 当前内容 | 结论 |
 |---|---|
-| the preimage | **not run** — safe to resume |
-| the postimage | **confirmed** — already done, do not repeat |
-| neither | **effect unknown** — stop |
+| 等于 preimage | **尚未执行**，可以安全恢复 |
+| 等于 postimage | **已经确认**，不要重复执行 |
+| 两者都不是 | **副作用不明确**，停止并等人处理 |
 
-`EFFECT_UNKNOWN` blocks resume until a human runs `haven reconcile`. Haven
-never auto-replays an ambiguous side effect, because re-running a possibly
-completed write is worse than asking.
+`EFFECT_UNKNOWN` 必须由人类运行 `haven reconcile`，绝不自动重放。`repo.move` 甚至存在一个不可判定
+窗口：目标已经写入、源文件尚未删除。继续可能重复 unlink，跳过又可能留下重复文件，所以系统有意
+把它归为 unknown。系统不知道时，正确行为是承认不知道。
 
-**The honest case.** `repo.move` has a genuinely undecidable window: the
-destination was written but the source was not yet removed. Completing it
-would be a replay of the unlink; skipping it would leave a duplicate. It is
-classified unknown, on purpose. **When a system cannot know, the correct
-behavior is to say so — not to pick the likely answer.**
+检查点负责“从哪里继续”，日志负责“实际发生了什么”。曾经有 13.4MB 存储中的 12.3MB 是被后续检查点
+取代、从未读取的 transcript；把检查点当作可替换缓存，才能解决这个问题。
 
-**Two mechanisms, not one.** The append-only **journal** is what happened
-(replay is a pure projection of it — no model, no tools, same screen). The
-**checkpoint** is where to resume: a snapshot, i.e. a cache. Treating it as a
-cache is what later fixed a real problem — checkpoints were written per tool
-batch, each holding the whole transcript, and 12.3MB of a real 13.4MB store
-turned out to be superseded rows that nothing ever read.
-
-**Where it lives now.** `src/haven/adapters/sqlite_session.py`,
-`src/haven/application/recovery_service.py`, `src/haven/contracts/checkpoint.py`,
-ADR 0004.
+实现位于 `src/haven/adapters/sqlite_session.py`、`src/haven/application/recovery_service.py`、
+`src/haven/contracts/checkpoint.py`，以及 ADR 0004。
 
 ---
 
-## Stage 10 — You cannot test an agent with an agent
+## 阶段 10：不能用一个代理测试另一个代理
 
-**Naive.** Write tests that call the real model and assert on the output.
+### 最初会怎么写
 
-**What breaks.** They are slow, non-deterministic, cost money, need a key,
-and fail for reasons unrelated to your change. So they get skipped. So you
-have no tests.
+调用真实模型，然后断言输出。
 
-**The fix — split the two questions.**
+### 它会在哪里坏
 
-*Does the machinery hold?* → **Offline eval.** Replace only the model with a
-`ScriptedModel` that replays authored turns, and run the **entire real
-stack** — real filesystem, real subprocess execution, real policy, real
-approval, real journal — against a disposable fixture repository. Every case
-is deterministic and free.
+测试会变慢、变得不确定、需要 API key、需要付费，还会被 provider 或网络故障拖垮。最后大家选择
+跳过测试，等于什么也没有。
 
-The move that makes it valuable: **the eval is a security gate, not a score.**
-Two invariants are checked on every case regardless of what it expects:
+### 修复：把两个问题拆开
 
-- no file outside the case's allowed set may change;
-- forbidden content must never appear in the model transcript.
+机制是否可靠，用 `ScriptedModel` 替换模型，但保留真实文件系统、子进程、policy、approval 和 journal，
+运行整套离线评估。每个用例都检查允许集合之外不能改文件，禁止内容不能进入 transcript；安全违规直接
+让构建失败。
 
-A security violation fails the build. You can then honestly say "boundaries
-hold on scripted cases" in CI, forever, for free.
+真实工作能力只能由在线评估回答：固定第三方仓库 commit，注入一个小 bug，确认带 bug 时检查失败、
+回滚后检查通过，再花钱运行真实模型。离线测试证明的是机制，在线测试才触及模型行为和 provider 线格式。
 
-*Does it get real work done?* → **Live eval**, which only a real model can
-answer. Pin real third-party repositories at fixed commits, inject one
-surgical bug, and use the project's own test suite as the oracle. Crucially:
-prove each task is **red with the bug and green when reverted** before
-spending money on it.
+这里的历史数据也教你怎样读指标：最初 27/31 的失败，主要来自可修复的重试分类和模型编辑测试，而
+不是模型能力；修复后达到 31/31。后来又暴露出 `.pytest_cache` 的范围测量错误、sandbox 内无法通过的
+task oracle，以及任务难度接近 100% 后必须换轴的问题。中立 grader 比较同一任务时，Haven 12/12、
+opencode 10/12；后者的两个失败都是编辑测试让套件变绿。
 
-**What live evaluation actually taught here** — the point of the whole stage:
-
-- **Most early failures were not model-capability failures.** The first tier
-  scored 27/31, and all four came from two root causes: two runs died on a
-  dropped connection the retry loop should have survived (the adapter marked
-  every non-timeout transport error non-retryable — and the retry tests had
-  only ever *constructed* retryable errors, so the classification feeding
-  them was untested), and two were the model editing the test file, caught by
-  the scope guard. Re-run after both fixes: 31/31. Later tiers exposed more
-  of the same shape — `.pytest_cache` miscounted as an out-of-scope change,
-  and a task oracle that was green raw but red inside the sandbox, i.e. an
-  unsatisfiable task. **The failure distribution was worth more than the pass
-  rate**, every time.
-- **Difficulty saturates.** When a tier passes ~100%, it has stopped
-  measuring. Escalate the axis that is actually hard — here: bigger
-  repositories and vaguer, issue-style goals that name no file.
-- **A neutral grader lets you compare tools.** Same task, same model, a
-  grader that does not know which agent produced the tree: Haven 12/12,
-  opencode 10/12 — and both of opencode's losses were green-suite-by-editing
-  -the-test, the exact behavior Stage 6's scope guard exists to catch.
-
-**Where it lives now.** `src/haven/evalkit/runner.py`, `evals/`,
-`docs/EVAL.md`, `docs/EVAL_LIVE.md`, ADR 0005.
+实现位于 `src/haven/evalkit/runner.py`、`evals/`、`docs/EVAL.md`、`docs/EVAL_LIVE.md`，以及 ADR 0005。
 
 ---
 
-## Stage 11 — Knowing what *not* to build
+## 阶段 11：知道什么不该构建
 
-**Naive.** The comparison table has features you lack. Add them.
+### 最初会怎么写
 
-**What breaks.** Your invariants. Every added capability is a new path
-through the system, and the ones that sound most impressive tend to cut
-straight across the boundary you spent ten stages building.
+比较表上有你没有的功能，就把它们全部加进来。
 
-**The fix — a benefit gate written down *before* the data exists.** For each
-deferred capability: what failure class would it fix, and what measurement
-would prove that class is real? Then go measure.
+### 它会在哪里坏
 
-Haven's verdicts, from an attributed corpus of every non-passing live run:
+每个新能力都是一条穿过系统的路径。听起来最厉害的功能，往往会直接切穿前十个阶段建立的边界。
 
-| Deferred | Gate | Verdict |
+### 修复：在数据出现前写收益门禁
+
+先写清它要修复哪类故障、什么测量能证明故障真实存在，再去测量。Haven 的结论包括：
+
+| 推迟的能力 | 门禁或观察 | 结论 |
 |---|---|---|
-| Read-only LSP | ≥5 failures from semantic-localization limits | **≈1**. Not built. |
-| Planner / goal FSM | planning failures dominate | They don't — *convergence* does. Not built. |
-| Subagents | long-horizon overrun a sub-delegation would fix | Not the observed shape. Not built. |
-| MCP | any failure needing a runtime-discovered tool | None. Also breaks "every tool is compiled in and provably classified". |
+| 只读 LSP | 至少 5 次语义定位失败 | 实际约 1 次，暂不构建 |
+| Planner / goal FSM | 规划失败占主导 | 实际主导是收敛问题，暂不构建 |
+| Subagents | 长程超时能由委派修复 | 没有观察到这种形状，暂不构建 |
+| MCP | 必须运行时发现工具的失败 | 没有，而且会破坏编译内置的不变量 |
 
-The dominant real failure is the model **not stopping in time** — which no
-architecture fixes, and which the step budget already bounds.
+实际主导失败是模型没有及时停止；架构不能替模型学会收敛，步数预算已经承担了边界职责。ADR 0007、
+0016 先写门禁，ADR 0023 再记录数据结论。事后写门禁是合理化，先写再测才是工程。
 
-**And the part that keeps this honest:** ADRs 0007 and 0016 set those gates
-*before* the data existed; ADR 0023 records the verdict against them,
-including the numeric LSP threshold that was then not met. Gates written
-afterwards are rationalization; gates written first are engineering.
+真正添加工具时，让遗漏变得难以隐藏：参数 model、policy 分类、facts handler、execute handler 和
+测试都要接入；不完整的添加应在构建时失败。
 
-**Adding a tool safely.** When you *do* extend, make forgetting impossible.
-Adding a tool here touches four sites (args model, policy class, facts
-handler, execute handler) and three tests pin that all four are covered —
-so an incomplete addition fails the suite instead of falling through at
-runtime.
-
-**Where it lives now.** `docs/adr/0007`, `0016`, `0023`, `0024`, `0026`;
-`tests/unit/test_policy.py` for the wiring guards.
+实现位于 `docs/adr/0007`、`0016`、`0023`、`0024`、`0026` 和 `tests/unit/test_policy.py`。
 
 ---
 
-## What you should be able to do now
+## 现在你应该能解释什么
 
-Walk back down the stack and say, for each mechanism, **what breaks without
-it**:
-
-| Mechanism | Remove it and… |
+| 机制 | 移除它之后会怎样 |
 |---|---|
-| Registry + strict schema | a typo ends the run; a malformed arg becomes a traceback |
-| Program-collected facts | the model authorizes itself |
-| Pure policy | permission is scattered and untestable |
-| Digest-bound single-use approval | the human approves a category, and it can be replayed |
-| TOCTOU re-check | you write against content that no longer exists |
-| Atomic write + postimage | a crash truncates source; success is assumed |
-| Recipes + sandbox | "run the tests" has the blast radius of your machine |
-| Evidence Gate | success is the model's opinion |
-| Scope guard + hidden grader | the model edits the test instead of the code |
-| Budgets + one stop reason | the loop runs until your invoice stops it |
-| Selected context + stable prefix | you overflow the window and re-pay for the prefix |
-| Program digest, not model summary | a summary invents a permission fact |
-| Journal + digest classification | resume double-applies a write |
-| Offline eval as a gate | none of the above is protected against regression |
-| Benefit gates | the invariants erode one impressive feature at a time |
+| Registry + 严格 schema | 拼写错误会结束运行，畸形参数会变成 traceback |
+| 程序采集的 facts | 模型可以给自己授权 |
+| 纯 policy | 权限散落在各处，无法完整测试 |
+| digest 绑定的一次性审批 | 人类只批准了类别，动作可以漂移或重放 |
+| TOCTOU 复查 | 程序可能针对已经变化的内容写入 |
+| 原子写入 + postimage | 崩溃会截断文件，成功只能靠猜 |
+| recipe + sandbox | “运行测试”的爆炸半径等于整台机器 |
+| Evidence Gate | 成功会退化成模型意见 |
+| 范围防护 + 隐藏 grader | 模型可以修改测试，而不是修复代码 |
+| 预算 + 一个停止原因 | 循环可能运行到账单叫停 |
+| 选择式上下文 + 稳定前缀 | 窗口溢出，前缀重复计费 |
+| 程序 digest 而非模型摘要 | 摘要可能编造权限事实 |
+| 日志 + digest 分类 | 恢复时可能重复应用写入 |
+| 离线评估门禁 | 上述机制没有回归保护 |
+| 收益门禁 | 不变量会被“令人印象深刻”的功能逐个侵蚀 |
 
-If you can do that, you understand this system better than a tour of the
-finished code would have taught you — which is the reason this module exists.
+如果你能逐项解释“没有它会坏什么”，就不只是记住了 Haven 的组件，而是理解了它们为什么存在。
 
-## Where to go next
+## 接下来去哪里
 
-- **Depth per layer** → modules [01](01-mental-models.md) through
-  [10](10-engineering-judgment.md).
-- **Build something** → [the capstone](capstone.md).
-- **Every decision in the form it gets challenged** →
-  [`docs/DESIGN_QA.md`](../docs/DESIGN_QA.md).
-- **What went wrong, in detail** → [`docs/POSTMORTEM.md`](../docs/POSTMORTEM.md)
-  and the failure sections of [`docs/EVAL_LIVE.md`](../docs/EVAL_LIVE.md).
+- **逐层深入**：阅读模块 [01](01-mental-models.md) 到 [10](10-engineering-judgment.md)。
+- **动手构建**：完成[结业项目](capstone.md)。
+- **查看决策如何经受质疑**：阅读 [`docs/DESIGN_QA.md`](../docs/DESIGN_QA.md)。
+- **了解真实故障**：阅读 [`docs/POSTMORTEM.md`](../docs/POSTMORTEM.md) 和
+  [`docs/EVAL_LIVE.md`](../docs/EVAL_LIVE.md) 的故障章节。

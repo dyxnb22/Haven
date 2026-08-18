@@ -12,10 +12,10 @@ def test_identical_observations_trigger_stuck() -> None:
 
 
 def test_the_run_loop_uses_this_fingerprint_and_not_its_own() -> None:
-    """These tests are only worth anything if the loop shares the definition.
+    """只有循环共享该定义时，这些测试才有价值。
 
-    The two drifted once (a dict-vs-list digest built inline in the loop), so
-    what was pinned here was not what shipped. Pin the call site itself.
+    二者曾经发生过漂移（循环内联构造了 dict-vs-list 摘要），因此这里固定的行为
+    并不是实际发布的行为。现在直接固定调用点本身。
     """
     from haven.application.run_service import RunService
 
@@ -30,17 +30,15 @@ def test_different_results_reset_counter() -> None:
     fp2 = call_fingerprint("repo.search", '{"pattern":"x"}', "result2")
     assert detector.observe(fp1) is False
     assert detector.observe(fp1) is False
-    assert detector.observe(fp2) is False  # result changed -> progress
+    assert detector.observe(fp2) is False  # 结果发生变化 -> 有进展
     assert detector.observe(fp2) is False
     assert detector.observe(fp2) is True
 
 
 def test_detection_requires_adjacency() -> None:
-    """The measured limit of this detector, pinned so it is not mistaken for
-    something broader: an alternating A, B, A pattern never trips it. A trace
-    study of 42 live runs found non-convergence looks like *varied* unproductive
-    work, not repetition, which is why the warning tier built on top of this was
-    removed (docs/notes/rejected/0002)."""
+    """固定该检测器的实测边界，避免将其误认为更宽泛的检测：交替出现 A、B、A 永远
+    不会触发它。42 次实时运行的追踪研究发现，不收敛表现为*多样的*无效工作，而
+    不是重复，因此建立在此之上的警告等级被移除（`docs/notes/rejected/0002`）。"""
     detector = StuckLoopDetector(threshold=3)
     a = call_fingerprint("repo.read", '{"path":"a"}', "A")
     b = call_fingerprint("repo.read", '{"path":"b"}', "B")

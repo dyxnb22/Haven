@@ -4,7 +4,7 @@ from haven.domain.budget import BUDGET_TIERS, DEFAULT_TIER
 
 class TestTiers:
     def test_standard_is_the_default_and_unchanged(self) -> None:
-        """Adding tiers must not silently move the existing behavior."""
+        """增加档位不得悄悄改变现有行为。"""
         assert DEFAULT_TIER == "standard"
         assert BUDGET_TIERS["standard"] == Budget()
 
@@ -14,8 +14,7 @@ class TestTiers:
         assert quick.max_cost_usd < standard.max_cost_usd < deep.max_cost_usd
 
     def test_every_tier_has_matching_tool_headroom(self) -> None:
-        """A step budget the tool budget cannot serve would end runs early for
-        the wrong reason."""
+        """工具预算无法支撑的步骤预算会让运行因错误原因提前结束。"""
         for name, budget in BUDGET_TIERS.items():
             assert budget.max_tool_calls >= budget.max_steps, name
 
@@ -41,7 +40,7 @@ def test_tool_budget_exhausted() -> None:
 
 
 def test_defaults_leave_room_for_retries() -> None:
-    """ADR 0006: the floor is read/edit/create/diff/check/answer plus retries."""
+    """ADR 0006：最低路径是 read/edit/create/diff/check/answer，再加上重试空间。"""
     budget = Budget()
     minimum_trajectory = 6
     per_retry = 3
@@ -71,7 +70,7 @@ def test_token_charge_tracks_estimation_flag() -> None:
     usage = BudgetUsage().charge_tokens(100, 50, 0.001, estimated=True)
     assert usage.input_tokens == 100
     assert usage.usage_estimated is True
-    # once estimated, stays estimated
+    # 一旦估算，就保持估算状态
     usage = usage.charge_tokens(10, 5, 0.0001, estimated=False)
     assert usage.usage_estimated is True
 
@@ -80,5 +79,5 @@ def test_project_budget_can_only_tighten() -> None:
     user = Budget(max_steps=12, max_cost_usd=2.0)
     project = Budget(max_steps=40, max_cost_usd=0.5)
     merged = user.tightened(project)
-    assert merged.max_steps == 12  # project cannot raise
-    assert merged.max_cost_usd == 0.5  # project may lower
+    assert merged.max_steps == 12  # 项目配置不能提高上限
+    assert merged.max_cost_usd == 0.5  # 项目配置可以降低上限

@@ -1,11 +1,11 @@
-"""Golden trace: the same fixture + ScriptedModel must always produce the same
-core event sequence, and the TUI must produce the same trace as headless.
+"""黄金追踪：相同的夹具 + ScriptedModel 必须始终产生相同的核心事件序列，TUI
+也必须产生与无头模式相同的追踪。
 
-The golden file is committed. Regenerate deliberately with:
+黄金文件已提交。需要明确重新生成时运行：
 
     HAVEN_UPDATE_GOLDEN=1 uv run pytest tests/golden -q
 
-and review the diff — a change here means agent-visible behavior changed.
+然后审阅差异——这里的变更意味着代理可见行为发生了变化。
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ from tests.integration.harness import Harness, finish, make_repo, text, tool
 
 GOLDEN_DIR = Path(__file__).parent / "data"
 
-#: Fields that legitimately vary run to run and are therefore not part of the
-#: golden contract (timings, absolute paths, content digests, generated ids).
+#: 每次运行之间合理变化的字段，因此不属于 golden 契约（计时、绝对路径、
+#: 内容摘要、生成的 ID）。
 _VOLATILE = {
     "run_id",
     "workspace",
@@ -33,9 +33,9 @@ _VOLATILE = {
     "approval_id",
     "request_digest",
     "ticket_digest",
-    # Opaque by design: it exists so the runtime can notice the envelope moved,
-    # and it says nothing readable about *what* moved. `system_prompt_chars`
-    # deliberately stays in the golden, so a prompt edit shows up as a diff.
+    # 设计上保持不透明：它让运行时能够察觉 envelope 发生变化，但不会说明
+    # “什么”发生了变化。`system_prompt_chars` 特意保留在 golden 中，因此
+    # prompt 编辑会显示为 diff。
     "system_prompt_digest",
     "duration_ms",
     "ttft_ms",
@@ -48,27 +48,25 @@ _VOLATILE = {
 
 
 def normalize(envelopes: list[EventEnvelope]) -> list[dict[str, Any]]:
-    """Reduce a trace to its stable, behavior-defining shape."""
+    """将追踪归约为稳定且定义行为的形状。"""
     normalized: list[dict[str, Any]] = []
     for envelope in envelopes:
         payload = envelope.event.model_dump(mode="json")
         stable = {k: v for k, v in payload.items() if k not in _VOLATILE}
         if "summary" in stable and isinstance(stable["summary"], str):
-            # digests and byte counts appear inside human summaries
+            # 人类摘要中会出现摘要和字节数
             stable["summary"] = _mask(stable["summary"])
         if "preview" in stable:
-            # Previews embed absolute paths (the interpreter a recipe runs,
-            # the workspace root), so even their length varies by machine.
-            # What a preview must contain is asserted by the integration tests
-            # that care; here only its presence is part of the contract.
+            # 预览包含绝对路径（运行 recipe 的解释器、工作区根目录），因此
+            # 连长度都会因机器而异。预览必须包含什么由相关集成测试断言；
+            # 在这里，只有它存在属于契约。
             stable["preview"] = "<preview>"
         if stable.get("kind") == "context.built":
             stable = _mask_timing_sizes(stable)
         if stable.get("usage_estimated") is True:
-            # An estimated count is characters//4 over a transcript that
-            # contains measured durations, so a check taking 99 ms instead of
-            # 100 ms moves it by a token. That the estimate *was* used is
-            # behavior and stays; its exact value is a stopwatch artifact.
+            # 估算值是对包含实测耗时的 transcript 取 characters//4，因此一次
+            # 检查耗时 99 ms 而不是 100 ms 就可能使它变化一个 token。使用估算
+            # 是行为的一部分，应保留；具体数值只是秒表产生的结果。
             for key in ("input_tokens", "output_tokens"):
                 if key in stable:
                     stable[key] = "<estimated>"
@@ -79,12 +77,11 @@ def normalize(envelopes: list[EventEnvelope]) -> list[dict[str, Any]]:
 
 
 def _mask_timing_sizes(event: dict[str, Any]) -> dict[str, Any]:
-    """Drop byte counts that a stopwatch can change.
+    """去除可能随计时器变化的字节数。
 
-    A tool output carries `duration_ms`, so a check that takes 99 ms produces a
-    segment one byte smaller than one taking 100 ms. The sizes worth pinning
-    are the program-authored ones — the system prompt above all — so those stay
-    and only the timing-bearing segments are masked.
+    工具输出带有 `duration_ms`，因此耗时 99 ms 的检查会产生比耗时 100 ms 少一个
+    字节的区段。值得固定的是程序编写的大小——尤其是系统提示词——因此保留这些
+    大小，只屏蔽带有计时信息的区段。
     """
     masked = dict(event)
     masked.pop("total_bytes", None)
@@ -159,7 +156,7 @@ class TestGoldenTrace:
         )
 
     async def test_golden_covers_the_whole_pipeline(self, tmp_path: Path) -> None:
-        """The golden trace is only meaningful if it exercises every gate."""
+        """黄金追踪只有覆盖每个门禁时才有意义。"""
         h = Harness(make_repo(tmp_path), edit_journey_turns())
         outcome = await h.service.run("Fix the bug in add()")
         kinds = {env.event.kind for env in await h.store.load_events(outcome.run_id)}
@@ -182,8 +179,8 @@ class TestGoldenTrace:
 
 @pytest.mark.timeout(60)
 async def test_tui_and_headless_produce_the_same_trace(tmp_path: Path) -> None:
-    """Week-6 invariant: the TUI is interface-only, so driving the same
-    ScriptedModel through it must yield the same core trace as headless."""
+    """第 6 周不变量：TUI 仅是接口层，因此通过它驱动同一个 ScriptedModel，必须
+    产生与无头模式相同的核心追踪。"""
     from haven.interfaces.tui.app import HavenApp
     from tests.tui.test_tui_journey import (
         _approve_pending,

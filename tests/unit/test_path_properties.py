@@ -1,4 +1,4 @@
-"""Property-based checks: no generated path ever escapes the workspace."""
+"""基于属性的检查：生成的路径都不能逃出工作区。"""
 
 from pathlib import Path
 
@@ -7,7 +7,7 @@ from hypothesis import strategies as st
 
 from haven.adapters.workspace_fs import FsWorkspace
 
-# Path-ish strings built by joining traversal/separator/odd fragments.
+# 通过拼接遍历片段、分隔符和异常片段构造类似路径的字符串。
 _fragments = st.lists(
     st.sampled_from(["a", "b", "..", ".", "/", "\\", "~", "x", " ", "\x00", "%2e"]),
     min_size=0,
@@ -24,7 +24,7 @@ def test_path_normalization_is_confined(tmp_path: Path) -> None:
     def check(raw: str) -> None:
         facts = workspace.path_facts(raw)
         if facts.within_workspace:
-            # any path deemed inside must actually resolve under the root
+            # 判定为内部的路径实际上必须解析到根目录之下
             resolved = (tmp_path / facts.normalized).resolve()
             assert resolved == tmp_path or tmp_path in resolved.parents
 

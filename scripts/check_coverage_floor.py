@@ -1,19 +1,17 @@
-"""Enforce a per-file coverage floor on the layers that decide behavior.
+"""对决定行为的各层强制执行逐文件覆盖率下限。
 
-The headline percentage in README.md is an average, and an average hides its
-worst member: a large well-covered module subsidises a bare one, so the number
-can hold steady while a new file lands essentially untested. That matters most
-in the layers that own permission, evidence, budgets, and the boundary types —
-a gap there is a gap in exactly the guarantees this project claims.
+README.md 中的主要百分比是平均值，而平均值会掩盖最差成员：一个覆盖良好的大型
+模块可以补贴一个几乎没有覆盖的模块，因此新文件基本未测试时，总数仍可能保持不变。
+这对拥有权限、证据、预算和边界类型的层尤其重要——这些地方的缺口正好意味着本
+项目所宣称的保证存在缺口。
 
-The floor is deliberately below today's worst gated file rather than at it: the
-job is to catch a collapse, not to freeze the current numbers and turn every
-refactor into a coverage negotiation. Surfaces whose coverage is platform- or
-UI-dependent (the Linux-only sandbox launcher, the CLI and TUI) are not gated
-here; they answer to the overall figure and to their own suites.
+下限有意低于当前最差的受门禁文件，而不是贴着它设置：目标是捕获覆盖率崩塌，而
+不是冻结当前数字，让每次重构都变成覆盖率谈判。覆盖率依赖平台或 UI 的表面
+（仅 Linux 的沙箱启动器、CLI 和 TUI）不在此处设门禁；它们由总覆盖率和自身套件
+负责。
 
-Usage:
-    uv run coverage run -m pytest        # produce the data
+用法：
+    uv run coverage run -m pytest        # 生成数据
     uv run python scripts/check_coverage_floor.py
 """
 
@@ -28,10 +26,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-#: Minimum line coverage for every file in the gated layers.
+#: 门禁层中每个文件的最低行覆盖率。
 CORE_FLOOR = 85
 
-#: The layers whose files must each clear `CORE_FLOOR`.
+#: 其中每个文件都必须达到 `CORE_FLOOR` 的层。
 GATED_PREFIXES = (
     "src/haven/domain/",
     "src/haven/application/",
@@ -41,7 +39,7 @@ GATED_PREFIXES = (
 
 
 def floor_for(path: str) -> int | None:
-    """The floor this file must clear, or None when it is not gated."""
+    """该文件必须达到的下限；不受门禁时返回 None。"""
     normalized = path.replace("\\", "/")
     if any(normalized.startswith(prefix) for prefix in GATED_PREFIXES):
         return CORE_FLOOR
@@ -49,7 +47,7 @@ def floor_for(path: str) -> int | None:
 
 
 def violations(coverage: Mapping[str, float]) -> list[tuple[str, float, int]]:
-    """Every gated file below its floor, as (path, actual, required)."""
+    """返回所有低于下限的受门禁文件，格式为 `(路径，实际值，要求值)`。"""
     found = []
     for path, percent in sorted(coverage.items()):
         floor = floor_for(path)
@@ -59,7 +57,7 @@ def violations(coverage: Mapping[str, float]) -> list[tuple[str, float, int]]:
 
 
 def _measured() -> dict[str, float]:
-    """Per-file line coverage from the existing `.coverage` data file."""
+    """从现有 `.coverage` 数据文件读取逐文件行覆盖率。"""
     if not (ROOT / ".coverage").is_file():
         raise SystemExit("no .coverage data; run `uv run coverage run -m pytest` first")
     with tempfile.TemporaryDirectory() as tmp:

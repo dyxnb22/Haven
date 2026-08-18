@@ -1,13 +1,11 @@
-"""Measure chars-per-token from live eval event streams.
+"""根据实时评估事件流测量字符/token 比例。
 
-The context budget (`max_context_chars` in the model profile) is a char count,
-but the provider bills and windows in tokens. This script reads the committed
-live-run event streams (report-*/report-*-events/*.jsonl), pairs each
-`context.built` request size (bytes) with the `model.completed` input-token
-count it produced, and reports the chars-per-token distribution — so the
-hand-set char budget can be checked against the real token window instead of
-guessed. See ModelProfile.context_window_tokens and the guard in
-tests/unit/test_profiles.py.
+上下文预算（模型 profile 中的 `max_context_chars`）按字符计数，但提供商按 token
+计费并以 token 设置窗口。本脚本读取已提交的实时运行事件流
+（report-*/report-*-events/*.jsonl），将每个 `context.built` 请求大小（字节）与
+它产生的 `model.completed` 输入 token 数配对，并报告字符/token 分布——这样就能
+根据真实 token 窗口检查手工设置的字符预算，而不是靠猜测。参见
+ModelProfile.context_window_tokens 以及 `tests/unit/test_profiles.py` 中的守卫。
 
     uv run python evals/calibrate_context.py
 """
@@ -46,8 +44,8 @@ def main() -> int:
         f"median={statistics.median(ratios):.2f}  mean={statistics.mean(ratios):.2f}  "
         f"p90={ratios[len(ratios) * 9 // 10]:.2f}"
     )
-    # Worst case for staying under the window: the fewest chars per token means
-    # the most tokens per budgeted char.
+    # 对于保持在窗口限制以内，这是最坏情况：每个 token 对应的字符数越少，
+    # 给定字符预算所包含的 token 就越多。
     print(
         "\nAt the densest observed ratio, a 480k-char budget implies about "
         f"{int(480_000 / max(ratios[0], 0.01)):,} input tokens "

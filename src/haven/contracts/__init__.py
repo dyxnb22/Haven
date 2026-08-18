@@ -1,13 +1,13 @@
-"""Strict Pydantic contracts for every boundary of the system.
+"""系统各边界使用的严格 Pydantic 契约。
 
-All models forbid unknown fields (StrictModel), so drift between components
-fails loudly at the boundary instead of silently downstream:
+所有模型都禁止未知字段（StrictModel），因此组件之间发生漂移时，会在边界处
+明确失败，而不是在下游悄悄出错：
 
-    tools.py       tool args/results - the model-facing surface, versioned
-                   by TOOL_VERSION (bumped on any semantic change)
-    model.py       provider-neutral messages, stream events, usage
-    events.py      the typed trace stream (ApplicationEvent union)
-    checkpoint.py  the versioned fast-resume snapshot (CheckpointV1)
+    tools.py       工具参数/结果——面向模型的接口，由 TOOL_VERSION 进行版本化
+                   （任何语义变化都必须递增版本）
+    model.py       与提供商无关的消息、流事件和用量
+    events.py      类型化的追踪流（ApplicationEvent 联合类型）
+    checkpoint.py  用于快速恢复的版本化快照（CheckpointV1）
 """
 
 from haven.contracts.base import StrictModel

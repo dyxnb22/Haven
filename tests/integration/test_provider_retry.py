@@ -1,8 +1,7 @@
-"""Retry policy for model calls.
+"""模型调用的重试策略。
 
-A model call has no side effects, so a connection failure before any token is
-safe to retry. Anything else — a non-retryable error, or a failure after output
-already streamed — must not be retried.
+模型调用没有副作用，因此在产生任何 token 前发生的连接失败可以安全重试。其他
+情况——不可重试的错误，或输出已经开始流式传输后的失败——都不得重试。
 """
 
 from collections.abc import AsyncIterator
@@ -16,7 +15,7 @@ from tests.integration.harness import Harness, finish, make_repo, text
 
 
 class FlakyModel:
-    """Fails with the given errors, then plays the given events."""
+    """先抛出给定错误，然后产生给定事件。"""
 
     model_name = "flaky"
 
@@ -45,9 +44,8 @@ def install(h: Harness, model: object) -> None:
 
 
 class TestRetryDelay:
-    """The wait before a retry is the longer of exponential backoff and any
-    provider-requested `Retry-After`, capped so one hostile header cannot block
-    a run past all reason."""
+    """重试前的等待时间取指数退避和提供商要求的 `Retry-After` 中较长者，同时设有
+    上限，避免一个恶意标头毫无理由地阻塞整个运行。"""
 
     def test_backoff_grows_when_no_hint_is_given(self) -> None:
         assert _retry_delay(0, None) == 1.0
@@ -82,7 +80,7 @@ class TestRetryableFailures:
         outcome = await h.service.run("Do a thing")
         assert outcome.status is RunStatus.FAILED
         assert outcome.stop_reason is StopReason.PROVIDER_ERROR
-        assert model.attempts == 3  # initial + 2 retries
+        assert model.attempts == 3  # 初始尝试 + 2 次重试
 
     async def test_retry_is_reported_in_the_trace(self, tmp_path: Path) -> None:
         model = FlakyModel([ProviderError("rate_limited", "429", retryable=True)])
@@ -106,8 +104,8 @@ class TestNonRetryableFailures:
 
 
 class TestMidStreamRecovery:
-    """A partially streamed turn is safe to retry: the assembled text and tool
-    calls are local to the attempt and never reached the transcript."""
+    """部分流式传输的轮次可以安全重试：组装的文本和工具调用只属于本次尝试，永远
+    不会进入对话记录。"""
 
     async def test_mid_stream_drop_is_retried(self, tmp_path: Path) -> None:
         model = FlakyModel(
@@ -120,7 +118,7 @@ class TestMidStreamRecovery:
         outcome = await h.service.run("Do a thing")
         assert outcome.status is RunStatus.SUCCEEDED
         assert model.attempts == 2
-        # the discarded partial text must not survive into the answer
+        # 被丢弃的部分文本不能残留在答案中
         assert "partial answer" not in outcome.final_text
         assert "recovered answer" in outcome.final_text
 

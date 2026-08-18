@@ -1,4 +1,4 @@
-"""CLI surface tests: offline commands, exit codes, and config explain."""
+"""CLI 界面测试：离线命令、退出码和配置解释。"""
 
 from pathlib import Path
 
@@ -23,7 +23,7 @@ def test_headless_run_rejects_an_unknown_approval_policy() -> None:
 
 
 def test_jsonl_event_sink_streams_persisted_events(tmp_path: Path) -> None:
-    """--events writes one JSON line per persisted event, no transient deltas."""
+    """`--events` 为每个已持久化事件写入一行 JSON，不写入临时增量。"""
     import json as _json
 
     from haven.contracts.events import EventEnvelope, RunCreated, StepStarted
@@ -74,7 +74,7 @@ class TestDiscoverAccept:
         (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\ntestpaths=['tests']\n")
         (tmp_path / "tests").mkdir()
         (tmp_path / "tests" / "test_x.py").write_text("def test_x(): pass\n")
-        # Discover once to learn the id, then pre-author it with a sentinel.
+        # 先发现一次以获取 ID，然后用 sentinel 预先授权它。
         first = runner.invoke(app, ["discover", "--workspace", str(tmp_path)])
         recipe_id = next(
             line.split("[recipes.")[1].split("]")[0]
@@ -100,10 +100,9 @@ class TestDiscoverAccept:
 
 
 def test_console_sink_strips_control_characters_from_model_text() -> None:
-    """Headless output goes straight to the operator's terminal. Model text
-    carrying ANSI escapes could clear the screen, recolour, or forge a fake
-    prompt line in a CI log — the TUI has always stripped these, the headless
-    sink used to echo them raw."""
+    """无头模式的输出会直接写入操作者的终端。携带 ANSI 转义序列的模型文本
+    可能清屏、改变颜色，或在 CI 日志中伪造提示符行；TUI 一直会剥离这些字符，
+    但无头输出流以前会原样回显它们。"""
     import asyncio
     from unittest import mock
 
@@ -135,18 +134,18 @@ def test_console_sink_strips_control_characters_from_model_text() -> None:
     assert printed, "the sink should have printed the assistant line"
     line = printed[0]
     assert "\x1b" not in line and "\x07" not in line and "\x00" not in line
-    assert "SYSTEM: approved" in line  # the words remain readable
+    assert "SYSTEM: approved" in line  # 文本仍然可读
 
 
 def test_doctor_reports_environment(tmp_path: Path) -> None:
     result = runner.invoke(app, ["doctor", "--workspace", str(tmp_path)])
-    # exit code 0 or 2 depending on git presence; output must always be shown
+    # 是否存在 Git 会决定退出码为 0 或 2；输出必须始终展示
     assert "python:" in result.stdout
     assert "workspace:" in result.stdout
 
 
 def test_doctor_creates_no_data_directory(tmp_path: Path) -> None:
-    """doctor claims to be side-effect free, so it must not mkdir the data dir."""
+    """`doctor` 声明自己没有副作用，因此不得创建数据目录。"""
     import os
 
     data_dir = tmp_path / "haven-data-that-should-not-appear"
@@ -164,7 +163,7 @@ def test_config_explain_shows_sources(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert "provider.model" in result.stdout
     assert "budget.max_steps" in result.stdout
-    # secrets are never printed as values
+    # 秘密绝不会以值的形式打印
     assert "provider.api_key" in result.stdout
     assert "[env" in result.stdout or "present" in result.stdout or "missing" in result.stdout
 
@@ -232,7 +231,7 @@ def test_init_accept_writes_recipes_then_reports_configured(tmp_path: Path) -> N
     assert "added [recipes.pytest]" in result.stdout
     assert "[recipes.pytest]" in (tmp_path / ".haven.toml").read_text()
 
-    # Second run: the recipe is registered now, so there is nothing to add.
+    # 第二次运行：recipe 现在已经注册，因此没有内容需要添加。
     again = runner.invoke(app, ["init", "--workspace", str(tmp_path)])
     assert again.exit_code == 0
     assert "verification is configured" in again.stdout
@@ -248,8 +247,8 @@ def test_continue_missing_run_is_usage_error(tmp_path: Path) -> None:
     result = runner.invoke(
         app, ["continue", "run-nope", "a follow up", "--workspace", str(tmp_path)]
     )
-    # No API key in the test env, so bootstrap refuses before the run lookup;
-    # with a key it would fail on the missing checkpoint. Both are usage errors.
+    # 测试环境没有 API key，因此 bootstrap 会在查找运行前拒绝；如果有 key，
+    # 则会因缺少 checkpoint 失败。两者都是用法错误。
     assert result.exit_code == 2
     assert "no checkpoint" in result.stdout or "API key" in result.stdout
 
@@ -324,7 +323,7 @@ def test_eval_live_requires_confirmation() -> None:
 
 
 def test_eval_live_without_key_is_refused() -> None:
-    # conftest strips provider keys, so this must fail before any network call
+    # conftest 会清除提供商密钥，因此必须在任何网络调用前失败
     result = runner.invoke(app, ["eval", "--live", "--yes"])
     assert result.exit_code == 2
     assert "API key" in result.stdout

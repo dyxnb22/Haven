@@ -1,7 +1,7 @@
-"""A model's published rate card is only worth carrying if a run consults it.
+"""只有运行实际查询模型的公布费率卡时，携带它才有意义。
 
-Without this, `cost_usd` reads $0.0000 for a model whose prices Haven knows,
-and the profile's pricing is dead data.
+否则 Haven 明知价格的模型，其 `cost_usd` 仍会显示为 $0.0000，profile 中的定价
+就会变成无效数据。
 """
 
 from pathlib import Path
@@ -25,7 +25,7 @@ class TestPricingComesFromTheProfile:
         assert outcome.cost_usd > 0.0
 
     async def test_an_unknown_model_is_still_priced_at_zero(self, tmp_path: Path) -> None:
-        """Haven must not invent a price for a model it does not know."""
+        """Haven 不得为未知模型臆造价格。"""
         h = Harness(make_repo(tmp_path), read_turns(), model_name="mystery-model")  # type: ignore[arg-type]
         outcome = await h.service.run("Read calc.py")
         assert outcome.cost_usd == 0.0

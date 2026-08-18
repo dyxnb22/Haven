@@ -1,7 +1,7 @@
-"""A run whose transcript outgrows the context budget must keep its thread.
+"""对话记录超过上下文预算的运行必须保持其上下文线程。
 
-The unit tests prove compaction is correct in isolation; this proves it happens
-in a real run and that the agent still reaches evidence afterwards.
+单元测试证明压缩单独来看是正确的；这里证明它会在真实运行中发生，并且代理之后
+仍能到达证据阶段。
 """
 
 import sys
@@ -12,7 +12,7 @@ from haven.contracts.tools import RecipeSpec
 from haven.domain.enums import RunStatus, StopReason
 from tests.integration.harness import Harness, finish, make_repo, text, tool
 
-#: Large enough that three reads exceed MAX_CONTEXT_CHARS (96k).
+#: 足够大，使三次读取超过 MAX_CONTEXT_CHARS（96k）。
 WIDE_LINES = 220
 
 
@@ -92,8 +92,8 @@ class TestCompactionInARealRun:
         assert outcome.stop_reason is StopReason.EVIDENCE_SATISFIED
 
     async def test_the_run_really_was_compacted(self, tmp_path: Path) -> None:
-        """Without this the case above could silently stop exercising
-        compaction if the budget or the fixture size ever changed."""
+        """没有这项测试，如果预算或夹具大小发生变化，上面的用例可能悄悄不再覆盖
+        压缩流程。"""
         repo = make_wide_repo(tmp_path)
         turns = [
             [

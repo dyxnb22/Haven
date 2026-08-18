@@ -1,16 +1,14 @@
-"""Generate measured-metrics blocks in the current summary documents.
+"""生成当前摘要文档中的实测指标区块。
 
-Repeated repository totals in those documents are generated here from the
-actual sources — the test collector, `coverage`, the eval report, git, and the
-file tree — and written between marker comments. Prose around the block must not
-repeat those totals. Independently versioned live analyses may still state their
-own point-in-time measurements with a source.
+文档中重复出现的仓库总数在这里根据真实来源生成——测试收集器、`coverage`、评估
+报告、git 和文件树——并写入标记注释之间。区块周围的正文不得重复这些总数。独立
+版本化的实时分析仍可以带来源地陈述自身时间点的测量结果。
 
-    uv run python scripts/refresh_metrics.py            # rewrite the blocks
-    uv run python scripts/refresh_metrics.py --check    # fail if stale (CI)
+    uv run python scripts/refresh_metrics.py            # 重写区块
+    uv run python scripts/refresh_metrics.py --check    # 过时时失败（CI）
 
-`--check` is the guard: it recomputes and compares, exiting non-zero if a
-committed block differs from freshly measured reality.
+`--check` 是守卫：它重新计算并比较，如果已提交区块与新测量的事实不同就以非零码
+退出。
 """
 
 from __future__ import annotations
@@ -29,7 +27,7 @@ END = "<!-- END GENERATED METRICS -->"
 
 TARGETS = ("README.md", "docs/PROJECT_CARD.md", "docs/DESIGN_QA.md")
 
-#: Eval categories in the order they are reported, so the row is stable.
+#: 评估类别的报告顺序，以保证行的顺序稳定。
 _CATEGORY_ORDER = ("security", "task", "robustness", "injection", "budget", "recovery")
 
 
@@ -47,9 +45,9 @@ def _count_tests() -> int:
 
 
 def _coverage_data_is_stale(data: Path, inputs: list[Path]) -> bool:
-    """Whether `.coverage` predates any file it claims to measure.
+    """判断 `.coverage` 是否早于它声称测量的任意文件。
 
-    A missing data file counts as stale: there is nothing to report from.
+    数据文件缺失也算过时：没有可报告的内容。
     """
     if not data.is_file():
         return True
@@ -58,12 +56,11 @@ def _coverage_data_is_stale(data: Path, inputs: list[Path]) -> bool:
 
 
 def _coverage_pct() -> int | None:
-    """The documented src-only figure, via the same command the docs cite.
+    """通过文档所引用的相同命令，获取文档中的仅 src 覆盖率数字。
 
-    `coverage report` reads whatever `.coverage` already holds — it never
-    re-runs the suite. Reporting from a stale data file silently publishes a
-    wrong number (lines added since the last run read as uncovered) into a
-    table CI then enforces, so staleness fails loudly instead.
+    `coverage report` 读取 `.coverage` 当前已有的内容，不会重新运行套件。如果从
+    过时的数据文件报告，错误数字（上次运行后新增的行会被当作未覆盖）会悄悄写入
+    CI 随后强制执行的表格，因此这里会明确因过时而失败。
     """
     data = ROOT / ".coverage"
     if _coverage_data_is_stale(data, [*_src_files(), *_test_files()]):
@@ -101,11 +98,10 @@ def _eval_summary() -> dict[str, object]:
 
 
 def _live_summary() -> dict[str, object]:
-    """The committed record of the live real-repo suite (evals/real).
+    """实时真实仓库套件（evals/real）的已提交记录。
 
-    Live reports themselves are gitignored run artifacts; this file is updated
-    only from an actual measured run, so the rendered numbers cannot drift
-    from what was measured — the same discipline as every other row here.
+    实时报告本身是被 git 忽略的运行构件；此文件只会由实际测量运行更新，因此渲染
+    出的数字不会偏离测量结果——这里与其他每一行遵循相同的纪律。
     """
     results = ROOT / "evals" / "real" / "results.json"
     if not results.is_file():

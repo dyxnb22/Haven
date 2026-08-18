@@ -1,11 +1,10 @@
-"""Baseline-vs-candidate comparison for the context/prompt change.
+"""上下文/提示词变更的基线与候选方案比较。
 
-Adding `repo.create`, scoped edits, and `task.plan` enlarged both the system
-prompt and the tool catalog, and every request pays that cost. This script
-measures the cost precisely and lists the benefit, so the trade-off is recorded
-with numbers instead of asserted.
+加入 `repo.create`、有作用域的编辑和 `task.plan` 同时扩大了系统提示词与工具目录，
+每个请求都要承担这份成本。本脚本精确测量成本并列出收益，使取舍由数字记录，而
+不是只做断言。
 
-Run from the repository root:  uv run python evals/compare_prompt.py
+从仓库根目录运行：  uv run python evals/compare_prompt.py
 """
 
 from __future__ import annotations
@@ -21,10 +20,10 @@ from haven.domain.budget import Budget, BudgetUsage
 CASES_DIR = Path(__file__).parent / "cases"
 OUT = Path(__file__).parent.parent / "eval_report" / "prompt-comparison.md"
 
-#: The tool set before this change.
+#: 本次变更之前的工具集合。
 BASELINE_TOOLS = ("repo.list", "repo.search", "repo.read", "repo.edit", "repo.diff", "repo.check")
 
-#: The operating rules as they stood before `repo.create` and `task.plan`.
+#: 在加入 `repo.create` 和 `task.plan` 之前的操作规则。
 BASELINE_RULES = """\
 You are Haven, a careful coding agent working inside one local repository.
 
@@ -49,8 +48,7 @@ tool calls.
 summarizing what changed and citing the diff and check evidence.
 """
 
-#: Rough industry convention for English prose; used only for orders of
-#: magnitude, never reported as an exact token count.
+#: 英文散文的粗略行业约定；只用于数量级估算，从不作为精确 token 数报告。
 CHARS_PER_TOKEN = 4
 
 
@@ -62,8 +60,7 @@ def measure(rules: str, tools: tuple[ToolSchema, ...]) -> dict[str, int]:
         recipe_ids=("verify-calc",),
     )
     request, _ = builder.build([], BudgetUsage())
-    # The builder always renders the *current* rules, so the baseline prompt is
-    # measured from the text passed in; only the goal message is shared.
+    # 构建器始终渲染“当前”规则，因此基线提示词按传入的文本测量；只有目标消息是共享的。
     prompt_bytes = len(rules.format(recipes="verify-calc", max_steps=24, max_tool_calls=48))
     goal_bytes = len(request.messages[-1].content)
     schema_bytes = sum(len(json.dumps(t.parameters)) + len(t.description) for t in tools)

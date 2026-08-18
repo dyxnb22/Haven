@@ -1,9 +1,8 @@
-"""Controlled subprocess executor for recipes and sandboxed commands.
+"""用于配方和沙箱命令的受控子进程执行器。
 
-Fixed argv only (never a shell), scrubbed environment, hard timeout with
-terminate-then-kill, and bounded output capture that survives output bombs.
-Every child is wrapped by the sandbox launcher in one place, so a future caller
-cannot introduce an unconfined path by forgetting to wrap.
+只接受固定 argv（绝不经过 shell），使用清理后的环境，采用先终止后强杀的硬超时，
+并进行能够应对输出爆炸的有界输出捕获。每个子进程都在同一处由沙箱启动器包装，
+因此未来调用方不会因为忘记包装而引入不受限的执行路径。
 """
 
 from __future__ import annotations
@@ -27,13 +26,13 @@ TERMINATE_GRACE_SECONDS = 2.0
 
 ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR", "VIRTUAL_ENV")
 
-#: Scratch for check recipes. It lives inside the workspace because the recipe
-#: profile already grants the workspace, which avoids a second writable root.
+#: check recipe 使用的临时目录。它位于工作区内，因为 recipe profile 已经
+#: 授予工作区权限，从而不需要第二个可写根目录。
 RECIPE_SCRATCH_DIRNAME = ".haven-scratch"
 
 
 class ProcessExecutor:
-    """Implements ExecutorPort with asyncio subprocesses."""
+    """使用 asyncio 子进程实现 ExecutorPort。"""
 
     def __init__(
         self,
@@ -54,10 +53,8 @@ class ProcessExecutor:
                 writable=True,
                 allow_network=recipe.allow_network,
                 private_roots=default_private_roots(),
-                # Additive to the interpreter prefixes, never a replacement,
-                # and read-only. Resolved from a RecipeSpec that was fixed on
-                # disk at config load, so no model-supplied string reaches
-                # here (ADR 0029).
+                # 在解释器前缀之上追加，绝不替换，并且只读。它来自配置加载时固定在
+                # 磁盘上的 RecipeSpec，因此不会有模型提供的字符串到达这里（ADR 0029）。
                 extra_readable_roots=(
                     *default_readable_roots(),
                     *(Path(root).expanduser().resolve() for root in recipe.readable_roots),
@@ -107,9 +104,8 @@ class ProcessExecutor:
                 stderr=asyncio.subprocess.PIPE,
             )
         except OSError as exc:
-            # A program that is not installed must read as a failed command,
-            # not as an exception escaping into the agent loop. 127 is the
-            # shell's own convention for "command not found".
+            # 未安装的程序必须表现为命令失败，而不是以异常逃逸到代理循环中。
+            # 127 是 shell 对“找不到命令”的约定值。
             return ExecOutcome(
                 exit_code=127,
                 duration_ms=int((time.monotonic() - started) * 1000),
@@ -146,8 +142,8 @@ class ProcessExecutor:
 
     @staticmethod
     async def _read_bounded(stream: asyncio.StreamReader | None) -> tuple[bytes, bool]:
-        """Keep at most the last OUTPUT_CAP_BYTES; drain the rest so the child
-        never blocks on a full pipe."""
+        """最多保留末尾的 OUTPUT_CAP_BYTES；其余内容继续排空，避免子进程
+        因管道写满而阻塞。"""
         if stream is None:
             return b"", False
         buffer = b""

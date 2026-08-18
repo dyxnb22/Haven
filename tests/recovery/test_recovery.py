@@ -1,4 +1,4 @@
-"""Recovery semantics: resume what is safe, never replay ambiguous effects."""
+"""恢复语义：恢复安全的操作，绝不重放结果不明确的副作用。"""
 
 from pathlib import Path
 
@@ -31,10 +31,10 @@ from ..integration.harness import (
 async def crash_setup(
     repo: Path, h: Harness, *, tamper: str | None = None
 ) -> tuple[str, RecoveryService]:
-    """Simulate a run that crashed mid-edit: journal says STARTED, no confirm.
+    """模拟在编辑中途崩溃的运行：日志记录为 STARTED，但没有确认记录。
 
-    The checkpoint carries the transcript up to the read; the execution record
-    for the edit exists but was never confirmed (as if the process died).
+    检查点保存截至读取操作的对话记录；编辑的执行记录已经存在，但从未确认
+    （相当于进程在此处退出）。
     """
     run_id = "run-crash01"
     workspace = h.workspace
@@ -93,7 +93,7 @@ async def crash_setup_for(
     postimage: str = "",
     dest_path: str = "",
 ) -> tuple[str, RecoveryService]:
-    """Like crash_setup, but for an arbitrary interrupted write tool."""
+    """与 `crash_setup` 类似，但用于任意被中断的写入工具。"""
     run_id = "run-crash02"
     workspace = h.workspace
     await h.store.create_run(run_id, str(repo), workspace.workspace_digest, "goal", "interactive")
@@ -129,9 +129,8 @@ async def crash_setup_for(
 
 
 class TestCreateDeleteClassification:
-    """An interrupted create or delete is classified from what is provable on
-    disk, the same standard repo.edit gets; move stays unknown because its
-    record cannot distinguish mid-move states."""
+    """中断的 create 或 delete 根据磁盘上能够证明的事实分类，与普通 `repo.edit`
+    使用相同标准；move 会保持 unknown，因为它的记录无法区分移动中途的状态。"""
 
     async def test_create_with_no_file_is_not_run(self, tmp_path: Path) -> None:
         repo = make_repo(tmp_path)
@@ -146,8 +145,7 @@ class TestCreateDeleteClassification:
     async def test_create_with_a_present_file_and_no_postimage_is_unknown(
         self, tmp_path: Path
     ) -> None:
-        """A legacy record without the expected postimage cannot prove the
-        present file is the intended content."""
+        """没有预期 postimage 的旧记录无法证明当前文件就是预期内容。"""
         repo = make_repo(tmp_path)
         (repo / "src" / "new_module.py").write_text("something\n")
         h = Harness(repo, [])
@@ -161,8 +159,8 @@ class TestCreateDeleteClassification:
     async def test_create_matching_the_expected_postimage_is_confirmed(
         self, tmp_path: Path
     ) -> None:
-        """The expected postimage is journaled at STARTED time, so a crash in
-        the written-but-not-confirmed window is provably complete."""
+        """预期 postimage 会在 STARTED 时写入日志，因此在“已写入但尚未确认”的窗口
+        内崩溃时，系统仍能证明操作已经完成。"""
         from haven.domain.digest import sha256_text
 
         repo = make_repo(tmp_path)
@@ -232,8 +230,7 @@ class TestCreateDeleteClassification:
         assert report.findings[0].classification == "unknown"
 
     async def test_move_without_a_recorded_dest_stays_unknown(self, tmp_path: Path) -> None:
-        """A legacy record carrying only the source cannot distinguish
-        mid-move states, so it must stay ambiguous."""
+        """只记录源路径的旧记录无法区分移动中途的状态，因此必须保持不明确。"""
         repo = make_repo(tmp_path)
         h = Harness(repo, [])
         facts = h.workspace.path_facts("src/calc.py")
@@ -285,8 +282,8 @@ class TestCreateDeleteClassification:
     async def test_move_with_both_ends_present_is_unknown_not_replayed(
         self, tmp_path: Path
     ) -> None:
-        """Copy landed, unlink did not: completing it automatically would be a
-        replay, which recovery never does — it must block for reconciliation."""
+        """复制已经完成，但 unlink 尚未完成：自动补完会构成重放，而恢复逻辑从不
+        重放操作，因此必须阻塞并等待人工调和。"""
         repo = make_repo(tmp_path)
         h = Harness(repo, [])
         facts = h.workspace.path_facts("src/calc.py")
@@ -315,7 +312,7 @@ class TestEffectClassification:
         report = await recovery.inspect(run_id)
         assert report.can_resume
         assert report.findings[0].classification == "not_run"
-        # the journal was reconciled automatically because the proof is solid
+        # 由于证据充分，日志已被自动调和
         executions = await h.store.load_executions(run_id)
         assert executions[0].effect_state is EffectState.RECONCILED_NOT_RUN
 
@@ -328,7 +325,7 @@ class TestEffectClassification:
         assert not report.can_resume
         assert report.findings[0].classification == "unknown"
         assert any("reconcile" in blocker for blocker in report.blockers)
-        # never auto-reconciled
+        # 永远不会自动调和
         executions = await h.store.load_executions(run_id)
         assert executions[0].effect_state is EffectState.STARTED
 
@@ -383,7 +380,7 @@ class TestResume:
         assert report.can_resume and report.checkpoint is not None
         ctx = await recovery.build_context(report.checkpoint)
 
-        # a fresh service continues the same run with a new scripted plan
+        # 新服务会用新的脚本化计划继续同一运行
         from haven.adapters.process_executor import ProcessExecutor
         from haven.adapters.providers.scripted import ScriptedModel
         from haven.domain.enums import PermissionMode
@@ -422,13 +419,13 @@ class TestResume:
         assert outcome.status is RunStatus.SUCCEEDED
         assert outcome.stop_reason is StopReason.EVIDENCE_SATISFIED
         assert "return a + b" in (repo / "src" / "calc.py").read_text()
-        # usage continued from the checkpoint instead of restarting
+        # 用量从 checkpoint 继续，而不是重新开始
         assert outcome.steps > 2
 
 
 class TestPlanSurvivesRecovery:
     async def test_plan_is_restored_from_the_checkpoint(self, tmp_path: Path) -> None:
-        """ADR 0006: the plan lives in State, so a resumed run still has it."""
+        """ADR 0006：计划保存在 State 中，因此恢复的运行仍然拥有该计划。"""
         repo = make_repo(tmp_path)
         h = Harness(
             repo,
@@ -475,5 +472,5 @@ class TestReplay:
         envelopes = await ReplayService(h.store).replay(outcome.run_id, replay_sink)
         assert replay_sink.kinds() == original_kinds
         assert [e.seq for e in envelopes] == sorted(e.seq for e in envelopes)
-        # replay consumed zero model turns
+        # replay 没有消耗任何模型轮次
         assert h.model.requests_seen is not None

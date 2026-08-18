@@ -1,7 +1,7 @@
-"""Scripted (fake) model: deterministic event playback for tests and eval.
+"""脚本化（fake）模型：用于测试和评估的确定性事件回放。
 
-A script is a sequence of turns; each call to generate_stream() plays the next
-turn. Fixtures are plain JSON so eval cases are reviewable by hand.
+脚本是一系列轮次；每次调用 generate_stream() 都会播放下一轮。夹具使用普通 JSON，
+因此评估案例可以人工审阅。
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ _TURNS_ADAPTER: TypeAdapter[list[list[ModelEvent]]] = TypeAdapter(list[list[Mode
 
 
 class ScriptedModel:
-    """Implements ModelPort by replaying pre-authored turns."""
+    """通过回放预先编写的轮次实现 ModelPort。"""
 
     def __init__(
         self,

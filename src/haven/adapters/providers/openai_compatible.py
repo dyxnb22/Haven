@@ -1,9 +1,8 @@
-"""OpenAI-compatible chat completions adapter (streaming).
+"""OpenAI 兼容聊天补全适配器（流式）。
 
-Provider wire fields live only in this module. The adapter maps SSE chunks to
-provider-neutral ModelEvents, enforces first-event and total timeouts, bounds
-the response size, and converts failures to stable ProviderError codes. The
-API key is read from configuration and never appears in errors or traces.
+提供商线协议字段只存在于本模块中。适配器将 SSE 数据块映射为与提供商无关的
+ModelEvents，强制执行首事件和总超时，限制响应大小，并将失败转换为稳定的
+ProviderError 代码。API 密钥从配置中读取，绝不会出现在错误或追踪记录中。
 """
 
 from __future__ import annotations
@@ -35,19 +34,19 @@ MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 
 class OpenAICompatibleModel:
-    """Implements ModelPort over an OpenAI-compatible /chat/completions API.
+    """通过 OpenAI 兼容的 /chat/completions API 实现 ModelPort。
 
-    Call path for one request:
+    一次请求的调用路径：
 
-        generate_stream -> _stream_with_reasoning_retry   (one precise retry)
-          -> _stream          SSE loop with first-event + total deadlines
-             -> _build_payload   sanitized history -> wire JSON
-             -> _ToolCallCollector   accumulates streamed tool-call deltas
+        generate_stream -> _stream_with_reasoning_retry   （精确重试一次）
+          -> _stream          SSE 循环，包含首事件和总截止时间
+             -> _build_payload   清理后的历史记录 -> 线协议 JSON
+             -> _ToolCallCollector   累积流式工具调用增量
 
-    yielding provider-neutral ModelEvents (TextDelta / ReasoningDelta /
-    ToolCallReady / StreamFinished). Retryable transport failures raise
-    ProviderError("network"|"timeout"...) and are retried by the run loop,
-    never silently inside this adapter (a partial stream must surface).
+    产生与提供商无关的 ModelEvents（TextDelta / ReasoningDelta /
+    ToolCallReady / StreamFinished）。可重试的传输失败会抛出
+    ProviderError("network"|"timeout"...)，由运行循环重试，而不会在此适配器
+    内部静默处理（部分流必须显式暴露）。
     """
 
     def __init__(
@@ -64,13 +63,12 @@ class OpenAICompatibleModel:
     ) -> None:
         self._model = model
         self._first_event_timeout = first_event_timeout
-        # Bounds the gap *between* streamed events, reset on every one — not a
-        # total deadline. A reasoning model (DeepSeek `high`/`max`) can stream
-        # steadily for minutes; only a genuine stall should time out. The
-        # overall run stays bounded by RunService's wall-clock budget.
+        # 限制流式事件之间的间隔，每个事件到达时重置——不是总截止时间。推理模型
+        # （DeepSeek `high`/`max`）可能连续数分钟稳定输出；只有真正卡住才应超时。
+        # 整个运行仍由 RunService 的墙上时钟预算限制。
         self._idle_timeout = idle_timeout
-        # DeepSeek V4 rejects a tool-call assistant turn whose reasoning_content
-        # is not replayed (ADR 0014); set per model profile at bootstrap.
+        # DeepSeek V4 会拒绝未重放 reasoning_content 的工具调用 assistant 轮次
+        # （ADR 0014）；在 bootstrap 时按模型 profile 设置。
         self._requires_tool_call_reasoning = requires_tool_call_reasoning
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
@@ -92,14 +90,13 @@ class OpenAICompatibleModel:
     async def _stream_with_reasoning_retry(
         self, request: ModelRequest
     ) -> AsyncIterator[ModelEvent]:
-        """Self-heal the one 400 that reasoning replay exists to prevent.
+        """自动修复推理重放本来就是为了避免的那一种 400 错误。
 
-        If the profile flag is off but the provider actually demands replayed
-        reasoning on a tool-call turn, the first request 400s before any event
-        is yielded. That is safe to retry precisely — nothing was emitted — so
-        we re-issue once with replay forced on. A 400 for any other reason, or
-        one after streaming has begun, is not retried here (the run loop's
-        bounded retry still covers genuinely transient failures).
+        如果 profile 标志关闭，但提供商实际要求在工具调用轮次中重放 reasoning，
+        第一个请求会在产生任何事件之前返回 400。此时可以精确重试——因为尚未
+        发出任何内容——因此会强制开启重放并重新发出一次请求。其他原因导致的
+        400，或流已经开始后出现的 400，都不会在这里重试（运行循环的有界重试
+        仍会处理真正的瞬态失败）。
         """
         force_reasoning = self._requires_tool_call_reasoning
         yielded_any = False
@@ -110,7 +107,7 @@ class OpenAICompatibleModel:
             return
         except ProviderError as exc:
             retryable_reasoning = (
-                not yielded_any  # a mid-stream retry would double-emit deltas
+                not yielded_any  # 流式输出中途重试会重复发送增量
                 and not force_reasoning
                 and exc.code == "protocol"
                 and "reasoning" in str(exc).lower()
@@ -118,7 +115,7 @@ class OpenAICompatibleModel:
             )
             if not retryable_reasoning:
                 raise
-        # Retry path, outside the except block so its own errors surface plainly.
+        # 重试路径放在 except 块之外，使其自身的错误能清楚地暴露。
         async for event in self._stream(request, replay_reasoning=True):
             yield event
 
@@ -126,7 +123,7 @@ class OpenAICompatibleModel:
         self, request: ModelRequest, *, replay_reasoning: bool
     ) -> AsyncIterator[ModelEvent]:
         payload = self._build_payload(request, replay_reasoning=replay_reasoning)
-        # Exact reverse map for this request, so a wire name is never guessed.
+        # 本次请求的精确反向映射，因此绝不会猜测线协议名称。
         from_wire = {_to_wire_tool_name(t.name): t.name for t in request.tools}
 
         try:
@@ -143,9 +140,8 @@ class OpenAICompatibleModel:
 
                 lines = response.aiter_lines().__aiter__()
                 while True:
-                    # First read bounds time-to-first-token; every read after it
-                    # bounds the idle gap and resets on arrival, so a long but
-                    # steady generation is never cut short.
+                    # 第一次读取限制首 token 延迟；之后每次读取都限制空闲间隔，并在数据
+                    # 到达时重置，因此持续时间很长但稳定的生成不会被提前截断。
                     timeout = self._first_event_timeout if first else self._idle_timeout
                     try:
                         line = await asyncio.wait_for(anext(lines), timeout)
@@ -176,8 +172,8 @@ class OpenAICompatibleModel:
                     if raw_usage := chunk.get("usage"):
                         details = raw_usage.get("completion_tokens_details") or {}
                         prompt_details = raw_usage.get("prompt_tokens_details") or {}
-                        # OpenAI reports cache hits under prompt_tokens_details;
-                        # DeepSeek uses a top-level prompt_cache_hit_tokens.
+                        # OpenAI 在 prompt_tokens_details 下报告缓存命中；DeepSeek 使用顶层的
+                        # 字段名：prompt_cache_hit_tokens。
                         cached = int(prompt_details.get("cached_tokens", 0)) or int(
                             raw_usage.get("prompt_cache_hit_tokens", 0)
                         )
@@ -194,8 +190,7 @@ class OpenAICompatibleModel:
                         delta = choice.get("delta") or {}
                         if content := delta.get("content"):
                             yield TextDelta(text=str(content))
-                        # Reasoning models stream their thinking in a separate
-                        # field before any answer content appears.
+                        # 推理模型会在任何答案内容出现前，将思考过程放在单独字段中流式传出。
                         if reasoning := delta.get("reasoning_content"):
                             yield ReasoningDelta(text=str(reasoning))
                         for tc in delta.get("tool_calls") or []:
@@ -209,21 +204,18 @@ class OpenAICompatibleModel:
         except httpx.TimeoutException as exc:
             raise ProviderError("timeout", "network timeout", retryable=True) from exc
         except httpx.HTTPError as exc:
-            # A dropped, reset, or server-closed connection is transient, and a
-            # model call has no side effects, so RunService may safely retry it.
-            # A protocol or URL misconfiguration fails identically every time,
-            # so retrying it would only burn the budget more slowly.
+            # 连接被丢弃、重置或由服务器关闭属于临时故障，而模型调用没有副作用，
+            # 因此 RunService 可以安全重试。协议或 URL 配置错误每次都会以相同方式
+            # 失败，重试只会更慢地消耗预算。
             transient = isinstance(exc, httpx.NetworkError | httpx.RemoteProtocolError)
             raise ProviderError(
                 "network", f"transport error: {type(exc).__name__}", retryable=transient
             ) from exc
         except OSError as exc:
-            # Not every I/O failure arrives wrapped as an httpx error: a TLS
-            # record-layer failure surfaces as ssl.SSLError (an OSError), and
-            # escaping unwrapped means it sails past every `except ProviderError`
-            # and kills the run. Certificate rejection is the one that retrying
-            # cannot fix. `except Exception` is deliberately not used here, so a
-            # bug in our own parsing still surfaces as itself.
+            # 并非每个 I/O 故障都会包装成 httpx 错误：TLS 记录层故障会表现为
+            # ssl.SSLError（一个 OSError），如果不包装就会绕过所有 `except ProviderError`
+            # 并终止运行。证书拒绝是重试无法修复的情况。这里特意不使用
+            # `except Exception`，这样我们自己的解析 bug 仍会以其本来面目暴露。
             raise ProviderError(
                 "network",
                 f"transport error: {type(exc).__name__}",
@@ -269,13 +261,12 @@ class OpenAICompatibleModel:
         status: int, body: bytes = b"", headers: httpx.Headers | None = None
     ) -> ProviderError:
         if status in (401, 403):
-            # Never echo an auth failure body.
+            # 绝不回显认证失败响应体。
             return ProviderError("auth", "provider rejected credentials")
         if status == 402:
-            # DeepSeek returns 402 "Insufficient Balance" when the account is out
-            # of credit. Retrying cannot add funds, so this is terminal and gets
-            # its own code — a user seeing `quota` knows to top up, where the
-            # generic `protocol` bucket would read as a Haven bug.
+            # 账户余额不足时，DeepSeek 返回 402 “Insufficient Balance”。重试无法
+            # 增加余额，因此这是终态错误并使用独立代码——用户看到 `quota` 就知道
+            # 需要充值，而不是将通用 `protocol` 类别误认为 Haven 的 bug。
             return ProviderError("quota", "provider account has insufficient balance")
         retry_after = _parse_retry_after(headers.get("retry-after") if headers else None)
         if status == 429:
@@ -289,14 +280,12 @@ class OpenAICompatibleModel:
                 retryable=True,
                 retry_after_s=retry_after,
             )
-        # A 4xx here is almost always our request being malformed. The body says
-        # what is wrong and contains no credentials, so surfacing a bounded
-        # snippet turns an opaque failure into a fixable one.
+        # 这里的 4xx 几乎总是我们的请求格式错误。响应体会说明问题且不含凭据，
+        # 因此暴露一个有界片段可以将不透明的失败变成可修复的问题。
         detail = body.decode("utf-8", errors="replace").strip()[:300]
         if status == 400 and _is_context_overflow(detail):
-            # The prompt is too long for the model's window. Unlike other 400s
-            # this is recoverable: RunService can force compaction and retry, so
-            # it gets a distinct code rather than the terminal `protocol` bucket.
+            # prompt 超过了模型窗口。与其他 400 不同，这是可恢复的：RunService
+            # 可以强制压缩并重试，因此使用独立代码，而不是终态的 `protocol` 类别。
             return ProviderError("context_overflow", "provider context window exceeded")
         return ProviderError(
             "protocol",
@@ -305,15 +294,15 @@ class OpenAICompatibleModel:
             else f"unexpected provider status ({status})",
         )
 
+    # -- 线协议转换辅助函数 ------------------------------------------------------
+    # 以下内容负责在 Haven 与提供商无关的契约（contracts/model.py）和 OpenAI
+    # chat-completions 线协议格式之间转换。提供商的特殊行为在这里吸收，
+    # 上游代码无需感知。
 
-# -- wire translation helpers -------------------------------------------------
-# Everything below converts between Haven's provider-neutral contracts
-# (contracts/model.py) and the OpenAI chat-completions wire format. Provider
-# quirks are absorbed here so nothing upstream ever sees them.
 
-#: OpenAI-compatible APIs constrain function names to ^[a-zA-Z0-9_-]+$, which
-#: rejects Haven's namespaced `repo.read`. The dot is a core naming choice, so
-#: the substitution lives here at the wire boundary and never leaks inward.
+#: OpenAI 兼容 API 将函数名限制为 ^[a-zA-Z0-9_-]+$，因此会拒绝 Haven 带命名
+#: 空间的 `repo.read`。点号是核心命名选择，所以替换只存在于线协议边界，
+#: 绝不向内部泄漏。
 _WIRE_NAME_SEPARATOR = "__"
 
 
@@ -322,11 +311,11 @@ def _to_wire_tool_name(name: str) -> str:
 
 
 def _inline_refs(schema: dict[str, Any]) -> dict[str, Any]:
-    """Resolve Pydantic's `$defs`/`$ref` into a self-contained schema.
+    """将 Pydantic 的 `$defs`/`$ref` 解析为自包含的模式。
 
-    Nested models generate a `$ref`, which several OpenAI-compatible providers
-    reject in function parameters. Schemas here are small and non-recursive, so
-    inlining them is safe and keeps the model-facing contract literal.
+    嵌套模型会生成 `$ref`，而几个 OpenAI 兼容提供商会在函数参数中拒绝它。本处
+    模式规模较小且不存在递归，因此内联是安全的，并能让面向模型的契约保持为
+    字面结构。
     """
     defs = schema.get("$defs")
     if not isinstance(defs, dict):
@@ -348,11 +337,10 @@ def _inline_refs(schema: dict[str, Any]) -> dict[str, Any]:
     return inlined if isinstance(inlined, dict) else schema
 
 
-#: Substrings that identify a "prompt too long" 400 across OpenAI-compatible
-#: providers. DeepSeek and OpenAI phrase it as "maximum context length"; the
-#: canonical OpenAI error code is `context_length_exceeded`. Matching on the
-#: message keeps this at the wire boundary rather than leaking provider strings
-#: inward — the core only ever sees the `context_overflow` code.
+#: 在 OpenAI 兼容提供商中识别“prompt 过长”400 的子字符串。DeepSeek 和 OpenAI
+#: 将其表述为 “maximum context length”；规范的 OpenAI 错误代码是
+#: `context_length_exceeded`。按消息匹配使逻辑停留在线协议边界，不会向内部
+#: 泄漏提供商字符串——核心只会看到 `context_overflow` 代码。
 _CONTEXT_OVERFLOW_MARKERS = ("maximum context length", "context_length_exceeded", "context length")
 
 
@@ -362,12 +350,11 @@ def _is_context_overflow(detail: str) -> bool:
 
 
 def _parse_retry_after(value: str | None) -> float | None:
-    """Seconds to wait from a `Retry-After` header, or None.
+    """解析 `Retry-After` 标头指定的等待秒数；无法解析时返回 None。
 
-    The header is either a non-negative integer count of seconds or an HTTP
-    date; both forms appear in the wild. A past or unparseable date yields
-    None rather than a negative or bogus delay, so a malformed header can only
-    ever fall back to the retry loop's own backoff, never shorten it.
+    标头要么是非负整数秒数，要么是 HTTP 日期；实际环境中两种形式都存在。过去的
+    日期或无法解析的日期会返回 None，而不是负数或虚假的延迟，因此格式错误的
+    标头最多让程序回退到重试循环自身的退避时间，绝不会缩短它。
     """
     if value is None:
         return None
@@ -403,29 +390,26 @@ def _map_finish_reason(reason: str) -> Any:
 
 
 def _sanitize_history(messages: Sequence[ModelMessage]) -> list[ModelMessage]:
-    """Repair structural defects a strict provider (DeepSeek V4) 400s on.
+    """修复严格提供商（DeepSeek V4）会返回 400 的结构缺陷。
 
-    Every OpenAI-compatible provider enforces the same tool-call/tool-result
-    contract: an assistant turn's tool_calls must each be answered by exactly
-    one following tool message, and a tool message must answer a tool_call in
-    the immediately preceding assistant turn. Compaction and crash recovery
-    can leave that invariant locally broken; rather than trust every upstream
-    path to keep it, the adapter enforces it deterministically at the wire
-    boundary — the one place every request passes through.
+    每个 OpenAI 兼容提供商都执行相同的工具调用/工具结果契约：assistant 轮次中的
+    每个 tool_calls 必须恰好由其后的一条 tool 消息回答，而 tool 消息必须回答紧邻
+    的上一条 assistant 轮次中的某个 tool_call。压缩和崩溃恢复可能在局部破坏这个
+    不变量；与其相信所有上游路径都能维护它，不如在每个请求都会经过的线协议边界
+    处由适配器确定性地强制执行。
 
-    Repairs (all deterministic, none inventing content):
-    - drop a tool message that answers no in-flight tool_call (orphaned
-      result — the assistant turn that made the call was dropped);
-    - synthesize a minimal error tool result for any tool_call the history
-      never answered (orphaned call — the result was dropped), because a
-      dangling call is exactly what triggers the 400.
+    修复方式（全部是确定性的，不会凭空编造内容）：
+    - 丢弃没有回答任何未完成 tool_call 的 tool 消息（孤立结果——发起调用的
+      assistant 轮次已被丢弃）；
+    - 为历史记录从未回答的每个 tool_call 合成最小错误工具结果（孤立调用——
+      结果已被丢弃），因为悬空调用正是触发 400 的原因。
     """
     out: list[ModelMessage] = []
-    pending: dict[str, int] = {}  # unanswered call_id -> index in `out`
+    pending: dict[str, int] = {}  # 未回答的 call_id -> `out` 中的索引
 
     def flush_pending() -> None:
-        # Any tool_call still unanswered when the next assistant/user turn
-        # begins gets a synthetic result appended, in call order.
+        # 下一次 assistant/user 轮次开始时，仍未回答的所有 tool_call 都会按
+        # 调用顺序追加一个合成结果。
         for call_id in list(pending):
             out.append(
                 ModelMessage(
@@ -442,9 +426,9 @@ def _sanitize_history(messages: Sequence[ModelMessage]) -> list[ModelMessage]:
             if message.tool_call_id and message.tool_call_id in pending:
                 del pending[message.tool_call_id]
                 out.append(message)
-            # else: orphaned result — drop it silently.
+            # 否则是孤立结果——静默丢弃。
             continue
-        # A new assistant or user turn: close out any unanswered calls first.
+        # 新的 assistant 或 user 轮次：先关闭所有未回答的调用。
         flush_pending()
         out.append(message)
         if message.role == "assistant":
@@ -468,23 +452,21 @@ def _to_wire_message(message: ModelMessage, *, replay_reasoning: bool = False) -
             }
             for call in message.tool_calls
         ]
-        # DeepSeek V4 requires the reasoning that preceded a tool call to be
-        # replayed verbatim, or it 400s; an empty string is the accepted
-        # back-fill for history that predates capture (ADR 0014).
+        # DeepSeek V4 要求逐字重放工具调用之前的推理，否则会返回 400；对于
+        # 早于捕获机制的历史，空字符串是可接受的回填值（ADR 0014）。
         if replay_reasoning:
             wire["reasoning_content"] = message.provider_reasoning
     if message.role == "tool" and message.tool_call_id:
         wire["tool_call_id"] = message.tool_call_id
     if message.role == "assistant" and message.is_prefix:
-        # Native prefix continuation (ADR 0022): the provider extends this
-        # partial content in place instead of replying to it. DeepSeek marks
-        # such a message with `prefix: true` (its beta prefix-completion mode).
+        # 原生前缀续写（ADR 0022）：提供商会原地扩展这段部分内容，而不是回复
+        # 它。DeepSeek 用 `prefix: true` 标记这类消息（beta prefix-completion 模式）。
         wire["prefix"] = True
     return wire
 
 
 class _ToolCallCollector:
-    """Accumulates streamed tool-call deltas keyed by index."""
+    """按索引累积流式工具调用增量。"""
 
     def __init__(self) -> None:
         self._calls: dict[int, dict[str, str]] = {}
@@ -510,9 +492,8 @@ class _ToolCallCollector:
             calls.append(
                 ToolCallProposal(
                     call_id=slot["id"] or f"call-{index}",
-                    # Unknown names pass through unchanged so the registry can
-                    # reject them with `unknown_tool` rather than being silently
-                    # rewritten into something that exists.
+                    # 未知名称保持不变地传递，使注册表可以用 `unknown_tool` 拒绝它，
+                    # 而不是静默改写成一个确实存在的名称。
                     tool_name=from_wire.get(wire_name, wire_name),
                     arguments_json=slot["arguments"] or "{}",
                 )

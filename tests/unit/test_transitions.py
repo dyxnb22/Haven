@@ -40,9 +40,9 @@ def test_terminal_states_are_final() -> None:
 
 
 def test_effect_unknown_requires_reconciliation() -> None:
-    # crash ambiguity out of tool execution
+    # 工具执行过程中发生崩溃，结果存在歧义
     s = transition(RunStatus.EXECUTING_TOOL, RunStatus.EFFECT_UNKNOWN)
-    # reconciled -> may continue; abandoned -> failed
+    # reconciled -> 可以继续；abandoned -> 失败
     assert transition(s, RunStatus.RUNNING_MODEL) is RunStatus.RUNNING_MODEL
     assert transition(s, RunStatus.FAILED) is RunStatus.FAILED
 

@@ -1,11 +1,11 @@
-"""The single tool execution channel.
+"""唯一的工具执行通道。
 
-Every model-proposed action passes, in order:
-Registry -> Schema validation -> Workspace facts -> Deterministic policy
--> Exact approval (when asked) -> Execution ticket -> Executor
--> ToolResult + Evidence + Trace.
+模型提出的每个操作都按以下顺序经过：
+Registry -> Schema 验证 -> 工作区事实 -> 确定性策略
+-> 精确审批（需要时）-> 执行票据 -> Executor
+-> ToolResult + Evidence + Trace。
 
-There is no other path from a model proposal to a side effect.
+模型提案不存在通往副作用的其他路径。
 """
 
 from __future__ import annotations
@@ -91,14 +91,13 @@ from haven.ports.workspace import (
     WorkspaceSnapshot,
 )
 
-#: What one tool proposal previews as: a single-file diff, a whole patch, or
-#: nothing (read-only tools).
+#: 工具提案的预览形式：单文件 diff、完整补丁，或无预览（只读工具）。
 ToolPreview = EditPreview | PatchPreview | None
 
-#: Per-tool handler shapes. Both tables are keyed by registered tool name and
-#: built in `ToolPipeline.__init__`; a unit test pins that every tool in
-#: `ARGS_MODELS` has exactly one handler in each, so adding a tool without
-#: wiring it is a loud test failure instead of a silent fallthrough.
+#: 每个工具的处理器形状。两张表都以已注册工具名为键，并在
+#: `ToolPipeline.__init__` 中构建；单元测试固定要求 `ARGS_MODELS` 中的每个
+#: 工具在两张表中都恰好有一个处理器，因此新增工具却没有接线时会明确失败，
+#: 而不是静默地落入默认分支。
 FactsHandler = Callable[
     ["RunContext", ToolCallProposal, ToolArgs],
     Awaitable[tuple[ToolFacts, ToolPreview]],
@@ -107,7 +106,7 @@ ExecuteHandler = Callable[
     ["RunContext", ToolCallProposal, ToolArgs, str, ToolPreview],
     Awaitable["ToolExecution"],
 ]
-#: Renders one approval card: (summary line, preview body).
+#: 渲染一张审批卡片：（摘要行，预览正文）。
 CardHandler = Callable[[ToolArgs, ToolPreview], tuple[str, str]]
 
 MODEL_PAYLOAD_CHARS = 8_000
@@ -126,25 +125,22 @@ _ERROR_CODES: dict[str, ToolErrorCode] = {
 
 @dataclass(frozen=True, slots=True)
 class ToolExecution:
-    """What one pipeline pass returns to the run loop: the structured result
-    for the model, plus the one flag the loop must act on - `effect_unknown`
-    stops the run so recovery can classify the interrupted side effect."""
+    """一次流水线处理返回给运行循环的内容：提供给模型的结构化结果，以及循环必须
+    处理的一个标志——`effect_unknown` 会停止运行，使恢复流程能够对中断的副作用分类。"""
 
     result: ToolResult
     effect_unknown: bool = False
 
 
 class ToolPipeline:
-    """One instance per RunService; `execute` runs one proposal end to end.
+    """每个 RunService 对应一个实例；`execute` 端到端执行一个提案。
 
-    The numbered comments inside `execute` mirror the stage order in the
-    module docstring (1-2 registry/schema, 3 facts, 4 policy, 5 approval,
-    6 ticket, 7 execute + evidence). At stage 7, read tools execute without
-    an execution journal entry (no effect to recover); write tools journal
-    STARTED -> CONFIRMED/FAILED around the actual I/O so a crash between the
-    two is classifiable; `repo.exec` / `repo.check` additionally snapshot the
-    tree before/after to attribute process writes (ADR 0012) and fail the
-    call on protected-path tamper (ADR 0018).
+    `execute` 内的编号注释与模块文档字符串中的阶段顺序一致（1-2 registry/schema，
+    3 facts，4 policy，5 approval，6 ticket，7 execute + evidence）。在第 7 阶段，
+    读取工具执行时不写入执行日志（没有需要恢复的副作用）；写入工具会在实际 I/O 前后
+    记录 STARTED -> CONFIRMED/FAILED，因此两者之间发生崩溃时可以分类；`repo.exec` /
+    `repo.check` 还会在前后对目录树做快照，以归因进程写入（ADR 0012），并在受保护路径
+    被篡改时让调用失败（ADR 0018）。
     """
 
     def __init__(
@@ -171,10 +167,10 @@ class ToolPipeline:
         self._mode = mode
         self._launcher = launcher
         self._scratch_dir = scratch_dir or Path(tempfile.gettempdir()) / "haven-scratch"
-        # One row per tool, both phases. The unit test
-        # test_every_registered_tool_is_fully_wired pins these tables against
-        # ARGS_MODELS, so "add a tool" is: args model + policy class + one row
-        # here per phase — and forgetting a row fails the suite, not the run.
+        # 每个工具一行，覆盖两个阶段。单元测试
+        # test_every_registered_tool_is_fully_wired 会将这些表与 ARGS_MODELS 固定
+        # 对照，因此“新增工具”意味着：参数模型 + 策略类 + 每个阶段在这里各一行；
+        # 忘记某一行会使整个测试套件失败，而不是让运行在生产中才失败。
         self._facts_handlers: dict[str, FactsHandler] = {
             "repo.list": self._facts_path_read,
             "repo.search": self._facts_path_read,
@@ -189,9 +185,9 @@ class ToolPipeline:
             "repo.diff": self._facts_stateless,
             "task.plan": self._facts_stateless,
         }
-        # What the human sees per tool. Keyed like the two tables above, but
-        # over the ASK-able tools only: read-only and state tools never reach
-        # approval. Pinned by test_every_ask_tool_has_an_approval_card.
+        # 用户针对每个工具看到的内容。键的形式与上面两张表相同，但只覆盖
+        # 可以 ASK 的工具：只读工具和状态工具永远不会进入审批流程。
+        # 由 test_every_ask_tool_has_an_approval_card 固定检查。
         self._card_handlers: dict[str, CardHandler] = {
             "repo.edit": self._card_edit,
             "repo.create": self._card_create,
@@ -229,7 +225,7 @@ class ToolPipeline:
             ),
         )
 
-        # 1-2. Registry lookup + strict schema validation.
+        # 1-2. 注册表查找 + 严格 schema 校验。
         validated = self._registry.validate(call.tool_name, call.arguments_json)
         if isinstance(validated, ValidationFailure):
             code = (
@@ -239,13 +235,13 @@ class ToolPipeline:
             )
             return await self._finish(ctx, call, _error(call, code, validated.message), started)
 
-        # 3. Program-collected workspace facts (never model-controlled).
+        # 3. 程序收集的工作区事实（绝不由模型控制）。
         try:
             facts, preview = await self._collect_facts(ctx, call, validated)
         except WorkspaceError as exc:
             return await self._finish(ctx, call, _error(call, _map_ws_code(exc), str(exc)), started)
 
-        # 4. Deterministic policy.
+        # 4. 确定性策略。
         outcome = evaluate_policy(self._mode, facts)
         await self._emitter.emit(
             ctx.run_id,
@@ -265,7 +261,7 @@ class ToolPipeline:
                 started,
             )
 
-        # 5. Exact approval when policy says ASK.
+        # 5. 策略返回 ASK 时进行精确审批。
         approval_id: str | None = None
         canonical_args = canonical_json(validated.model_dump())
         preimage = facts.preimage_digest
@@ -280,11 +276,10 @@ class ToolPipeline:
                     _error(call, ToolErrorCode.APPROVAL_REJECTED, message),
                     started,
                 )
-            # Re-verify the preimage after the human decision (TOCTOU guard).
-            # Every tool that pins a file's content at approval — edit, delete,
-            # the source of a move, and every file of a patch — is re-checked
-            # against what is on disk now, so a change between approval and
-            # execution fails closed.
+            # 在用户作出决定后重新验证 preimage（TOCTOU 防护）。所有在审批时
+            # 固定文件内容的工具——edit、delete、move 的源文件以及 patch 中的
+            # 每个文件——都与当前磁盘内容重新比较，因此审批和执行之间发生
+            # 变化时会失败关闭。
             guarded_path: str | None = None
             if isinstance(validated, RepoEditArgs | RepoDeleteArgs):
                 guarded_path = validated.path
@@ -327,7 +322,7 @@ class ToolPipeline:
                         started,
                     )
 
-        # 6. Mint the execution ticket; raw model JSON stops here.
+        # 6. 铸造执行票据；原始模型 JSON 在这里停止流动。
         if ctx.status is not RunStatus.EXECUTING_TOOL:
             ctx.move_to(RunStatus.EXECUTING_TOOL)
         ticket = mint_ticket(
@@ -350,9 +345,8 @@ class ToolPipeline:
             ),
         )
 
-        # 7. Execute and confirm facts. Any workspace failure becomes a
-        # structured ToolResult: the invariant is that a tool call never raises
-        # into the agent loop, so one bad path cannot abort a whole run.
+        # 7. 执行并确认事实。任何工作区失败都会变成结构化 ToolResult：不变量是
+        # 工具调用绝不会向代理循环抛出异常，因此一条错误路径不会终止整个运行。
         try:
             execution = await self._run_ticketed(
                 ctx, call, validated, ticket.ticket_digest, preview
@@ -361,20 +355,19 @@ class ToolPipeline:
             return await self._finish(ctx, call, _error(call, _map_ws_code(exc), str(exc)), started)
         return await self._finish(ctx, call, execution.result, started, execution.effect_unknown)
 
-    # -- facts -----------------------------------------------------------------
+    # -- 事实 -------------------------------------------------------------------
 
     async def _collect_facts(
         self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
     ) -> tuple[ToolFacts, ToolPreview]:
-        """Dispatch to the per-tool facts handler.
+        """分发到对应工具的事实处理器。
 
-        The registry already validated `call.tool_name` against ARGS_MODELS,
-        and the wiring test pins the table to the same key set, so a miss here
-        is impossible by construction; the fallback exists only to fail soft
-        (a bare fact, which policy then denies for any effect tool).
+        registry 已经根据 ARGS_MODELS 验证了 `call.tool_name`，连接测试也将此表固定为
+        同一组键，因此按构造不可能查找失败；回退分支只是为了温和失败（返回空事实，
+        策略随后会拒绝任何副作用工具）。
         """
         handler = self._facts_handlers.get(call.tool_name)
-        if handler is None:  # pragma: no cover - pinned impossible by the wiring test
+        if handler is None:  # pragma: no cover - wiring 测试已固定保证此处不可能到达
             return ToolFacts(tool_name=call.tool_name), None
         return await handler(ctx, call, args)
 
@@ -452,8 +445,8 @@ class ToolPipeline:
                 ),
                 None,
             )
-        # Raises if the path already exists, so creation can never silently
-        # overwrite a file the agent has not read.
+        # 如果路径已经存在就抛出异常，因此 create 绝不会静默覆盖代理尚未
+        # 读取的文件。
         preview = await self._workspace.preview_create(args.path, args.content)
         return (
             ToolFacts(
@@ -481,9 +474,8 @@ class ToolPipeline:
                 ),
                 None,
             )
-        # Raises not_found if the file is absent; the pipeline turns that
-        # into a structured result. The human sees the content in the
-        # preview, so a prior read is not required — the preimage is pinned.
+        # 文件不存在时抛出 not_found；流水线会将其转换为结构化结果。用户会
+        # 在预览中看到内容，因此不要求之前先 read——preimage 已经固定。
         preview = await self._workspace.preview_delete(args.path)
         return (
             ToolFacts(
@@ -538,9 +530,8 @@ class ToolPipeline:
         self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
     ) -> tuple[ToolFacts, ToolPreview]:
         assert isinstance(args, RepoApplyPatchArgs)
-        # Hard facts first: every path of every operation must be inside
-        # the workspace and unprotected, or policy hard-denies before any
-        # preview work happens.
+        # 先收集硬事实：每个操作的每条路径都必须位于工作区内且不受保护，
+        # 否则策略会在进行任何预览工作前硬拒绝。
         op_paths: list[str] = []
         for op in args.operations:
             if op.kind == "move":
@@ -562,9 +553,9 @@ class ToolPipeline:
         plan = await self._workspace.preview_patch(
             tuple(_to_patch_spec(op) for op in args.operations), ctx.files_read
         )
-        # The approval binds the aggregate of every touched file's pin:
-        # one digest over the canonical {path: preimage} map, so any file
-        # drifting invalidates the whole approval.
+        # 审批绑定所有被触及文件的固定内容的聚合值：对规范化的
+        # {path: preimage} 映射计算一个摘要，因此任意文件发生漂移都会使
+        # 整个审批失效。
         aggregate = sha256_text(canonical_json(dict(sorted(plan.preimages.items()))))
         return (
             ToolFacts(
@@ -608,41 +599,36 @@ class ToolPipeline:
     async def _facts_stateless(
         self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
     ) -> tuple[ToolFacts, ToolPreview]:
-        # repo.diff (read-only, no path arguments) and task.plan (touches only
-        # run state): nothing on disk to pin.
+        # repo.diff（只读、不接受路径参数）和 task.plan（只接触运行状态）：
+        # 磁盘上没有需要固定的内容。
         return ToolFacts(tool_name=call.tool_name), None
 
-    # -- approval -----------------------------------------------------------------
+    # -- 审批 --------------------------------------------------------------------
 
     def _approval_card(
         self, call: ToolCallProposal, args: ToolArgs, preview: ToolPreview
     ) -> tuple[str, str]:
-        """What the human is shown for one proposal: (summary, preview text).
+        """人工针对一个提案看到的内容：（摘要、预览文本）。
 
-        Per-tool, like the facts and execute tables, so the approval flow
-        itself stays about digests, grants, and consumption. A tool with no
-        card entry is one policy never sends here (read-only and state
-        tools); `_card_handlers` is pinned against the ASK-able tool set by
-        `tests/unit/test_policy.py`, so an ASK tool cannot silently reach the
-        human with an empty summary.
+        与 facts 和 execute 表一样按工具区分，使审批流程本身只关注摘要、授权和消费。
+        没有卡片条目的工具不会被策略发送到这里（只读工具和状态工具属于这种情况）；
+        `_card_handlers` 由 `tests/unit/test_policy.py` 固定为可 ASK 工具集合，因此
+        需要 ASK 的工具不可能带着空摘要悄悄到达人工面前。
 
-        Each handler opens with an isinstance guard returning empty strings.
-        That is mypy narrowing the `ToolArgs` union, not a real branch: the
-        registry validated the args against this exact tool name before the
-        pipeline got here, so the mismatch cannot happen. It fails to a blank
-        card rather than an exception because a rendering slip must never be
-        the thing that takes down a run mid-approval.
+        每个处理器开头都有一个返回空字符串的 isinstance 守卫。这是为了让 mypy 缩小
+        `ToolArgs` 联合类型，而不是真实分支：流水线到达这里之前，registry 已经根据
+        这个确切的工具名称验证过参数，因此不可能不匹配。发生渲染疏漏时返回空卡片而
+        不是抛出异常，因为渲染问题绝不能在审批中途拖垮运行。
         """
         handler = self._card_handlers.get(call.tool_name)
         return handler(args, preview) if handler is not None else ("", "")
 
     @staticmethod
     def _intent(summary: str) -> str:
-        """The model's own one-line reason, appended to the card when given.
+        """模型自己提供的一行理由（如果有则追加到卡片中）。
 
-        Untrusted text on an approval card, so it is suffixed to a summary the
-        program built rather than replacing it: the human always sees what
-        Haven determined the action to be, with the model's claim after it.
+        这是审批卡片上的不可信文本，因此会附加在程序构建的摘要之后，而不是替换摘要：
+        人工始终先看到 Haven 判定的操作内容，后面才是模型的说法。
         """
         return f": {summary}" if summary else ""
 
@@ -734,14 +720,12 @@ class ToolPipeline:
         )
 
         if isinstance(args, RepoCheckArgs) and digest in ctx.standing_check_grants:
-            # Standing grant (ADR 0025): the human already approved this
-            # byte-identical check in this run (same recipe id and argv, same
-            # workspace, same tool version — the digest pins all of it). Mint
-            # and consume a fresh single-use approval so the journal still
-            # carries one approval row per execution, announce the grant, and
-            # skip the modal. Only repo.check is ever eligible: it runs a
-            # user-registered recipe and its repeat is the verify loop's
-            # normal shape; writes and exec always re-ask.
+            # 持续授权（ADR 0025）：用户已经在本次运行中批准过字节级相同的检查
+            # （相同的 recipe id 和 argv、相同工作区、相同工具版本——摘要绑定了
+            # 全部内容）。铸造并消耗一个新的单次审批，使日志仍为每次执行保留
+            # 一条审批记录，宣布这次授权，然后跳过模态窗口。只有 repo.check
+            # 有资格使用：它运行用户注册的配方，而重复执行正是验证循环的正常
+            # 形态；写操作和 exec 始终重新询问。
             approval_id = new_approval_id()
             await self._store.record_approval(approval_id, ctx.run_id, digest)
             await self._store.decide_approval(approval_id, ApprovalDecision.APPROVED)
@@ -808,34 +792,29 @@ class ToolPipeline:
             ctx.move_to(RunStatus.RUNNING_MODEL)
             return False, None, "the user rejected this action"
 
-        # Single consumption, digest-bound: a second consumption or a drifted
-        # digest fails closed.
+        # 单次消耗且绑定摘要：第二次消耗或摘要发生漂移时失败关闭。
         if not await self._store.consume_approval(approval_id, digest):
             ctx.move_to(RunStatus.RUNNING_MODEL)
             return False, None, "approval could not be consumed (stale or reused)"
         if isinstance(args, RepoCheckArgs):
-            # The first human approval of this exact check arms the run-scoped
-            # standing grant announced on the card (ADR 0025). A rejection
-            # never arms anything — this line is only reached on approval.
+            # 用户第一次批准此完全相同的检查时，会启用卡片上宣布的运行范围
+            # 持续授权（ADR 0025）。拒绝永远不会启用任何授权——只有批准后
+            # 才会执行到这一行。
             ctx.standing_check_grants.add(digest)
         ctx.move_to(RunStatus.EXECUTING_TOOL)
         return True, str(approval_id), ""
 
-    # -- execution -----------------------------------------------------------------
+    # -- 执行 --------------------------------------------------------------------
 
     async def _snapshot(self) -> WorkspaceSnapshot:
-        """Digest the whole tree, off the event loop.
+        """在事件循环之外为整个目录树计算摘要。
 
-        Process-write attribution (ADR 0012) brackets every exec/check with a
-        snapshot, so this runs twice per process call and costs O(repo):
-        measured at ~150ms each on a 128k-line checkout. Run inline it froze
-        the loop for ~300ms per check — no streaming, no rendering, no
-        approval modal — so it goes to a worker thread. The work itself is
-        unchanged: every file is still fully hashed, because the digest is
-        what makes a write through a process detectable (and, for protected
-        paths, what makes tampering detectable at all on Linux, ADR 0018).
-        Cheapening it with size caps or mtime stats would trade a measured
-        non-problem for an evadable gate.
+        进程写入归因（ADR 0012）会在每次 exec/check 前后做快照，因此每次进程调用运行
+        两次，成本为 O(repo)：在 12.8 万行 checkout 上测得每次约 150ms。如果内联运行，
+        每次 check 会冻结循环约 300ms——无法流式输出、渲染或打开审批模态框——所以放到
+        worker 线程中。工作内容本身不变：仍然完整计算每个文件的摘要，因为摘要使进程
+        写入可检测（对于受保护路径，在 Linux 上也正是它使篡改完全可检测，ADR 0018）。
+        用大小上限或 mtime 统计来降低成本，会把一个已测得并非问题的成本换成可规避的门禁。
         """
         return await asyncio.to_thread(self._workspace.capture_snapshot)
 
@@ -847,9 +826,9 @@ class ToolPipeline:
         ticket_digest: str,
         preview: ToolPreview,
     ) -> ToolExecution:
-        """Dispatch to the per-tool execute handler (same key set as facts)."""
+        """分发到对应工具的执行处理器（与 facts 使用相同的键集合）。"""
         handler = self._execute_handlers.get(call.tool_name)
-        if handler is None:  # pragma: no cover - pinned impossible by the wiring test
+        if handler is None:  # pragma: no cover - wiring 测试已固定保证此处不可能到达
             return ToolExecution(
                 _error(call, ToolErrorCode.UNKNOWN_TOOL, f"no executor for {call.tool_name!r}")
             )
@@ -973,7 +952,7 @@ class ToolPipeline:
         preview: ToolPreview,
     ) -> ToolExecution:
         assert isinstance(args, RepoApplyPatchArgs)
-        assert isinstance(preview, PatchPreview)  # facts collection built it
+        assert isinstance(preview, PatchPreview)  # 事实收集已构建该预览
         return await self._execute_patch(ctx, call, ticket_digest, preview)
 
     async def _execute_exec_adapter(
@@ -1080,10 +1059,10 @@ class ToolPipeline:
         ticket_digest: str,
         preview: EditPreview | None,
     ) -> ToolExecution:
-        assert preview is not None  # facts collection always builds it for writes
-        # The preview's postimage is recorded *before* any byte lands: if the
-        # process dies inside the write, recovery can classify "file already
-        # matches the expected postimage" as confirmed instead of unknown.
+        assert preview is not None  # 事实收集对写操作始终会构建预览
+        # 预览的 postimage 会在任何字节落盘前记录：如果进程在写入过程中退出，
+        # 恢复逻辑可以将“文件已匹配预期 postimage”分类为 confirmed，而不是
+        # unknown。
         await self._store.record_execution(
             ExecutionRecord(
                 call_id=call.call_id,
@@ -1112,16 +1091,15 @@ class ToolPipeline:
             await self._store.update_execution_state(call.call_id, EffectState.FAILED)
             return ToolExecution(_error(call, _map_ws_code(exc), str(exc)))
         except BaseException:
-            # Crash or cancellation mid-write: the effect state is unknown and
-            # must never be silently replayed.
+            # 写入过程中崩溃或取消：副作用状态未知，绝不能静默重放。
             await self._store.update_execution_state(call.call_id, EffectState.EFFECT_UNKNOWN)
             raise
 
         await self._store.update_execution_state(
             call.call_id, EffectState.CONFIRMED, outcome.postimage_digest
         )
-        # The agent now knows this file's exact contents, so a later edit of it
-        # is legitimately preimage-bound without another read.
+        # 代理现在已经知道该文件的确切内容，因此之后编辑它时无需再次读取，
+        # 也能合法地绑定 preimage。
         ctx.files_read[outcome.path] = outcome.postimage_digest
         verb = "created" if isinstance(args, RepoCreateArgs) else "edited"
         envelope = await self._emitter.emit(
@@ -1160,9 +1138,9 @@ class ToolPipeline:
         ticket_digest: str,
         preview: EditPreview | None,
     ) -> ToolExecution:
-        # The approval-bound preimage, not a fresh read: apply_delete compares
-        # the file on disk against this, so a change since approval fails closed.
-        assert preview is not None  # facts collection always builds it for a delete
+        # 使用审批绑定的 preimage，而不是重新读取：apply_delete 会将磁盘文件
+        # 与它比较，因此审批后发生变化时会失败关闭。
+        assert preview is not None  # 事实收集对 delete 始终会构建预览
         preimage = preview.preimage_digest
         await self._store.record_execution(
             ExecutionRecord(
@@ -1211,13 +1189,13 @@ class ToolPipeline:
         ticket_digest: str,
         preview: EditPreview | None,
     ) -> ToolExecution:
-        # The approval-bound preimage of the source, so apply_move fails closed
-        # if the source changed between approval and execution.
-        assert preview is not None  # facts collection always builds it for a move
+        # 使用源文件经审批绑定的 preimage，因此如果源文件在审批和执行之间
+        # 发生变化，apply_move 会失败关闭。
+        assert preview is not None  # 事实收集对 move 始终会构建预览
         preimage = preview.preimage_digest
-        # dest_path lets recovery inspect both ends of an interrupted move: the
-        # content is unchanged by a move, so src/dest presence plus the preimage
-        # digest classifies every crash point except the copy-then-crash gap.
+        # dest_path 使恢复逻辑能够检查中断移动的两端：move 不会改变内容，
+        # 因此源/目标是否存在加上 preimage 摘要，可以分类除“复制完成后崩溃”
+        # 之外的每个崩溃点。
         await self._store.record_execution(
             ExecutionRecord(
                 call_id=call.call_id,
@@ -1244,7 +1222,7 @@ class ToolPipeline:
             call.call_id, EffectState.CONFIRMED, addition.postimage_digest
         )
         ctx.files_read.pop(removal.path, None)
-        # The agent now knows the destination's contents (they are the source's).
+        # 代理现在知道目标内容（它们与源文件内容相同）。
         ctx.files_read[addition.path] = addition.postimage_digest
         envelope = await self._emitter.emit(
             ctx.run_id,
@@ -1254,7 +1232,7 @@ class ToolPipeline:
                 summary=f"moved {removal.path} -> {addition.path}",
             ),
         )
-        # Both halves are the run's changes: the removal and the addition.
+        # 两半都是本次运行的改动：删除和新增。
         ctx.ledger = ctx.ledger.with_edit(
             EditEvidence(
                 seq=envelope.seq,
@@ -1279,9 +1257,8 @@ class ToolPipeline:
         ticket_digest: str,
         plan: PatchPreview,
     ) -> ToolExecution:
-        # The patch is journaled as its constituent file effects — each shaped
-        # like a single-op tool with its expected postimage — so an interrupted
-        # patch is classifiable file-by-file by the existing recovery rules.
+        # 补丁会按组成它的文件副作用写入日志——每个副作用都像单操作工具一样
+        # 带有预期 postimage——因此中断的补丁可以由现有恢复规则逐文件分类。
         for index, effect in enumerate(plan.effects):
             await self._store.record_execution(
                 ExecutionRecord(
@@ -1303,14 +1280,13 @@ class ToolPipeline:
         try:
             outcomes = await self._workspace.apply_patch(plan)
         except WorkspaceError as exc:
-            # Includes "failed and rolled back cleanly": the tree is unchanged,
-            # so the effect is a plain failure, not an unknown.
+            # 包括“失败且已干净回滚”：目录树未改变，因此副作用是普通失败，
+            # 而不是 unknown。
             await mark_all(EffectState.FAILED)
             return ToolExecution(_error(call, _map_ws_code(exc), str(exc)))
         except PatchRollbackError as exc:
-            # Partial state that deterministic code could not undo: surface as
-            # an unknown effect so the run stops and recovery blocks resume
-            # until a human reconciles each journaled sub-effect.
+            # 确定性代码无法撤销的部分状态：将其暴露为 unknown 副作用，使运行
+            # 停止，并在用户调和每个已记录的子副作用前阻止恢复。
             await mark_all(EffectState.EFFECT_UNKNOWN)
             return ToolExecution(
                 _error(call, ToolErrorCode.INTERNAL, str(exc)), effect_unknown=True
@@ -1345,7 +1321,7 @@ class ToolPipeline:
                 )
             )
             if outcome.postimage_digest:
-                # The agent knows this file's exact content now.
+                # 代理现在已经知道该文件的确切内容。
                 ctx.files_read[outcome.path] = outcome.postimage_digest
             else:
                 ctx.files_read.pop(outcome.path, None)
@@ -1365,11 +1341,10 @@ class ToolPipeline:
         )
 
     def _sandbox_spec(self) -> SandboxSpec:
-        # Model-proposed exec is read-only on the workspace: only the scratch
-        # dir is writable. Real source changes must go through the audited
-        # edit/create/delete/move tools, and this closes the Linux hole where
-        # Landlock cannot carve `.git` out of a writable workspace — exec cannot
-        # write the workspace at all (ADR 0017).
+        # 模型提出的 exec 对工作区是只读的：只有临时目录可写。真正的源码变更
+        # 必须通过经过审计的 edit/create/delete/move 工具完成；这也堵住了 Linux
+        # 上 Landlock 无法从可写工作区中挖出 `.git` 的漏洞——exec 完全不能写入
+        # 工作区（ADR 0017）。
         return SandboxSpec(
             workspace_root=self._workspace.root,
             scratch_dir=self._scratch_dir,
@@ -1388,13 +1363,12 @@ class ToolPipeline:
         self, ctx: RunContext, call: ToolCallProposal, args: RepoExecArgs, ticket_digest: str
     ) -> ToolExecution:
         if self._launcher is None:
-            # Unreachable: policy denies exec when no backend is available
-            # (`sandbox_available` fact). It raises rather than asserts because
-            # `python -O` strips assertions, and the executor runs a command
-            # unwrapped when it has no launcher — so a stripped guard would not
-            # fail here, it would run one unconfined process and only crash
-            # afterwards. "No sandbox means no exec, and no config can override
-            # that" (ADR 0009) has to hold under every interpreter flag.
+            # 不可达：没有后端时策略会拒绝 exec（`sandbox_available` 事实）。
+            # 这里使用 raise 而不是 assert，因为 `python -O` 会移除断言，而
+            # 没有 launcher 时执行器会直接运行未包装的命令；被移除的保护不会
+            # 在这里失败，反而会运行一个不受限制的进程，之后才崩溃。“没有沙箱
+            # 就没有 exec，任何配置都不能覆盖这一点”（ADR 0009）必须在所有
+            # 解释器标志下成立。
             raise RuntimeError("refusing to exec without a sandbox backend")
         await self._store.record_execution(
             ExecutionRecord(
@@ -1421,10 +1395,10 @@ class ToolPipeline:
             await self._store.update_execution_state(call.call_id, EffectState.EFFECT_UNKNOWN)
             raise
 
-        # A nonzero exit is a completed execution, not an unknown effect.
+        # 非零退出也是一次完成的执行，而不是 unknown 副作用。
         await self._store.update_execution_state(call.call_id, EffectState.CONFIRMED)
-        # Any file the command changed is attributed to it as edit evidence, so
-        # a write through exec cannot escape the Evidence Gate (ADR 0012).
+        # 命令修改的所有文件都会归因给它并作为 edit 证据，因此通过 exec 的
+        # 写入无法逃过 Evidence Gate（ADR 0012）。
         tampered = await self._record_process_writes(
             ctx, call.tool_name, before, await self._snapshot()
         )
@@ -1443,8 +1417,7 @@ class ToolPipeline:
                     call, ToolErrorCode.TIMEOUT, f"command timed out after {args.timeout_seconds}s"
                 )
             )
-        # No evidence is recorded here on purpose: only a registered check
-        # recipe can satisfy the Evidence Gate.
+        # 特意不在这里记录证据：只有已注册的 check recipe 才能满足 Evidence Gate。
         return ToolExecution(
             _ok(
                 call,
@@ -1466,21 +1439,18 @@ class ToolPipeline:
         before: WorkspaceSnapshot,
         after: WorkspaceSnapshot,
     ) -> list[str]:
-        """Attribute any workspace change a process caused to the ledger.
+        """将进程造成的任何工作区变更归因到证据账本。
 
-        Only edit/create used to write evidence, so a file changed by a process
-        was invisible to the Evidence Gate (ADR 0012). Here a before/after
-        snapshot is diffed and every change becomes edit evidence, so a run that
-        mutates the tree through any tool is held to the same evidence standard.
+        过去只有 edit/create 会写入证据，因此进程造成的文件变更对 Evidence Gate
+        不可见（ADR 0012）。这里比较前后快照，并将每个变更都转为编辑证据，因此
+        无论运行通过哪个工具修改目录树，都必须满足相同的证据标准。
 
-        Returns the protected paths the process changed, so the caller can fail
-        the tool call outright (ADR 0018) — a control-plane mutation must be a
-        hard outcome, not an annotation.
+        返回进程修改过的受保护路径，以便调用方直接让工具调用失败（ADR 0018）——
+        控制平面的篡改必须成为硬结果，而不能只是注释。
         """
-        # A protected path changing during a process is a tamper the OS sandbox
-        # could not prevent (Landlock cannot protect `.git` in a writable
-        # workspace). It is surfaced as an error so it is attributable in the
-        # audit trail rather than silent — the invisibility half of the hole.
+        # 进程运行期间受保护路径发生变化，属于操作系统沙箱无法阻止的篡改
+        # （Landlock 无法在可写工作区中保护 `.git`）。将其作为错误暴露出来，
+        # 使审计轨迹能够归因，而不是静默发生——这正是该漏洞中“不可见”的一半。
         tampered = sorted(
             name
             for name in before.protected_digests.keys() | after.protected_digests.keys()
@@ -1542,15 +1512,14 @@ class ToolPipeline:
             raise
 
         await self._store.update_execution_state(call.call_id, EffectState.CONFIRMED)
-        # A check that mutates the tree (e.g. a formatter) is recorded like any
-        # other write, before the check evidence, so the gate sees it.
+        # 会修改目录树的检查（例如格式化器）会像其他写操作一样记录在检查证据
+        # 之前，使门禁能够看到这次修改。
         tampered = await self._record_process_writes(
             ctx, call.tool_name, before, await self._snapshot()
         )
         if tampered:
-            # A check that rewrote the control plane is not a verification: no
-            # check evidence is recorded, so this run cannot use it to satisfy
-            # the Evidence Gate, and the call itself fails (ADR 0018).
+            # 重写控制平面的检查不是验证：不会记录 check 证据，因此本次运行
+            # 不能用它满足 Evidence Gate，调用本身也会失败（ADR 0018）。
             return ToolExecution(
                 _error(
                     call,
@@ -1601,7 +1570,7 @@ class ToolPipeline:
             )
         )
 
-    # -- shared -----------------------------------------------------------------
+    # -- 共享 -------------------------------------------------------------------
 
     async def _finish(
         self,
@@ -1638,11 +1607,10 @@ class _ExternalChange:
 
 
 def _detect_changes(before: WorkspaceSnapshot, after: WorkspaceSnapshot) -> list[_ExternalChange]:
-    """Files whose digest appeared, disappeared, or moved between snapshots.
+    """找出两个快照之间摘要新增、消失或发生移动的文件。
 
-    Pure over the two digest maps, so the change set is a function of the
-    snapshots alone. Deletion yields an empty postimage, creation an empty
-    preimage — the convention the edit/create paths already use.
+    该函数只依赖两个摘要映射，因此变更集合完全由快照决定。删除会产生空 postimage，
+    创建会产生空 preimage——这与 edit/create 路径已有的约定一致。
     """
     changed = sorted(
         path
@@ -1663,8 +1631,7 @@ def _detect_changes(before: WorkspaceSnapshot, after: WorkspaceSnapshot) -> list
 def _to_patch_spec(
     op: PatchEditOp | PatchCreateOp | PatchDeleteOp | PatchMoveOp,
 ) -> PatchOpSpec:
-    """Contract operation -> port-neutral spec (the workspace never sees
-    pydantic models)."""
+    """将契约操作转换为与 port 无关的 spec（工作区永远不会看到 pydantic 模型）。"""
     if isinstance(op, PatchEditOp):
         return PatchOpSpec(
             kind="edit",

@@ -1,4 +1,4 @@
-"""Security regression: every workspace escape must fail closed."""
+"""安全回归测试：任何逃出工作区的尝试都必须安全失败。"""
 
 import os
 from pathlib import Path
@@ -56,7 +56,7 @@ class TestPathEscapes:
 
     async def test_symlink_inside_workspace_not_editable(self, workspace: FsWorkspace) -> None:
         os.symlink(workspace.root / "src" / "app.py", workspace.root / "alias.py")
-        # resolves inside the workspace, so reads work through the real path
+        # 解析结果位于工作区内，因此通过真实路径读取也能工作
         facts = workspace.path_facts("alias.py")
         assert facts.within_workspace
         assert facts.normalized == "src/app.py"

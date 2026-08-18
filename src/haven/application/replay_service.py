@@ -1,7 +1,7 @@
-"""Replay: re-deliver a run's persisted events to a sink.
+"""Replay：将运行已持久化的事件重新发送给 sink。
 
-Replay never calls the model or any tool — it is a pure projection of the
-journal, which is what makes trace review and TUI reconstruction trustworthy.
+Replay 从不调用模型或任何工具——它只是日志的纯投影，这正是轨迹审查和 TUI 重建
+值得信任的原因。
 """
 
 from __future__ import annotations

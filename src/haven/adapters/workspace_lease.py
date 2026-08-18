@@ -1,14 +1,12 @@
-"""Single-writer lease for a workspace, across Haven processes on one machine.
+"""跨同一台机器上的 Haven 进程使用的工作区单写者租约。
 
-Everything inside one process is already consistent (preimage pins, TOCTOU
-re-verification, atomic writes). What none of that covers is a *second Haven
-process* mutating the same workspace between another run's approval and its
-execution — the classic cross-process race the external audits flagged. The
-lease makes the single-writer assumption explicit: the first interactive
-process holds it; a second one must run read-only.
+单个进程内部的状态已经一致（preimage 固定、TOCTOU 重新验证、原子写入）。但这些
+机制无法覆盖另一条运行在审批和执行之间由“第二个 Haven 进程”修改同一工作区的情况，
+这正是外部审计指出的典型跨进程竞态。租约明确了单写者假设：第一个交互进程持有租约；
+第二个进程必须以只读模式运行。
 
-Scope is deliberately local: one machine, advisory, keyed by the resolved
-workspace path. It is not a distributed lock and does not claim to be.
+作用域有意限定在本地：一台机器，提示性使用，以解析后的工作区路径为键。它不是分布式
+锁，也不声称自己是分布式锁。
 """
 
 from __future__ import annotations
@@ -23,13 +21,13 @@ from pathlib import Path
 
 from haven.domain.digest import sha256_text
 
-#: A holder that has not heartbeat for this long is presumed dead even when
-#: its pid cannot be probed (e.g. a different user's process).
+#: 持有者在这么长时间内没有心跳时，即使无法探测其 pid（例如它属于另一位
+#: 用户），也视为已死亡。
 STALE_AFTER_SECONDS = 15 * 60.0
 
 
 class LeaseHeld(Exception):
-    """Another live Haven process holds the write lease for this workspace."""
+    """另一个存活的 Haven 进程持有此工作区的写入租约。"""
 
     def __init__(self, holder_pid: int, holder_host: str, since: str) -> None:
         super().__init__(
@@ -42,7 +40,7 @@ class LeaseHeld(Exception):
 
 @dataclass
 class WorkspaceLease:
-    """A held lease. Call `refresh()` on activity and `release()` on exit."""
+    """已持有的租约。活动时调用 `refresh()`，退出时调用 `release()`。"""
 
     path: Path
     workspace: str
@@ -67,10 +65,10 @@ class WorkspaceLease:
 
 
 def acquire_workspace_lease(workspace_root: Path, leases_dir: Path) -> WorkspaceLease:
-    """Acquire the single-writer lease for `workspace_root` or raise LeaseHeld.
+    """获取 `workspace_root` 的单写者租约，否则抛出 LeaseHeld。
 
-    A lease left by a dead process (pid gone, or heartbeat older than
-    STALE_AFTER_SECONDS) is broken and taken over; a live holder wins.
+    已死亡进程遗留的租约（pid 已消失，或心跳早于 STALE_AFTER_SECONDS）会被解除并接管；
+    对于仍存活的持有者，则以持有者为准。
     """
     leases_dir.mkdir(parents=True, exist_ok=True)
     key = sha256_text(str(workspace_root.resolve()))[:24]
@@ -93,9 +91,8 @@ def acquire_workspace_lease(workspace_root: Path, leases_dir: Path) -> Workspace
         "heartbeat_at": _now(),
     }
     _write_atomic(path, payload)
-    # Read back and confirm we won: two processes breaking the same stale
-    # lease at once both rename, but exactly one write lands last and a
-    # loser must not believe it holds the lease.
+    # 重新读取并确认我们确实获胜：两个进程同时打破同一个过期租约时都会
+    # 执行重命名，但最终只会有一个写入落后完成，失败者不能误以为自己持有租约。
     final = _read(path)
     if final is None or _pid_of(final) != os.getpid():
         raise LeaseHeld(
@@ -121,7 +118,7 @@ def _pid_of(payload: dict[str, object]) -> int:
 
 def _is_live(payload: dict[str, object]) -> bool:
     if str(payload.get("host", "")) != socket.gethostname():
-        # A different machine's holder cannot be probed; trust the heartbeat.
+        # 无法探测另一台机器上的持有者；信任心跳。
         return _heartbeat_age(payload) < STALE_AFTER_SECONDS
     pid = _pid_of(payload)
     if pid <= 0 or pid == os.getpid():
@@ -131,12 +128,11 @@ def _is_live(payload: dict[str, object]) -> bool:
     except ProcessLookupError:
         return False
     except PermissionError:
-        # The pid exists but belongs to another user; fall back to heartbeat.
+        # pid 存在但属于另一位用户；回退到心跳判断。
         return _heartbeat_age(payload) < STALE_AFTER_SECONDS
-    # Same host and the pid answers the probe: the holder is alive, full stop.
-    # The heartbeat must NOT overrule a live probe — holders do not refresh on
-    # a timer, so a long interactive session would otherwise look "stale" and
-    # have its lease stolen mid-run, which is exactly what the lease prevents.
+    # 同一主机上的 pid 对探测有响应：持有者仍然存活，结论确定。
+    # 心跳绝不能覆盖存活探测——持有者不会按定时器刷新心跳，否则长时间
+    # 交互会话会看起来“过期”，租约可能在运行中被夺走，而这正是租约要防止的事。
     return True
 
 

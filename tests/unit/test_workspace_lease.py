@@ -1,5 +1,4 @@
-"""The single-writer workspace lease: first writer wins, stale holders are
-broken, contenders learn who holds it."""
+"""工作区单写者租约：第一个写者获胜，过期持有者会被清理，竞争者可以获知持有者。"""
 
 import json
 import os
@@ -23,13 +22,12 @@ def test_acquire_and_release(tmp_path: Path) -> None:
 
 
 def test_a_live_holder_blocks_a_second_acquire(tmp_path: Path) -> None:
-    """Same pid is treated as re-acquire by us; simulate another live process
-    by writing a lease for a pid that provably exists (pid 1 always does) —
-    liveness is then decided by the heartbeat, which is fresh."""
+    """相同 pid 会被视为本进程重新获取；通过为确定存在的 pid（pid 1 始终存在）写入
+    租约来模拟另一个活动进程——此时由新鲜的心跳判断其存活。"""
     leases = tmp_path / "leases"
     lease = acquire_workspace_lease(tmp_path / "ws", leases)
     payload = json.loads(lease.path.read_text())
-    payload["pid"] = 1  # init: alive on every unix, unkillable-by-us
+    payload["pid"] = 1  # init：在所有 Unix 上都存活，我们无法杀死
     lease.path.write_text(json.dumps(payload))
 
     with pytest.raises(LeaseHeld) as err:
@@ -41,7 +39,7 @@ def test_a_dead_holders_lease_is_broken(tmp_path: Path) -> None:
     leases = tmp_path / "leases"
     first = acquire_workspace_lease(tmp_path / "ws", leases)
     payload = json.loads(first.path.read_text())
-    payload["pid"] = 2**22 + 12345  # beyond default pid_max: never a live pid
+    payload["pid"] = 2**22 + 12345  # 超过默认 pid_max：不可能是存活的 pid
     first.path.write_text(json.dumps(payload))
 
     second = acquire_workspace_lease(tmp_path / "ws", leases)

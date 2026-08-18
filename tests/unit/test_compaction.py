@@ -1,8 +1,7 @@
-"""Deterministic compaction: dropped tool outputs become recorded facts.
+"""确定性压缩：被丢弃的工具输出会变成记录的事实。
 
-The digest is derived from the dropped messages themselves, never from live run
-state, so it stays byte-identical between compaction events and cannot move the
-cacheable prefix (ADR 0008).
+摘要直接从被丢弃的消息计算，绝不依赖活动运行状态，因此在不同压缩事件之间保持
+逐字节一致，也不会移动可缓存前缀（ADR 0008）。
 """
 
 from haven.application.compaction import (
@@ -65,8 +64,8 @@ class TestFactsSurvive:
 
 class TestTrustIsHonest:
     def test_file_content_never_reaches_the_digest(self) -> None:
-        """The digest is labelled trusted, so it may carry only program-made
-        facts — never repository text, which would launder untrusted bytes."""
+        """摘要被标记为可信，因此只能携带程序生成的事实，绝不能携带仓库文本，否则
+        会将不可信字节洗成可信内容。"""
         secret = "AKIAIOSFODNN7EXAMPLE-in-a-file"
         digest = build_run_digest(
             [tool_message("repo.read", read_result("src/calc.py", "a1b2", content=secret))]
@@ -74,14 +73,14 @@ class TestTrustIsHonest:
         assert secret not in digest
 
     def test_model_prose_is_not_summarized(self) -> None:
-        """Only tool outputs are ever dropped, so assistant text cannot appear."""
+        """只有工具输出会被丢弃，因此 assistant 文本不能出现在摘要中。"""
         messages = [ModelMessage(role="assistant", content="I think the bug is obvious")]
         assert "obvious" not in build_run_digest(messages)
 
 
 class TestRobustness:
     def test_malformed_json_degrades_to_a_count(self) -> None:
-        """A bad entry must never abort a run."""
+        """格式错误的条目绝不能中止运行。"""
         digest = build_run_digest([tool_message("repo.read", "not json at all")])
         assert digest
         assert "repo.read" in digest
@@ -111,7 +110,7 @@ class TestDeterminism:
 
 
 def bulky_read(path: str, digest: str, size: int = 500) -> str:
-    """A realistically large read result: the bulk of it is file content."""
+    """符合实际的大型读取结果：主体是文件内容。"""
     return read_result(path, digest, content="c" * size)
 
 
@@ -150,7 +149,7 @@ class TestSummarizeDropped:
         assert messages[1] in kept
 
     def test_dropped_content_does_not_survive_anywhere(self) -> None:
-        """The whole point: the bytes go away, the facts stay."""
+        """核心目标：字节被移除，事实保留下来。"""
         messages = [
             tool_message("repo.read", read_result("a.py", "d1", content="S" * 900), "c1"),
             tool_message("repo.read", bulky_read("b.py", "d2"), "c2"),
@@ -188,9 +187,8 @@ def paired_tool(call_id: str, path: str) -> ModelMessage:
 
 
 class TestToolCallPairing:
-    """A dropped tool result must never orphan a kept assistant tool call —
-    OpenAI and DeepSeek reject an assistant tool_call with no following result.
-    """
+    """被丢弃的工具结果绝不能让保留的 assistant 工具调用变成孤立调用——OpenAI 和
+    DeepSeek 会拒绝没有后续结果的 assistant tool_call。"""
 
     def _turn_groups(self, n: int) -> list[ModelMessage]:
         messages: list[ModelMessage] = []
@@ -210,12 +208,12 @@ class TestToolCallPairing:
                     assert call.call_id in kept_tool_ids, (
                         "a kept assistant tool call lost its result to compaction"
                     )
-        assert digest  # something was condensed
+        assert digest  # 有内容被压缩了
 
     def test_the_latest_turn_group_survives_whole(self) -> None:
         messages = self._turn_groups(5)
         kept, _, _ = summarize_dropped(messages, limit=1400)
-        # the last assistant tool call and its result are both kept
+        # 最后一条 assistant 工具调用及其结果都会保留
         assert messages[-1] in kept
         assert messages[-2] in kept
 
@@ -229,8 +227,8 @@ class TestSizing:
         assert message_chars(with_reasoning) > message_chars(plain) + 400
 
     def test_a_transcript_over_budget_only_via_reasoning_is_compacted(self) -> None:
-        """Reasoning is replayed on the wire, so it must be able to trigger
-        compaction; counting content alone would miss it."""
+        """Reasoning 会在线协议上重放，因此必须能够触发压缩；只统计 content 会漏掉
+        这种情况。"""
         messages = [
             assistant_tool_call("c0"),
             ModelMessage(
@@ -246,14 +244,14 @@ class TestSizing:
             assistant_tool_call("c2"),
             paired_tool("c2", "c.py"),
         ]
-        # content is small, but reasoning pushes it over a tiny budget
+        # content 很小，但 reasoning 会使其超过很小的预算
         kept, digest, _ = summarize_dropped(messages, limit=1500)
         assert digest
 
 
 class TestHardLimit:
-    """The backstop that guarantees a fit when summarize_dropped cannot (the
-    remaining content is all undroppable or the digest itself is large)."""
+    """当 summarize_dropped 无法使内容适配时，保证适配的后备机制（剩余内容全部不
+    可丢弃，或摘要本身很大）。"""
 
     def test_a_fitting_history_is_returned_unchanged(self) -> None:
         messages = [ModelMessage(role="user", content="small")]
@@ -263,7 +261,7 @@ class TestHardLimit:
         messages = [ModelMessage(role="user", content=f"m{i}: " + "x" * 400) for i in range(5)]
         fitted = enforce_hard_limit(messages, 900)
         assert sum(message_chars(m) for m in fitted) <= 900
-        # Newest survive, oldest go.
+        # 保留最新内容，丢弃最旧内容。
         assert fitted[-1].content.startswith("m4:")
         assert not any(m.content.startswith("m0:") for m in fitted)
 
@@ -280,13 +278,10 @@ class TestHardLimit:
 
 
 class TestComprehensionPreservation:
-    """A deterministic proxy for the compaction A/B benchmark: every
-    load-bearing fact the model needs to keep working (which files it read and
-    their digests, what it edited, which checks ran and their exit codes) must
-    survive into the digest. The live task-performance A/B stays the honest
-    open measurement (documented in EVAL_LIVE.md); this pins that the digest
-    does not silently lose the facts that benchmark would test.
-    """
+    """压缩 A/B 基准的确定性替代测试：模型继续工作所需的每个关键事实（读取了哪些
+    文件及其摘要、编辑了什么、运行了哪些检查及退出码）都必须保留在摘要中。实时
+    任务表现的 A/B 仍是诚实的开放测量（见 EVAL_LIVE.md）；这里固定的是摘要不会
+    悄悄丢失该基准要测试的事实。"""
 
     def test_digest_preserves_reads_edits_and_checks(self) -> None:
         dropped = [
@@ -301,12 +296,12 @@ class TestComprehensionPreservation:
             ),
         ]
         digest = build_run_digest(dropped)
-        # The facts a resuming agent needs, all present.
+        # 恢复中的代理需要的事实全部存在。
         assert "src/a.py" in digest
-        assert "aaaa1111"[:8] in digest  # read digest prefix
-        assert "bbbb2222"[:8] in digest  # postimage prefix
+        assert "aaaa1111"[:8] in digest  # read 摘要前缀
+        assert "bbbb2222"[:8] in digest  # postimage 前缀
         assert "pytest exit 1" in digest
-        # The bytes it must NOT keep (that is what makes the digest trusted).
+        # 这些字节绝不能保留（这正是摘要可信的原因）。
         assert "xxxx" not in digest
 
     def test_a_read_then_edit_of_one_file_keeps_both_facts(self) -> None:

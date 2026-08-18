@@ -1,9 +1,7 @@
-"""Interfaces layer: the CLI (Typer) and the TUI (Textual).
+"""接口层：CLI（Typer）和 TUI（Textual）。
 
-Everything here is presentation. An interface turns user intent into
-application-service calls and renders the event stream; it never executes
-tools, never evaluates policy, and never talks to a provider directly.
-Import-linter enforces that this package reaches adapters only through
-`haven.bootstrap` (the composition root), so swapping a UI cannot change
-any security-relevant behavior.
+这里的所有内容都属于表现层。接口将用户意图转换为应用服务调用并渲染事件流；
+它不会执行工具、评估策略，也不会直接与提供商通信。Import-linter 强制要求本包
+只能通过 `haven.bootstrap`（组合根）访问适配器，因此更换 UI 不会改变任何与安全
+相关的行为。
 """

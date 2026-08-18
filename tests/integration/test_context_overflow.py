@@ -1,10 +1,9 @@
-"""Provider-confirmed context overflow is recovered by forced compaction.
+"""由提供商确认的上下文溢出通过强制压缩恢复。
 
-`max_context_chars` is a char budget checked against an *estimated* token
-window (ADR 0022). A CJK/emoji-dense transcript can breach the real window even
-inside that budget, so the provider returns a 400 the char check never caught.
-Rather than fail the run, RunService shrinks the budget, forcing more history to
-compact, and retries — bounded, so a persistently overflowing run still stops.
+`max_context_chars` 是针对*估算* token 窗口检查的字符预算（ADR 0022）。中文/emoji
+密集的对话记录即使在该预算内，也可能超过真实窗口，因此提供商会返回字符检查
+未能捕获的 400。RunService 不会让运行失败，而是缩小预算，强制压缩更多历史并重试；
+该过程有界，因此持续溢出的运行仍会停止。
 """
 
 from collections.abc import AsyncIterator
@@ -17,7 +16,7 @@ from tests.integration.harness import Harness, finish, make_repo, text
 
 
 class OverflowingModel:
-    """Raises `context_overflow` on its first N calls, then answers."""
+    """前 N 次调用抛出 `context_overflow`，之后回答。"""
 
     model_name = "flaky"
 
@@ -73,6 +72,5 @@ class TestContextOverflowRecovery:
 
         assert outcome.status is RunStatus.FAILED
         assert outcome.stop_reason is StopReason.PROVIDER_ERROR
-        # Initial attempt plus a bounded number of shrink-and-retry attempts,
-        # not an unbounded loop.
+        # 包括初始尝试在内，只允许有限次数的缩小并重试，而不是无界循环。
         assert model.attempts == 3

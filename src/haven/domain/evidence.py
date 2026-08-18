@@ -1,8 +1,7 @@
-"""Evidence ledger and the Evidence Gate.
+"""证据账本和 Evidence Gate。
 
-The model's own words are never sufficient proof of success. When a run has
-written files, success additionally requires a diff and a passing verification
-recorded *after* the last write.
+模型自己的话永远不足以证明成功。当运行写入文件后，成功还必须具备差异，并且
+在最后一次写入之后记录到通过的验证结果。
 """
 
 from __future__ import annotations
@@ -67,9 +66,9 @@ class GateResult:
     passed: bool
     reason_code: str
     detail: str
-    #: True when no amount of further work by the agent can satisfy the gate.
-    #: The loop must stop instead of nudging, or it burns its whole budget in
-    #: an unwinnable state.
+    #: 如果代理无论继续做多少工作都无法满足门禁，则为 True。
+    #: 循环必须停止，不能继续发送 nudge，否则会在无法取胜的状态下耗尽
+    #: 全部预算。
     terminal: bool = False
 
 
@@ -79,16 +78,14 @@ def evaluate_evidence_gate(
     *,
     verification_available: bool = True,
 ) -> GateResult:
-    """Program decision on whether a final answer may count as success.
+    """由程序决定最终答案是否可以计为成功。
 
-    `diff_text` is the run's accumulated diff; when supplied it is reviewed for
-    obviously dangerous content (see `domain.review`). A run must both produce
-    evidence and not have written something plainly wrong.
+    `diff_text` 是本次运行累计的差异；传入后会检查其中是否有明显危险的内容
+    （见 `domain.review`）。运行既必须产生证据，也不能写入明显错误的内容。
 
-    `verification_available` says whether any check recipe is registered. If a
-    run has written files and none is, the gate can never be satisfied — the
-    agent cannot conjure a verifier — so the failure is terminal rather than
-    something to retry.
+    `verification_available` 表示是否注册了任何检查配方。如果运行写入了文件，
+    但没有可用配方，门禁就永远无法满足——代理无法凭空创造验证器——因此这是
+    终止性失败，而不是可以重试的失败。
     """
     if not ledger.has_edits:
         return GateResult(True, "no_writes", "Run made no file changes; final answer accepted.")

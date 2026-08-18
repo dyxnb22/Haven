@@ -1,0 +1,69 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/src"
+  ],
+  "python.analysis.include": [
+    "src/**/*"
+  ],
+  "python.analysis.exclude": [
+    "**/evals/**",
+    "**/scripts/**",
+    "**/tests/**",
+    "**/evals/real/**",
+    "**/evals/headtohead/**",
+    "**/eval_report/**",
+    "**/.hypothesis/**",
+    "**/.mypy_cache/**",
+    "**/.import_linter_cache/**"
+  ],
+  "python.analysis.diagnosticMode": "workspace",
+  "python.analysis.typeCheckingMode": "basic",
+
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": [
+    "tests"
+  ],
+
+  "files.watcherExclude": {
+    "**/.git/**": true,
+    "**/.venv/**": true,
+    "**/node_modules/**": true,
+    "**/.pytest_cache/**": true,
+    "**/.ruff_cache/**": true,
+    "**/.mypy_cache/**": true,
+    "**/.hypothesis/**": true,
+    "**/.import_linter_cache/**": true,
+    "**/evals/real/**": true,
+    "**/evals/headtohead/**": true,
+    "**/eval_report/**": true
+  },
+  "files.exclude": {
+    "**/.git": true,
+    "**/.venv": true,
+    "**/node_modules": true,
+    "**/.mypy_cache": true,
+    "**/.hypothesis": true,
+    "**/.import_linter_cache": true,
+    "**/.coverage": true,
+    "**/eval_report": true,
+    "**/evals/real": true
+  },
+  "search.exclude": {
+    "**/.git/**": true,
+    "**/.venv/**": true,
+    "**/node_modules/**": true,
+    "**/.pytest_cache/**": true,
+    "**/.ruff_cache/**": true,
+    "**/.mypy_cache": true,
+    "**/.hypothesis": true,
+    "**/.import_linter_cache": true,
+    "**/.coverage": true,
+    "**/eval_report/**": true,
+    "**/evals/real/**": true
+  },
+
+  "markdownlint.appliesTo": "workspaceFiles",
+  "markdownlint.run": "onSave"
+}

@@ -1,7 +1,6 @@
-"""Run status state machine.
+"""运行状态状态机。
 
-Every transition goes through `transition()` so an illegal move is a bug that
-fails loudly instead of silently corrupting a run.
+每次状态转换都经过 `transition()`，因此非法移动会明确失败，而不是悄悄破坏运行。
 """
 
 from __future__ import annotations
@@ -23,15 +22,15 @@ _ALLOWED: dict[RunStatus, frozenset[RunStatus]] = {
     ),
     RunStatus.VALIDATING_TOOL: frozenset(
         {
-            RunStatus.RUNNING_MODEL,  # deny / validation error is fed back to the model
+            RunStatus.RUNNING_MODEL,  # deny / 校验错误会反馈给模型
             RunStatus.EXECUTING_TOOL,
             RunStatus.WAITING_APPROVAL,
         }
     ),
     RunStatus.WAITING_APPROVAL: frozenset(
         {
-            RunStatus.RUNNING_MODEL,  # rejected
-            RunStatus.EXECUTING_TOOL,  # approved
+            RunStatus.RUNNING_MODEL,  # 已拒绝
+            RunStatus.EXECUTING_TOOL,  # 已批准
         }
     ),
     RunStatus.EXECUTING_TOOL: frozenset(
@@ -50,18 +49,18 @@ _ALLOWED: dict[RunStatus, frozenset[RunStatus]] = {
     RunStatus.CANCELLED: frozenset(),
     RunStatus.EFFECT_UNKNOWN: frozenset(
         {
-            RunStatus.RUNNING_MODEL,  # reconciled, run may continue
-            RunStatus.FAILED,  # abandoned
+            RunStatus.RUNNING_MODEL,  # 已调和，运行可以继续
+            RunStatus.FAILED,  # 已放弃
         }
     ),
 }
 
 
 def transition(current: RunStatus, target: RunStatus) -> RunStatus:
-    """Validate and return the target status.
+    """校验并返回目标状态。
 
-    Any active status may always move to CANCELLED or STOPPED (budget or
-    other program-side halt); everything else must be explicitly allowed.
+    任何活动状态都可以移动到 CANCELLED 或 STOPPED（预算耗尽或其他程序侧停止）；
+    其他转换则必须被明确允许。
     """
     if current in ACTIVE_STATUSES and target in (RunStatus.CANCELLED, RunStatus.STOPPED):
         return target

@@ -31,7 +31,7 @@ class TestReadOnlyTools:
 
 class TestStateTools:
     def test_plan_allowed_in_both_modes(self) -> None:
-        """task.plan touches only run state, so read_only mode may still use it."""
+        """task.plan 只接触运行状态，因此 read_only 模式仍可以使用它。"""
         for mode in (PermissionMode.INTERACTIVE, PermissionMode.READ_ONLY):
             outcome = evaluate_policy(mode, facts(tool_name="task.plan"))
             assert outcome.decision is PolicyDecision.ALLOW
@@ -122,7 +122,7 @@ class TestExecTool:
         return ToolFacts(**base)  # type: ignore[arg-type]
 
     def test_denied_when_no_sandbox_backend(self) -> None:
-        """Fail closed: there is no unsandboxed fallback."""
+        """失败即关闭：不存在无沙箱的回退路径。"""
         outcome = evaluate_policy(
             PermissionMode.INTERACTIVE, self.exec_facts(sandbox_available=False)
         )
@@ -130,7 +130,7 @@ class TestExecTool:
         assert outcome.reason_code == "sandbox_unavailable"
 
     def test_missing_sandbox_fact_fails_closed(self) -> None:
-        """An un-collected fact must never read as permission."""
+        """未收集到的事实绝不能被理解为拥有权限。"""
         outcome = evaluate_policy(
             PermissionMode.INTERACTIVE, self.exec_facts(sandbox_available=None)
         )
@@ -203,17 +203,15 @@ class TestHardDenies:
 
 class TestPolicyCompleteness:
     def test_every_registered_tool_has_a_policy(self) -> None:
-        """A new tool must be classified, not silently fall through to ASK."""
+        """新工具必须被分类，不能静默落入 ASK。"""
         from haven.contracts.tools import ARGS_MODELS
 
         assert set(ARGS_MODELS) == KNOWN_TOOLS
 
     def test_every_registered_tool_is_fully_wired_in_the_pipeline(self) -> None:
-        """The pipeline's facts and execute dispatch tables must each cover
-        exactly the registered tool set. Together with the policy check above
-        this pins all four add-a-tool sites (args model, policy class, facts
-        handler, execute handler): forgetting any one fails here, not at
-        runtime as a silent fallthrough."""
+        """流水线的事实表和执行分发表都必须准确覆盖已注册工具集合。结合上面的策略
+        检查，这固定了添加工具的四个位置（参数模型、策略分类、事实处理器、执行
+        处理器）：遗漏任意一个都会在这里失败，而不是运行时静默落空。"""
         from typing import Any, cast
 
         from haven.application.registry import ToolRegistry
@@ -234,9 +232,8 @@ class TestPolicyCompleteness:
         assert set(pipeline._execute_handlers) == set(ARGS_MODELS)  # noqa: SLF001
 
     def test_every_ask_tool_has_an_approval_card(self) -> None:
-        """A tool policy sends to a human must render a card. Without this,
-        a new ASK tool reaches the approval modal with an empty summary —
-        the human would be asked to authorize a blank line."""
+        """策略要求交给人类的工具必须渲染审批卡片。没有这项保证，新 ASK 工具会带着
+        空摘要进入审批模态框，人类会被要求授权一行空白内容。"""
         from typing import Any, cast
 
         from haven.application.registry import ToolRegistry
@@ -268,7 +265,7 @@ class TestPolicyCompleteness:
                 assert outcome.decision is not PolicyDecision.ALLOW, tool
 
     def test_exec_is_auto_allowed_only_for_classified_read_only_commands(self) -> None:
-        """The single auto-allow exception, pinned so it cannot widen silently."""
+        """唯一的自动允许例外，固定其范围以防悄悄扩大。"""
         allowed = [
             exec_class
             for exec_class in ("safe_read", "shell_passthrough", "other")

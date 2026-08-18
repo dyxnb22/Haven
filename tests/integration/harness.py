@@ -1,4 +1,4 @@
-"""Shared offline harness: ScriptedModel + real adapters on a temp repo."""
+"""共享的离线测试工具：临时仓库上的 ScriptedModel + 真实适配器。"""
 
 from __future__ import annotations
 
@@ -30,8 +30,8 @@ from haven.domain.pricing import Pricing
 from haven.ports.sandbox import SandboxLauncher
 from tests.integration.fakes import RecordingLauncher
 
-#: Distinguishes "caller said nothing" from an explicit `launcher=None`, which
-#: is how a test asks for the no-sandbox-backend path.
+#: 区分“调用方没有提供内容”和显式的 `launcher=None`；测试通过后者请求
+#: 没有沙箱后端的路径。
 _UNSET_LAUNCHER: SandboxLauncher = RecordingLauncher()
 
 BUGGY_CALC = (
@@ -130,9 +130,9 @@ class Harness:
         self.emitter = EventEmitter(self.store, [self.sink])
         self.model = ScriptedModel(turns, repeat_last=repeat_last, name=model_name)
         self.approver = approver if approver is not None else AutoApprover("approve_all")
-        # A recording launcher by default, so exec behaves identically on every
-        # platform here; real confinement is asserted in tests/security.
-        # Passing launcher=None exercises the no-backend path on purpose.
+        # 默认使用记录型 launcher，使 exec 在这里的行为在所有平台上一致；
+        # 真实限制由 tests/security 中的测试断言。
+        # 传入 launcher=None 是为了专门测试无后端路径。
         resolved = RecordingLauncher() if launcher is _UNSET_LAUNCHER else launcher
         self.launcher = resolved
         self.service = RunService(

@@ -1,117 +1,101 @@
-# Building a Production-Grade Coding Agent — a course built on Haven
+# 构建生产级编码代理：Haven 课程
 
-This is a self-paced course that teaches how to build a real coding agent by
-reading and extending a real one. The textbook is this repository: every lesson
-points at actual source files, actual architecture decisions (ADRs), actual
-tests, and — where it matters most — actual failures found by running against a
-live model.
+[English](archive/en/README.md) | **中文**
 
-Most agent tutorials teach you to call an LLM in a `while` loop. This course is
-about everything that turns that loop into something you would trust near your
-filesystem: a single audited execution channel, deterministic permission,
-precise approval, evidence-based success, durable recovery, and reproducible
-evaluation. That machinery — not the loop — is the actual job.
+这不是一套“给大模型接几个工具”的教程，而是一条从最小原型走到可靠系统的阅读与实践路线。
 
-## Who this is for
+你会从一个二十行左右的代理开始：模型返回工具调用，程序直接执行。这个原型看起来很有魔法，
+但它把权限、文件系统、进程、恢复和“到底算不算完成”全都押在了模型身上。接下来的课程会逐层
+拆开这些假设，解释它们会怎样失效，再从 Haven 的源码、测试和决策记录中找出对应的工程解法。
 
-- You can read Python and have written async code before.
-- You have called an LLM API at least once.
-- You want to understand *agent engineering*, not prompt tricks: the boundaries,
-  the failure modes, and the judgment calls.
+Haven 的核心命题只有一句话：
 
-You do **not** need an API key. The entire course runs offline against a scripted
-model; a real provider is used only in the two optional "live" exercises.
+> 模型可以提出建议；权限、执行和成功的定义必须由确定性的程序掌握。
 
-## What you will be able to do afterwards
+课程正文是中文重写版。英文原稿保存在 [`archive/en/`](archive/en/)，但阅读时应以当前源码和
+当前文档为准；历史计划、旧路线图和 ADR 只能说明系统怎样走到今天，不能自动代表今天的行为。
 
-- Explain why a model's tool call is a *proposal*, not permission, and design a
-  channel that enforces that.
-- Separate State, Context, Trace, and ModelResult, and say what each is for.
-- Build a `search → read → edit → verify → diff` loop with hard budgets, a single
-  stop reason per run, and stuck-loop detection.
-- Bind an approval to an exact action so it cannot be replayed or drifted.
-- Decide run success from evidence (a diff + a passing check + a clean review),
-  never from the model's word.
-- Recover an interrupted run without ever double-applying a side effect.
-- Write a reproducible offline eval that is also a security gate, and reason
-  about what only a live run can tell you.
-- Apply a benefit gate before adding a feature, and write down why you *didn't*
-  build something.
+## 适合谁
 
-## How to use this repository as a textbook
+- 能读 Python，并接触过异步代码；
+- 至少调用过一次 LLM API；
+- 对代理工程感兴趣，想理解边界、故障模式和取舍，而不只是提示词技巧。
 
-Start with [`docs/LEARNING.md`](../docs/LEARNING.md) for the truth hierarchy.
-It distinguishes current implementation documentation from the original plan,
-executed roadmaps, and point-in-time measurements retained as history.
+你不需要 API key。课程和提交到仓库的测试都可以使用脚本模型离线运行；真实 provider 只出现在
+两个可选的在线练习中，而且在线结果需要付费、不可完全复现。
 
-Four teaching aids, used throughout:
+## 学完后，你应当能回答
 
-1. **The source.** Every module lists the files it covers. Most are small and
-   single-purpose; the two large orchestrators (`RunService` and `ToolPipeline`)
-   carry stage-by-stage module docstrings and dispatch tables as their map.
-2. **The git history.** The commits are vertical slices in build order —
-   `git log --oneline` reads like a table of contents, from `domain` to
-   `perf(context)`. Each module names its commit(s) so you can `git show` the
-   slice in isolation.
-3. **The ADRs (`docs/adr/`).** Each records a decision, the options considered,
-   and what was given up. Modules link the ADR that governs them.
-4. **The tests.** They are the executable spec. When a module says "prove it to
-   yourself," it points at the test that already does.
+- 为什么模型的工具调用只是提案，不是权限？怎样设计一条通道强制执行这个边界？
+- State、Context、ModelResult 和 Trace 分别由谁拥有，为什么不能把它们塞进同一个大列表？
+- 怎样构建一个有硬预算、能识别卡死、每次只有一个停止原因的
+  `search → read → edit → verify → diff` 循环？
+- 怎样把一次审批绑定到精确动作，使参数漂移或重复消费都会失败？
+- 为什么“模型说完成了”不能算成功？修改过文件的运行至少需要哪些证据？
+- 进程在副作用中途退出时，怎样恢复而不重复应用一个可能已经完成的写入？
+- 离线评估能证明什么，不能证明什么？为什么安全指标不能和任务成功率平均成一个分数？
+- 在加入一个听起来很强的功能前，怎样用测量决定应该构建、推迟还是放弃？
 
-Recommended setup:
+## 先理解仓库的事实层级
+
+开始前请读 [`docs/LEARNING.md`](../docs/LEARNING.md)。这里有一个很实用的阅读顺序：
+
+1. `src/haven/` 中的契约、policy 和运行时代码决定实际行为；
+2. 生成的工具表、指标表和质量门禁决定可复现的数量；
+3. `docs/ARCHITECTURE.md`、`docs/SECURITY.md`、`docs/EVAL*.md` 解释当前系统；
+4. ADR 记录当时的选择，后续修订优先于原始文字；
+5. 路线图、方案、postmortem 和旧测量记录的是演进过程，不应被误读为当前实现。
+
+课程中的链接会带你回到这几类材料。不要只读正文：正文解释“为什么”，源码和测试负责证明“确实如此”。
+
+## 怎样使用课程
+
+推荐的准备步骤：
 
 ```bash
 uv sync --locked
-uv run pytest -q                 # the whole suite, ~50s, fully offline
-uv run haven eval --offline      # all cases pass, 0 security violations
+uv run pytest -q
+uv run haven eval --offline
 ```
 
-Read a module, open the files it names in one pane and the module in another, run
-its exercises, then check yourself against the linked test.
+每读一课，就打开它列出的源码文件和测试；先自己预测行为，再运行测试验证。课程里的练习不是
+为了把代码量堆上去，而是为了逼你明确每个边界：谁能决定、什么会被拒绝、失败怎样返回、证据怎样落账。
 
-## Two tracks
+## 两条路线
 
-The course has two ways in, and they teach different things:
+课程提供两种入口，它们回答的问题不同。
 
-**Track A — derive it (start here).** [Module 00 — Build it from
-scratch](00-from-scratch.md) starts with the twenty-line agent everyone
-writes first and breaks it, eleven times. Each stage is *the naive version →
-what breaks → the fix and its cost → where it lives now*, so every mechanism
-arrives with the failure that motivates it — several of them failures this
-project actually hit. Read this for **why the system has the shape it has**.
+**路线 A：从故障推导系统。** 先读 [模块 00——从零构建](00-from-scratch.md)。它从最小代理开始，
+连续追踪十一个假设怎样暴露问题。每一阶段都按“朴素版本 → 失败 → 修复与代价 → 代码位置”展开，
+适合先建立整体因果链。
 
-**Track B — study each layer.** Modules 01–10 tour the finished system one
-layer at a time, with the files, ADRs, tests, and exercises for each. Read
-these for **how each part is actually built**.
+**路线 B：按层阅读实现。** 再按顺序读模块 01–10。它们分别深入心智模型、provider、工具通道、
+安全策略、循环与上下文、证据门禁、持久化、TUI、评估和工程判断，适合回到某一层研究细节。
 
-Do Track A once, then Track B in order. Track A is one sitting; Track B is
-ten.
+第一次学习时，先完整读一遍路线 A，再依次读路线 B。路线 A 适合一次读完；路线 B 更适合分十次完成。
 
-## Module map
+## 模块地图
 
-| # | Module | Haven layer | Governing ADR |
+| 编号 | 模块 | 主要代码 | 关键 ADR |
 |---|---|---|---|
-| 00 | [Build it from scratch (derivation)](00-from-scratch.md) | whole system, in build order | 0002–0026 |
-| 01 | [Mental models: proposal vs. authority](01-mental-models.md) | whole system | 0002 |
-| 02 | [The provider contract and streaming](02-provider-contract.md) | `contracts`, `ports`, `adapters/providers` | 0001 |
-| 03 | [Tools and the single execution channel](03-tools-and-the-execution-channel.md) | `application/tool_pipeline`, `domain/ticket` | 0002 |
-| 04 | [Policy, exact approval, workspace confinement](04-policy-approval-security.md) | `domain/policy`, `domain/approval`, `adapters/workspace_fs` | 0002 |
-| 05 | [The bounded agent loop and context engineering](05-agent-loop-and-context.md) | `application/run_service`, `context_builder` | 0006 |
-| 06 | [The Evidence Gate and deterministic review](06-evidence-gate.md) | `domain/evidence`, `domain/review` | 0003, 0007 |
-| 07 | [Durable execution: checkpoint, journal, recovery, replay](07-durable-execution.md) | `adapters/sqlite_session`, `application/recovery_service` | 0004 |
-| 08 | [The TUI as a pure interface](08-tui-pure-interface.md) | `interfaces/tui` | 0001 |
-| 09 | [Evaluation and cost](09-evaluation-and-cost.md) | `evalkit`, `docs/EVAL*.md` | 0005, 0008 |
-| 10 | [Engineering judgment](10-engineering-judgment.md) | `docs/adr`, `docs/POSTMORTEM.md` | all |
-| — | [Capstone: extend Haven](capstone.md) | — | — |
+| 00 | [从零构建：一条代理如何变得可靠](00-from-scratch.md) | 全系统，按构建顺序 | 0002–0026 |
+| 01 | [心智模型：提案与权威](01-mental-models.md) | `state`、模型契约、事件 | 0002 |
+| 02 | [Provider 契约与流式传输](02-provider-contract.md) | `contracts`、`ports`、provider adapters | 0001 |
+| 03 | [工具与唯一执行通道](03-tools-and-the-execution-channel.md) | `ToolPipeline`、`ExecutionTicket` | 0002 |
+| 04 | [策略、精确审批与工作区隔离](04-policy-approval-security.md) | policy、approval、workspace | 0002 |
+| 05 | [有界循环与上下文工程](05-agent-loop-and-context.md) | `RunService`、`ContextBuilder` | 0006、0008 |
+| 06 | [证据门禁与确定性审查](06-evidence-gate.md) | evidence、review | 0003、0007 |
+| 07 | [持久化执行、恢复与重放](07-durable-execution.md) | SQLite session、recovery、replay | 0004 |
+| 08 | [作为纯接口的终端 UI](08-tui-pure-interface.md) | presenter、TUI、事件流 | 0001 |
+| 09 | [评估与成本](09-evaluation-and-cost.md) | evalkit、离线/在线评估 | 0005、0008 |
+| 10 | [工程判断](10-engineering-judgment.md) | ADR、postmortem、取舍 | 全部 |
+| — | [结业项目：扩展 Haven](capstone.md) | 综合实践 | — |
 
-The modules build on each other; do them in order the first time. Modules
-09–10 are the ones interviewers care about most and are the hardest to fake, so
-do not skip them.
+模块之间有依赖，第一次不要跳读。尤其不要跳过 09–10：它们讨论的是怎样知道系统真的有效，以及
+怎样克制自己不去构建未经证明的功能。
 
-## A note on honesty
+## 关于诚实
 
-This course inherits the project's rule: every number is one you can reproduce,
-and every "we don't do X" comes with a reason. When a lesson cites a figure (for
-example, the prompt-cache hit rate rising from 71% to 89%), it also tells you how
-it was measured and what it does *not* prove. Learn that habit; it is worth more
-than any single technique here.
+Haven 继承了一条值得保留的工程习惯：每个数字都能追溯到命令，每个“不做某事”都有理由。
+课程提到例如 prompt-cache 命中率从 71% 上升到 89% 时，也会说明测量方法、适用范围，以及这个数字
+不能证明什么。学会给结论标注证据边界，比记住任何一项技巧都更重要。

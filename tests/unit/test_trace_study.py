@@ -1,8 +1,8 @@
-"""The trace study's two counters decide whether a repetition detector can work.
+"""追踪研究的两个计数器决定重复检测器是否有效。
 
-`consecutive_identical` is what `StuckLoopDetector` compares; `repeated_calls`
-is what a wider window could catch. Getting either wrong would answer the
-question "is non-convergence repetition?" incorrectly, so both are pinned.
+`consecutive_identical` 是 `StuckLoopDetector` 比较的内容；`repeated_calls` 是更
+宽窗口可能捕获的内容。任一计数错误都会错误回答“不收敛是否等于重复”，因此二者
+都要固定。
 """
 
 import json
@@ -23,7 +23,7 @@ class TestConsecutiveIdentical:
         assert _trace(("read", "a", "x"), ("read", "a", "x")).consecutive_identical == 1
 
     def test_a_differing_result_breaks_the_run(self) -> None:
-        """The detector keys on the observation, not just the call."""
+        """检测器依据观测结果，而不只是依据调用。"""
         assert _trace(("read", "a", "x"), ("read", "a", "y")).consecutive_identical == 0
 
     def test_a_non_adjacent_repeat_is_not_consecutive(self) -> None:
@@ -45,8 +45,7 @@ class TestRepeatedCalls:
 
 
 def test_read_trace_joins_proposed_to_completed_by_call_id(tmp_path: Path) -> None:
-    """The journal splits a call across two events; the step and arguments live
-    on one and the result on the other."""
+    """日志将一次调用拆分为两个事件；步骤和参数位于一个事件中，结果位于另一个事件中。"""
     journal = tmp_path / "run.jsonl"
     journal.write_text(
         "\n".join(

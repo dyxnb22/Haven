@@ -1,7 +1,7 @@
-"""Global test fixtures.
+"""全局测试夹具。
 
-Isolate Haven's user data directory so tests never read or write the real
-`~/.local/share/haven` database or artifacts.
+隔离 Haven 的用户数据目录，使测试永远不会读取或写入真实的
+`~/.local/share/haven` 数据库或构件。
 """
 
 from __future__ import annotations
@@ -12,10 +12,9 @@ from pathlib import Path
 
 import pytest
 
-#: Anything that could point the test suite at a real provider. Stripping only a
-#: hardcoded list is not enough: a developer with DEEPSEEK_API_KEY exported once
-#: turned this suite into a 200-second run that spent real money, so the rule is
-#: "remove every credential-shaped variable", not "remove the ones we thought of".
+#: 任何可能让测试套件指向真实提供商的内容。只清除硬编码列表并不够：曾有
+#: 开发者导出一次 DEEPSEEK_API_KEY，导致套件运行 200 秒并产生真实费用，因此
+#: 规则是“移除所有符合凭据形状的变量”，而不是“移除我们想到的那些变量”。
 _PROVIDER_ENV_SUFFIXES = ("_API_KEY", "_KEY", "_TOKEN", "_SECRET")
 _PROVIDER_ENV_NAMES = ("HAVEN_API_KEY_ENV", "HAVEN_BASE_URL", "HAVEN_MODEL")
 
@@ -30,7 +29,7 @@ def _provider_env_names() -> list[str]:
 
 @pytest.fixture(autouse=True)
 def hermetic_environment(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
-    """Make every test offline and isolated from the developer's environment."""
+    """使每个测试都离线运行，并与开发者环境隔离。"""
     data_dir = tmp_path_factory.mktemp("haven-data")
     saved = {name: os.environ[name] for name in _provider_env_names()}
     saved_data_dir = os.environ.get("HAVEN_DATA_DIR")
@@ -49,5 +48,5 @@ def hermetic_environment(tmp_path_factory: pytest.TempPathFactory) -> Iterator[P
 
 
 def test_environment_is_hermetic() -> None:
-    """Guard the guard: if this fails, the suite can reach a real provider."""
+    """保护环境隔离本身：此测试失败时，套件可能触达真实提供商。"""
     assert _provider_env_names() == []

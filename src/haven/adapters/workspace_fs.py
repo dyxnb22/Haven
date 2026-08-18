@@ -1,9 +1,8 @@
-"""Filesystem workspace adapter.
+"""文件系统工作区 adapter。
 
-Everything the agent can see or touch on disk goes through this class. It
-normalizes paths, fails closed on escapes, enforces size caps, binds edits to
-preimages, applies them atomically, and tracks per-run originals so
-`repo.diff` shows only what *this run* changed.
+代理在磁盘上能够看到或触碰的一切都经过此类。它会规范化路径，在路径逃逸时失败即
+拒绝，执行大小上限，将编辑绑定到 preimage，原子应用变更，并跟踪每次运行的原始内容，
+使 `repo.diff` 只显示“本次运行”产生的变更。
 """
 
 from __future__ import annotations
@@ -46,17 +45,15 @@ MAX_DIFF_BYTES = 64 * 1024
 MAX_CREATE_BYTES = 256 * 1024
 RIPGREP_TIMEOUT_SECONDS = 20.0
 
-#: How often the pure-Python search checks its deadline, in lines. Frequent
-#: enough to bound a long walk, rare enough that the clock read is free.
+#: 纯 Python 搜索每处理多少行检查一次截止时间。频率足以限制长时间遍历，
+#: 又足够低，不会让读取时钟本身成为负担。
 _DEADLINE_CHECK_LINES = 256
 
-#: Path components that tools may never touch (the agent must not be able to
-#: rewrite its own configuration, git history, or audit surfaces).
+#: 工具永远不能触碰的路径组件（代理不能重写自身配置、Git 历史或审计表面）。
 PROTECTED_COMPONENTS = frozenset({".git", ".haven", ".haven.toml"})
 
-#: Vendor and build directories that are never worth searching. Ripgrep also
-#: honours `.gitignore`; this list is what keeps the pure-Python fallback from
-#: walking `node_modules` on a real repository.
+#: 永远不值得搜索的 vendor 和构建目录。Ripgrep 也会遵守 `.gitignore`；在
+#: 真实仓库中，正是这个列表阻止纯 Python 回退实现遍历 `node_modules`。
 IGNORED_DIRS = frozenset(
     {
         ".direnv",
@@ -89,23 +86,20 @@ IGNORED_DIRS = frozenset(
 
 
 class FsWorkspace:
-    """Implements WorkspacePort for a local directory.
+    """为本地目录实现 WorkspacePort。
 
-    Invariants every write path upholds (the section headers below group the
-    implementations):
+    每条写入路径都必须遵守以下不变量（下面的分节标题用于归类实现）：
 
-    - every path is normalized and confined: escapes and PROTECTED_COMPONENTS
-      (.git/.haven/.haven.toml) fail closed before any I/O;
-    - a mutation is previewed first (unified diff + preimage digest), and the
-      apply re-verifies that preimage - approval binds to exactly what was
-      shown (`stale_preimage` otherwise);
-    - writes are atomic (temp file + fsync + rename) and the postimage is
-      re-read from disk: a successful write() call is not evidence;
-    - `apply_patch` stages every file then commits writes-before-removals
-      with journaled rollback; an unrollbackable failure raises
-      PatchRollbackError so the pipeline can mark effects unknown;
-    - the first touch of each file archives its original (`_originals`),
-      which is what powers the run-scoped diff and `haven rewind`.
+    - 每条路径都会被规范化并限制在工作区内：逃逸以及 PROTECTED_COMPONENTS
+      （.git/.haven/.haven.toml）会在任何 I/O 之前失败即拒绝；
+    - 变更会先生成预览（统一 diff + preimage 摘要），应用时再次验证该 preimage——
+      审批绑定的正是预览中展示的内容（否则返回 `stale_preimage`）；
+    - 写入是原子的（临时文件 + fsync + rename），并会从磁盘重新读取 postimage：
+      一次成功的 write() 调用不是证据；
+    - `apply_patch` 会先暂存所有文件，再以先写入后删除的顺序提交，并记录回滚日志；
+      无法回滚的失败会抛出 PatchRollbackError，使流水线能够将副作用标记为 unknown；
+    - 首次触碰每个文件时都会归档其原始内容（`_originals`），这正是运行级 diff 和
+      `haven rewind` 的基础。
     """
 
     def __init__(self, root: Path, *, use_ripgrep: bool = True) -> None:
@@ -114,9 +108,8 @@ class FsWorkspace:
             raise WorkspaceError("not_found", f"workspace root does not exist: {root}")
         self._root = resolved
         self._workspace_digest = sha256_text(str(resolved))
-        # path (normalized, relative) -> file content before this run's first
-        # write. A file created by this run maps to "" so the run diff shows it
-        # as a pure addition.
+        # 路径（规范化、相对路径）-> 本次运行第一次写入前的文件内容。本次
+        # 运行创建的文件映射为 ""，使运行 diff 将其显示为纯新增。
         self._originals: dict[str, str] = {}
         self._ripgrep = shutil.which("rg") if use_ripgrep else None
 
@@ -128,10 +121,10 @@ class FsWorkspace:
     def workspace_digest(self) -> str:
         return self._workspace_digest
 
-    # -- path handling -------------------------------------------------------
+    # -- 路径处理 --------------------------------------------------------------
 
     def path_facts(self, raw_path: str) -> PathFacts:
-        """Normalize a model-proposed path and collect verified facts."""
+        """规范化模型提出的路径并收集已验证的事实。"""
         outside = PathFacts(
             raw=raw_path,
             normalized="",
@@ -183,7 +176,7 @@ class FsWorkspace:
             raise WorkspaceError("denied", f"path is protected: {facts.normalized!r}")
         return self._root / facts.normalized, facts.normalized
 
-    # -- read-only tools -----------------------------------------------------
+    # -- 只读工具 --------------------------------------------------------------
 
     async def list_dir(self, path: str, max_entries: int) -> ListResult:
         target, normalized = self._require_inside(path)
@@ -205,14 +198,12 @@ class FsWorkspace:
         return ListResult(path=normalized, entries=tuple(entries), truncated=truncated)
 
     async def search(self, pattern: str, path: str, max_results: int) -> SearchResult:
-        """Search file contents, preferring ripgrep and falling back to Python.
+        """搜索文件内容，优先使用 ripgrep，不可用时回退到 Python。
 
-        Both backends skip the same vendor/build directories, cap results the
-        same way, and emit the same normalized shape, so on a tree without a
-        `.gitignore` they return identical matches (asserted in the tests).
-        Ripgrep additionally honours `.gitignore`, which is what makes search
-        usable on a real repository; the pure-Python fallback approximates that
-        with the fixed `IGNORED_DIRS` list.
+        两个后端都会跳过相同的 vendor/build 目录，以相同方式限制结果，并输出相同的
+        规范化结构；因此对于没有 `.gitignore` 的目录树，它们会返回相同的匹配项（测试
+        已对此断言）。Ripgrep 还会遵守 `.gitignore`，这使搜索可以用于真实仓库；纯
+        Python 回退实现则使用固定的 `IGNORED_DIRS` 列表近似这一行为。
         """
         target, normalized = self._require_inside(path)
         try:
@@ -229,8 +220,8 @@ class FsWorkspace:
     async def _search_ripgrep(
         self, ripgrep: str, pattern: str, target: Path, max_results: int
     ) -> SearchResult:
-        # Fixed argv, no shell. `--regexp=` and `--` keep a pattern or path that
-        # begins with a dash from being parsed as a ripgrep flag.
+        # 固定 argv，不经过 shell。`--regexp=` 和 `--` 防止以连字符开头的模式
+        # 或路径被解析为 ripgrep 标志。
         argv = [
             ripgrep,
             "--line-number",
@@ -238,8 +229,8 @@ class FsWorkspace:
             "--with-filename",
             "--color=never",
             "--sort=path",
-            # Honour .gitignore even when the workspace is not a git checkout,
-            # so ignore semantics do not depend on whether .git happens to exist.
+            # 即使工作区不是 Git checkout 也遵守 .gitignore，因此忽略语义不取决于
+            # `.git` 是否恰好存在。
             "--no-require-git",
             f"--max-filesize={MAX_SEARCH_FILE_BYTES}",
             *(f"--glob=!{name}" for name in sorted(IGNORED_DIRS | PROTECTED_COMPONENTS)),
@@ -257,11 +248,10 @@ class FsWorkspace:
             )
             raw, err = await asyncio.wait_for(proc.communicate(), timeout=RIPGREP_TIMEOUT_SECONDS)
         except (OSError, TimeoutError):
-            # A missing or misbehaving ripgrep must never break the tool.
+            # 缺失或行为异常的 ripgrep 绝不能破坏工具。
             return self._search_walk(pattern, target, max_results)
-        # 0 = matches, 1 = no matches, 2 = partial IO error (an unreadable file
-        # or a vanished path) where stdout is still valid. A search backend
-        # hiccup must degrade, never abort the run.
+        # 0 = 匹配，1 = 无匹配，2 = 部分 I/O 错误（文件不可读或路径消失），
+        # 此时 stdout 仍然有效。搜索后端出问题时必须降级，绝不能终止运行。
         if proc.returncode not in (0, 1, 2):
             return self._search_walk(pattern, target, max_results)
         if proc.returncode == 2 and not raw.strip():
@@ -288,7 +278,7 @@ class FsWorkspace:
         )
 
     def _parse_ripgrep_line(self, line: str) -> tuple[str, int, str] | None:
-        """Parse `path:line:text`, tolerating colons inside the path and text."""
+        """解析 `path:line:text`，允许路径和文本内部包含冒号。"""
         head, sep, text = line.partition(":")
         if not sep:
             return None
@@ -302,34 +292,28 @@ class FsWorkspace:
         return rel, int(number), text
 
     def _search_walk(self, pattern: str, target: Path, max_results: int) -> SearchResult:
-        """Pure-Python fallback, used only when ripgrep is unavailable.
+        """纯 Python 回退实现，仅在 ripgrep 不可用时使用。
 
-        Bounded by a wall-clock deadline as well as the result caps, because
-        the pattern comes from the model and is validated only for syntax: a
-        backtracking pattern like `(a+)+b` costs exponential time per subject,
-        and `re` has no timeout of its own.
+        除结果数量上限外，还受到墙上时钟截止时间限制，因为模式来自模型，目前只做语法
+        验证：像 `(a+)+b` 这样的回溯模式会对每个匹配对象产生指数级成本，而 `re`
+        本身没有超时机制。
 
-        What the deadline does and does not cover, measured rather than
-        assumed:
+        下面是根据测量而非假设得出的截止时间覆盖范围：
 
-        - It bounds the *walk* — many files, many lines — which is the shape
-          any realistically slow search takes. Checked between subjects, so
-          the cost of checking is nothing.
-        - It cannot interrupt a single `re.search` already running. Python's
-          regex engine holds the GIL for the whole match: measured here, a
-          0.68s match let the event loop run exactly **zero** times. That is
-          also why moving this to `asyncio.to_thread` does not help and was
-          deliberately not done — the timeout could not even fire. Genuinely
-          bounding one pathological subject needs a killable subprocess,
-          which is not worth it for a fallback that exists only when ripgrep
-          is missing (ripgrep's engine is linear and immune).
+        - 它限制的是遍历过程——大量文件和大量行——这正是现实中慢搜索的形态。
+          检查发生在匹配对象之间，因此检查本身没有成本。
+        - 它无法中断已经运行的单次 `re.search`。Python 的正则引擎会在整个匹配期间
+          持有 GIL：这里测得一次 0.68 秒的匹配让事件循环运行了 **零** 次。这也是
+          将其移到 `asyncio.to_thread` 没有帮助、并且有意没有这样做的原因——超时机制
+          甚至无法触发。要真正限制单个异常匹配对象，需要可杀死的子进程；对于只在
+          ripgrep 缺失时才存在的回退实现，这样做不值得（ripgrep 的引擎是线性的，
+          不受该问题影响）。
         """
         compiled = re.compile(pattern)
         matches: list[SearchMatch] = []
-        # Files that produced at least one match, which is the only count
-        # ripgrep can report. Counting files *walked* here instead would make
-        # the same field mean different things depending on whether ripgrep
-        # happens to be installed.
+        # 产生至少一个匹配的文件，这是 ripgrep 唯一能报告的数量。如果这里
+        # 改为统计遍历过的文件，那么 ripgrep 是否安装会让同一个字段具有
+        # 不同含义。
         seen_files: set[str] = set()
         total_bytes = 0
         truncated = False
@@ -348,7 +332,7 @@ class FsWorkspace:
             except OSError:
                 continue
             if b"\x00" in data:
-                continue  # binary
+                continue  # 二进制
             text = data.decode("utf-8", errors="replace")
             rel = file_path.relative_to(self._root).as_posix()
             for line_number, line in enumerate(text.splitlines(), start=1):
@@ -426,7 +410,7 @@ class FsWorkspace:
             digest=digest,
         )
 
-    # -- edit ------------------------------------------------------------------
+    # -- 编辑 ------------------------------------------------------------------
 
     async def preview_edit(
         self,
@@ -471,7 +455,7 @@ class FsWorkspace:
         postimage = self._atomic_write(target, normalized, new_text)
         return EditOutcome(path=normalized, preimage_digest=preimage, postimage_digest=postimage)
 
-    # -- create ----------------------------------------------------------------
+    # -- 创建 ------------------------------------------------------------------
 
     async def preview_create(self, path: str, content: str) -> EditPreview:
         normalized = self._require_creatable(path, content)
@@ -483,18 +467,18 @@ class FsWorkspace:
         target.parent.mkdir(parents=True, exist_ok=True)
 
         if normalized not in self._originals:
-            # An empty original makes the run diff show the file as an addition.
+            # 空的原始内容会使运行 diff 将该文件显示为新增。
             self._originals[normalized] = ""
 
         postimage = self._atomic_write(target, normalized, content)
         return EditOutcome(path=normalized, preimage_digest="", postimage_digest=postimage)
 
-    # -- delete ----------------------------------------------------------------
+    # -- 删除 ------------------------------------------------------------------
 
     async def preview_delete(self, path: str) -> EditPreview:
         target, normalized = self._require_inside(path)
         text, preimage = self._load_editable(target, normalized)
-        # A deletion is a diff from the file's content to nothing.
+        # 删除就是从文件内容到空内容的 diff。
         return self._diff_preview(normalized, text, "", preimage=preimage)
 
     async def apply_delete(self, path: str, expected_preimage: str) -> EditOutcome:
@@ -507,10 +491,10 @@ class FsWorkspace:
         if normalized not in self._originals:
             self._originals[normalized] = text
         target.unlink()
-        # Empty postimage marks a removal, the same convention the ledger uses.
+        # 空 postimage 表示删除，与 ledger 使用相同约定。
         return EditOutcome(path=normalized, preimage_digest=preimage, postimage_digest="")
 
-    # -- move ------------------------------------------------------------------
+    # -- 移动 ------------------------------------------------------------------
 
     async def preview_move(self, src: str, dest: str) -> tuple[EditPreview, EditPreview]:
         src_target, src_norm = self._require_inside(src)
@@ -542,28 +526,26 @@ class FsWorkspace:
         addition = EditOutcome(path=dest_norm, preimage_digest="", postimage_digest=postimage)
         return removal, addition
 
-    # -- patch (multi-file, one transaction) -------------------------------------
+    # -- 补丁（多文件、单事务）--------------------------------------------------
 
     async def preview_patch(
         self, ops: tuple[PatchOpSpec, ...], files_read: dict[str, str]
     ) -> PatchPreview:
-        """Simulate the patch in memory and return its deterministic plan.
+        """在内存中模拟补丁并返回其确定性计划。
 
-        The simulation applies operations in order against a lazily seeded
-        view of the tree, so later operations see earlier effects. The plan
-        records *net* per-file effects (a move becomes a provable delete plus
-        a provable create), which is what makes an interrupted patch
-        classifiable file-by-file with the existing recovery rules.
+        模拟会按照顺序作用于延迟填充的目录树视图，因此后续操作可以看到前面操作的
+        效果。计划记录每个文件的“净”副作用（move 会变成可证明的 delete 加可证明
+        的 create），这样中断的补丁才能按照现有恢复规则逐文件分类。
         """
         if not ops:
             raise WorkspaceError("invalid_arguments", "a patch needs at least one operation")
 
-        #: normalized path -> current text in the simulation (None = absent).
+        #: 规范化路径 -> 模拟中的当前文本（None = 不存在）。
         state: dict[str, str | None] = {}
-        #: normalized path -> (text, digest) as first seen on disk.
+        #: 规范化路径 -> 磁盘上首次看到的（文本、摘要）。
         on_disk: dict[str, tuple[str, str]] = {}
-        #: paths whose content is fully determined by this patch (created or
-        #: move destinations), so the read-before-edit rule does not apply.
+        #: 内容完全由此补丁决定的路径（创建目标或移动目标），因此不适用先读后
+        #: 编辑规则。
         patch_authored: set[str] = set()
 
         def seed(raw: str) -> str:
@@ -640,7 +622,7 @@ class FsWorkspace:
                 state[dest_norm] = moving
                 state[src_norm] = None
                 patch_authored.add(dest_norm)
-            else:  # pragma: no cover — the contract's discriminator forbids it
+            else:  # pragma: no cover — contract 的判别字段禁止此情况
                 raise WorkspaceError("invalid_arguments", f"{where}: unknown operation kind")
 
         diffs: list[str] = []
@@ -653,7 +635,7 @@ class FsWorkspace:
             before_text, before_digest = before
             after_text = state[normalized]
             if before_text == after_text:
-                continue  # net no-op (e.g. created then deleted)
+                continue  # 净空操作（例如先创建后删除）
             if before_text is not None:
                 preimages[normalized] = before_digest
             preview = self._diff_preview(
@@ -691,15 +673,14 @@ class FsWorkspace:
         )
 
     async def apply_patch(self, plan: PatchPreview) -> tuple[EditOutcome, ...]:
-        """Commit a planned patch: verify every pin, stage every write, then
-        rename writes and unlink removals, rolling back on any failure.
+        """提交计划中的补丁：验证每个固定值，暂存所有写入，然后重命名写入结果并
+        删除待移除项；任何失败都会触发回滚。
 
-        Ordering is deliberate: all content lands before anything is removed,
-        so no crash point loses data — every intermediate state is classifiable
-        from the journaled per-file expectations.
+        这里的顺序是有意设计的：所有内容都会在任何删除发生前落盘，因此任何崩溃点都
+        不会丢失数据；每个中间状态都可以依据日志记录的逐文件预期进行分类。
         """
-        # 1. Every pinned preimage must still hold, and every create target
-        # must still be absent — checked before a single byte lands.
+        # 1. 每个固定的 preimage 都必须仍然匹配，每个 create 目标都必须仍然
+        # 不存在——在任何字节落盘前检查。
         for normalized, expected in plan.preimages.items():
             target = self._root / normalized
             if not target.is_file() or sha256_bytes(target.read_bytes()) != expected:
@@ -717,7 +698,7 @@ class FsWorkspace:
         writes = [e for e in plan.effects if e.tool_shape in ("repo.edit", "repo.create")]
         removals = [e for e in plan.effects if e.tool_shape == "repo.delete"]
 
-        # 2. Stage every write to a temp file next to its target.
+        # 2. 将每次写入先暂存到目标旁边的临时文件。
         staged: dict[str, str] = {}
         try:
             for effect in writes:
@@ -735,9 +716,9 @@ class FsWorkspace:
                     os.unlink(tmp_name)
             raise WorkspaceError("internal", f"could not stage the patch: {exc}") from exc
 
-        # 3. Commit, journaling enough to roll back: writes first, removals
-        # last. `performed` records what must be undone, newest first.
-        performed: list[tuple[str, str, str | None]] = []  # (action, path, original text)
+        # 3. 提交，并记录足够的信息以便回滚：先写入，后删除。
+        # `performed` 按最新在前记录需要撤销的内容。
+        performed: list[tuple[str, str, str | None]] = []  # （action，path，原始文本）
         outcomes: list[EditOutcome] = []
 
         def rollback() -> None:
@@ -792,9 +773,8 @@ class FsWorkspace:
             try:
                 rollback()
             except (OSError, WorkspaceError) as rollback_exc:
-                # The tree is now in a partial state that could not be undone:
-                # this must surface as an unknown effect, never as a clean
-                # failure, so recovery blocks and the human reconciles.
+                # 目录树现在处于无法撤销的部分状态：必须将其暴露为 unknown 副作用，
+                # 不能作为干净失败处理，以便恢复逻辑阻止继续运行，由用户调和。
                 raise PatchRollbackError(
                     f"patch failed ({exc}) and rollback also failed ({rollback_exc}); "
                     "the workspace is in a partial state"
@@ -810,8 +790,8 @@ class FsWorkspace:
         return tuple(outcomes)
 
     def _require_creatable(self, path: str, content: str) -> str:
-        """Creation is only for genuinely new files; overwriting must go through
-        repo.edit so it stays bound to a preimage."""
+        """create 只适用于真正的新文件；覆盖已有文件必须通过 repo.edit，
+        以便继续绑定 preimage。"""
         facts = self.path_facts(path)
         if not facts.within_workspace:
             raise WorkspaceError("denied", f"path escapes the workspace: {path!r}")
@@ -831,12 +811,12 @@ class FsWorkspace:
             )
         return facts.normalized
 
-    # -- shared write plumbing ---------------------------------------------------
+    # -- 共享写入基础设施 -------------------------------------------------------
 
     def _atomic_write(self, target: Path, normalized: str, new_text: str) -> str:
-        """Write via temp file + fsync + rename, then re-read to confirm.
+        """通过临时文件 + fsync + rename 写入，然后重新读取以确认结果。
 
-        A successful write() is not evidence; the postimage digest is.
+        成功的 write() 不是证据；postimage 摘要才是。
         """
         fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=".haven-write-")
         try:
@@ -907,12 +887,11 @@ class FsWorkspace:
         occurrence: int | None,
         replace_all: bool,
     ) -> str:
-        """Replace one or all occurrences of `old`.
+        """替换 `old` 的一个或全部出现位置。
 
-        Default is still "must be unique", because an accidental multi-match is
-        the most common way an agent silently corrupts a file. `replace_all`
-        and `occurrence` are the two explicit ways to opt out, so the intent is
-        always recorded in the approved arguments.
+        默认仍要求“必须唯一”，因为意外匹配多处是代理悄悄破坏文件最常见的方式。
+        `replace_all` 和 `occurrence` 是明确退出这一约束的两种方式，因此意图始终会
+        记录在已审批的参数中。
         """
         if replace_all and occurrence is not None:
             raise WorkspaceError(
@@ -951,7 +930,7 @@ class FsWorkspace:
             )
         return text.replace(old, new, 1)
 
-    # -- run-scoped diff -------------------------------------------------------
+    # -- 运行范围 diff ----------------------------------------------------------
 
     async def run_diff(self) -> RunDiff:
         chunks: list[str] = []
@@ -1010,15 +989,14 @@ class FsWorkspace:
     def restore_originals(self, originals: dict[str, str]) -> None:
         self._originals = dict(originals)
 
-    # -- process-write attribution (ADR 0012) ----------------------------------
+    # -- 进程写入归因（ADR 0012）------------------------------------------------
 
     def capture_snapshot(self) -> WorkspaceSnapshot:
-        """Digest every regular file, and keep the text of the diffable ones.
+        """为每个普通文件计算摘要，并保留可生成 diff 的文件文本。
 
-        The digest map is gate-complete: any change, text or binary, moves a
-        digest. The content map is what the run diff can render. Protected and
-        ignored directories are excluded, so a process that only writes bytecode
-        caches or the sandbox scratch dir records no change.
+        摘要映射足以完成门禁：任何文本或二进制变更都会改变摘要。内容映射用于渲染
+        运行 diff。受保护目录和忽略目录会被排除，因此只写入字节码缓存或沙箱临时目录
+        的进程不会产生变更记录。
         """
         digests: dict[str, str] = {}
         contents: dict[str, str] = {}
@@ -1037,8 +1015,8 @@ class FsWorkspace:
         )
 
     def _protected_digests(self) -> dict[str, str]:
-        """Digest the protected paths so a process touching them is detectable,
-        even where the OS sandbox cannot prevent the write."""
+        """为受保护路径计算摘要，使进程对其进行写入时能够被检测到，
+        即使操作系统沙箱无法阻止该写入。"""
         result: dict[str, str] = {}
         for name in PROTECTED_COMPONENTS:
             target = self._root / name
@@ -1046,8 +1024,8 @@ class FsWorkspace:
                 with contextlib.suppress(OSError):
                     result[name] = sha256_bytes(target.read_bytes())
             elif target.is_dir():
-                # A directory (e.g. .git): fold its file digests into one, so
-                # any change inside it moves the aggregate.
+                # 目录（例如 .git）：将其中的文件摘要折叠成一个，从而目录内
+                # 任意变更都会改变聚合值。
                 parts: list[str] = []
                 for child in sorted(target.rglob("*")):
                     if child.is_file() and not child.is_symlink():
@@ -1058,8 +1036,8 @@ class FsWorkspace:
         return result
 
     def register_run_original(self, path: str, content: str) -> None:
-        """Seed the run diff's original for a path a process changed, but only
-        if it is not already tracked — a file edited earlier in the run must
-        keep its true run-start original, not be reset to its pre-process one."""
+        """为进程修改过的路径填充运行 diff 的原始内容，但仅限于该路径尚未被跟踪的
+        情况——运行中更早编辑过的文件必须保留真正的运行开始内容，不能被重置为进程
+        修改前的内容。"""
         if path not in self._originals:
             self._originals[path] = content

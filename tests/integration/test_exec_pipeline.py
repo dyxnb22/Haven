@@ -1,8 +1,7 @@
-"""repo.exec through the real channel: facts, policy, approval, execution.
+"""repo.exec 经过真实通道：事实、策略、审批、执行。
 
-The launcher is a recording fake here, so these assertions hold on any
-platform; that the OS actually confines the process is asserted separately in
-tests/security/test_sandbox_enforcement.py.
+这里使用记录型替身启动器，因此这些断言在任何平台都成立；操作系统确实限制进程
+则在 tests/security/test_sandbox_enforcement.py 中单独断言。
 """
 
 import sys
@@ -28,7 +27,7 @@ def denials(h: Harness) -> list[str]:
 
 class TestApprovalFlow:
     async def test_safe_read_command_runs_without_approval(self, tmp_path: Path) -> None:
-        """A classified read-only command is the one exec that skips the prompt."""
+        """被分类为只读的命令是唯一可以跳过提示的 exec。"""
         turns = [
             [tool("c1", "repo.exec", argv=["ls"]), finish("tool_calls")],
             [text("Listed the directory."), finish()],
@@ -41,10 +40,9 @@ class TestApprovalFlow:
         assert h.sink.events_of("approval.requested") == []
 
     async def test_a_read_reaching_outside_the_workspace_asks_first(self, tmp_path: Path) -> None:
-        """The same `cat` that is silent on a workspace file must prompt when
-        it points outside — otherwise an unapproved file's contents reach the
-        transcript, and with it the model provider (on Linux this shape reads
-        /proc/<parent>/environ, around the child's scrubbed environment)."""
+        """对工作区文件保持静默的同一个 `cat`，指向工作区外时必须先提示——否则未
+        审批文件的内容会进入对话记录，进而到达模型提供商（在 Linux 上，这种形式
+        会读取 /proc/<parent>/environ，绕过子进程已清理的环境）。"""
         turns = [
             [tool("c1", "repo.exec", argv=["cat", "/etc/hosts"]), finish("tool_calls")],
             [text("Read it."), finish()],
@@ -79,7 +77,7 @@ class TestApprovalFlow:
         assert "execution.started" not in h.sink.kinds()
 
     async def test_preview_shows_the_command_and_the_sandbox(self, tmp_path: Path) -> None:
-        """What the user reads is what the approval digest binds."""
+        """用户看到的内容就是审批摘要绑定的内容。"""
         turns = [
             [tool("c1", "repo.exec", argv=["make", "build"]), finish("tool_calls")],
             [text("Built."), finish()],
@@ -142,7 +140,7 @@ class TestResults:
         assert completed(h)[0].error_code == "timeout"
 
     async def test_exec_cannot_satisfy_the_evidence_gate(self, tmp_path: Path) -> None:
-        """The central claim: a green exec is not verification."""
+        """核心主张：绿色的 exec 不是验证。"""
         turns = [
             [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
             [
@@ -166,7 +164,7 @@ class TestResults:
 
 class TestNoBackend:
     async def test_denied_when_no_launcher_is_configured(self, tmp_path: Path) -> None:
-        """Fail closed: no sandbox means no exec, not an unconfined exec."""
+        """失败即关闭：没有沙箱就没有 exec，而不是执行不受限制的 exec。"""
         turns = [
             [tool("c1", "repo.exec", argv=["ls"]), finish("tool_calls")],
             [text("Exec is unavailable here."), finish()],

@@ -1,7 +1,7 @@
-"""Composition root: the only module that knows both adapters and use cases.
+"""组合根：唯一同时了解适配器和用例的模块。
 
-Interfaces (CLI/TUI) receive fully wired services from here; they never import
-adapters directly. Tests swap in ScriptedModel and MemorySessionStore instead.
+接口层（CLI/TUI）从这里接收已经完成组装的服务，绝不直接导入适配器。
+测试则在这里换入 ScriptedModel 和 MemorySessionStore。
 """
 
 from __future__ import annotations
@@ -58,9 +58,8 @@ class AppServices:
     model_name: str
     model: ModelPort | None = None
     sandbox_backend: str = "none"
-    #: The single-writer lease when this process may mutate the workspace;
-    #: None in read-only mode or when another live process holds it (in which
-    #: case `lease_warning` says so and the mode was downgraded).
+    #: 当本进程可以修改工作区时使用的单写者租约；只读模式下或另一个存活进程
+    #: 持有租约时为 None（此时 `lease_warning` 会说明情况，并且模式已降级）。
     lease: WorkspaceLease | None = None
     lease_warning: str = ""
 
@@ -68,18 +67,18 @@ class AppServices:
         if self.lease is not None:
             self.lease.release()
         await self.store.close()
-        # Close the provider's HTTP client too; a ModelPort need not define
-        # aclose (ScriptedModel does not), so this is best-effort by protocol.
+        # 同时关闭提供商的 HTTP 客户端；ModelPort 不一定定义 aclose
+        # （ScriptedModel 就没有），因此这里只按协议尽力执行。
         closer = getattr(self.model, "aclose", None)
         if closer is not None:
             await closer()
 
 
 def select_launcher(platform: str | None = None) -> SandboxLauncher | None:
-    """Pick the OS sandbox backend, or None when the platform has none.
+    """选择操作系统沙箱后端；平台没有可用后端时返回 None。
 
-    None is not a degraded mode: the policy denies repo.exec outright, because
-    an unconfined general exec is the one capability this project will not add.
+    None 并不表示降级运行：策略会直接拒绝 repo.exec，因为本项目不会添加
+    不受约束的通用执行能力。
     """
     target = platform if platform is not None else sys.platform
     if target == "darwin":
@@ -110,23 +109,20 @@ async def build_services(
     store_path: Path | None = None,
     tier: str | None = None,
 ) -> AppServices:
-    """Wire one workspace's full service graph; every interface calls this.
+    """组装一个工作区的完整服务图；所有接口都通过此函数完成组装。
 
-    Order matters: resolve workspace -> load layered config -> take (or fail
-    to take) the writer lease, possibly downgrading to read-only -> construct
-    adapters (filesystem workspace, SQLite store, provider unless a test
-    injected one) -> assemble RunService/RecoveryService/ReplayService around
-    them. Tests pass `model=ScriptedModel(...)` and a temp `store_path`; the
-    returned AppServices.aclose() releases everything, including the lease.
+    顺序很重要：解析工作区 -> 加载分层配置 -> 获取写者租约（获取失败时可能
+    降级为只读）-> 构造适配器（文件系统工作区、SQLite 存储，以及除非测试已
+    注入模型否则创建提供商）-> 围绕这些适配器组装 RunService、RecoveryService
+    和 ReplayService。测试会传入 `model=ScriptedModel(...)` 与临时
+    `store_path`；返回的 AppServices.aclose() 会释放所有资源，包括租约。
     """
     workspace_root = resolve_workspace(workspace_path)
     config = load_config(workspace_root, tier)
 
-    # Single-writer lease: within one process every write is preimage-pinned
-    # and re-verified, but a second Haven process on the same workspace could
-    # mutate files between another run's approval and execution. The first
-    # writable process takes the lease; a contender is downgraded to
-    # read-only with an explicit warning rather than refused outright.
+    # 单写者租约：同一进程内的每次写入都固定并重新验证 preimage，但同一工作区
+    # 中的第二个 Haven 进程可能在另一次运行审批和执行之间修改文件。第一个
+    # 可写进程取得租约；竞争者会带着明确警告降级为只读，而不是直接拒绝。
     lease: WorkspaceLease | None = None
     lease_warning = ""
     if mode is not PermissionMode.READ_ONLY:
@@ -176,8 +172,8 @@ async def build_services(
         git_commit=baseline.commit,
         project_guidance=guidance,
         launcher=launcher,
-        # Prefix continuation needs both the capability and the endpoint that
-        # honours it; this is the one place that knows the configured base URL.
+        # 前缀续写既需要能力也需要支持该能力的 endpoint；这里是唯一知道已配置
+        # base URL 的位置。
         supports_prefix_continuation=profile_for(model.model_name).prefix_continuation_enabled(
             config.provider.base_url
         ),
@@ -200,24 +196,23 @@ async def build_services(
     )
 
 
-#: Instruction filenames Haven honors, in the order they are concatenated.
-#: AGENTS.md is the standard; CLAUDE.md is read for cross-tool compatibility.
+#: Haven 认可的指令文件名，按拼接顺序排列。AGENTS.md 是标准文件；读取
+#: CLAUDE.md 是为了兼容其他工具。
 _GUIDANCE_FILENAMES = ("AGENTS.md", "CLAUDE.md")
-#: How many workspace subdirectories may contribute a scoped AGENTS.md. Bounded
-#: so a large monorepo cannot blow up the context, and so guidance stays a
-#: small, auditable set rather than an unbounded crawl.
+#: 最多可以贡献作用域 AGENTS.md 的工作区子目录数量。设置上限是为了避免
+#: 大型 monorepo 撑爆上下文，也让指导内容保持为一组小而可审计的文件，而
+#: 不是无界遍历的结果。
 _MAX_SCOPED_GUIDANCE = 6
 
 
 async def _read_guidance(workspace: FsWorkspace) -> str:
-    """Merge scoped instruction files, root first, all untrusted.
+    """合并有作用域的指令文件，先根目录，且全部视为不可信数据。
 
-    Codex and opencode both layer a project's root guidance with more specific
-    files nearer the code; Haven now does the same, bounded: the root
-    AGENTS.md/CLAUDE.md, then a small number of subdirectory AGENTS.md files,
-    each under its own header so the model can tell scope apart. It stays
-    untrusted data that cannot change permissions, and the whole merge is
-    capped at MAX_GUIDANCE_CHARS.
+    Codex 和 opencode 都会把项目根目录的指导与更靠近代码的具体文件逐层
+    合并；Haven 现在也采用相同方式，但设有边界：先读取根目录的
+    AGENTS.md/CLAUDE.md，再读取少量子目录中的 AGENTS.md。每个文件都有独立
+    标题，以便模型区分作用域。这些内容始终是不可信数据，不能改变权限，
+    且合并结果总长度上限为 MAX_GUIDANCE_CHARS。
     """
     sections: list[str] = []
     for name in _GUIDANCE_FILENAMES:
@@ -242,17 +237,16 @@ async def _read_one_guidance(workspace: FsWorkspace, rel: str) -> str:
         result = await workspace.read_file(rel, 1, 200)
     except WorkspaceError:
         return ""
-    # Each file is individually bounded so one large file cannot crowd out the
-    # others before the overall cap applies.
+    # 每个文件单独设置上限，避免某个大文件在总上限生效前挤掉其他文件。
     return result.content[: MAX_GUIDANCE_CHARS // 2].strip()
 
 
 def _scoped_guidance_paths(root: Path) -> list[str]:
-    """Subdirectory AGENTS.md paths, nearest-root first, skipping the noise
-    directories a run never wants guidance from.
+    """获取子目录中的 AGENTS.md 路径，按距离根目录从近到远排列，并跳过运行
+    时绝不应读取指导的噪声目录。
 
-    Prunes skipped directories during the walk (rather than filtering results)
-    so a large node_modules or .venv is never descended into at all.
+    遍历时直接剪枝跳过的目录，而不是先遍历再过滤结果，因此不会进入庞大的
+    node_modules 或 .venv 目录。
     """
     skip = {".git", ".haven", "node_modules", ".venv", "venv", "__pycache__", ".tox", "dist"}
     found: list[str] = []
@@ -260,9 +254,9 @@ def _scoped_guidance_paths(root: Path) -> list[str]:
         dirnames[:] = sorted(d for d in dirnames if d not in skip)
         if "AGENTS.md" in filenames:
             rel = Path(dirpath).relative_to(root) / "AGENTS.md"
-            if rel.as_posix() != "AGENTS.md":  # root already read
+            if rel.as_posix() != "AGENTS.md":  # 根文件已读取
                 found.append(rel.as_posix())
-    # Nearest the root first (fewest path segments), stable within a depth.
+    # 先处理最接近根目录的目录（路径段最少），同一深度内保持稳定顺序。
     found.sort(key=lambda p: (p.count("/"), p))
     return found
 
@@ -292,10 +286,10 @@ def build_provider(config: ResolvedConfig) -> OpenAICompatibleModel:
 async def build_context_preview(
     workspace_path: Path | None, goal: str
 ) -> tuple[ModelRequest, tuple[ContextSegment, ...], ResolvedConfig]:
-    """Assemble the first-turn Context for a goal without calling any provider.
+    """在不调用任何提供商的情况下，为目标组装第一轮 Context。
 
-    Backs `haven debug-context`: it answers "what would the model see, and why"
-    using the real ContextBuilder, config, and workspace guidance.
+    这是 `haven debug-context` 的实现基础：使用实际的 ContextBuilder、配置和
+    工作区指导，回答“模型会看到什么，以及原因是什么”。
     """
     workspace_root = resolve_workspace(workspace_path)
     config = load_config(workspace_root)

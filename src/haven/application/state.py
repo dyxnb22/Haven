@@ -1,8 +1,7 @@
-"""Mutable per-run working state owned by the application layer.
+"""由应用层拥有的、每次运行可变的工作状态。
 
-This is *State*: what the run knows. It is not the Context (what the model
-sees this turn), not the Trace (what the journal recorded), and not the
-ModelResult (what the model just returned).
+这就是 *State*：运行所知道的内容。它不是 Context（模型本轮看到的内容），不是
+Trace（日志记录的内容），也不是 ModelResult（模型刚刚返回的内容）。
 """
 
 from __future__ import annotations
@@ -28,16 +27,15 @@ class RunContext:
     status: RunStatus = RunStatus.CREATED
     transcript: list[ModelMessage] = field(default_factory=list)
     ledger: EvidenceLedger = field(default_factory=EvidenceLedger)
-    #: normalized path -> content digest at the last read in this run
+    #: 规范化路径 -> 本次运行中最近一次读取时的内容摘要
     files_read: dict[str, str] = field(default_factory=dict)
-    #: The agent's current plan. Lives in State, not the transcript, so it is
-    #: re-rendered into Context every turn and cannot be truncated away.
+    #: 代理当前的计划。它位于 State 而不是 transcript 中，因此每轮都会重新
+    #: 渲染到 Context，不会被截断丢弃。
     plan: tuple[PlanStep, ...] = ()
-    #: Approval digests of repo.check calls the human already approved in
-    #: THIS run (ADR 0025). A byte-identical re-run of such a check is
-    #: auto-approved with a journal trail instead of re-asking. Run-scoped in
-    #: memory only — deliberately not checkpointed, so a resumed run asks
-    #: once again before re-arming.
+    #: 本次运行中用户已经批准的 repo.check 调用的审批摘要（ADR 0025）。
+    #: 对这类检查进行字节级相同的重跑时，会带着日志记录自动批准，而不会
+    #: 再次询问。它仅在本次运行的内存范围内有效——特意不写入 checkpoint，
+    #: 因此恢复后的运行在重新启用前必须再次询问。
     standing_check_grants: set[str] = field(default_factory=set)
     nudges: int = 0
     last_seq: int = 0

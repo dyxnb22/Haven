@@ -1,15 +1,13 @@
-"""Context builder: decides exactly what the model sees each turn.
+"""上下文构建器：精确决定模型在每一轮看到的内容。
 
-Context is selected, not accumulated. It is laid out as a stable head (system
-rules, AGENTS.md guidance, the goal), the append-only transcript, and a volatile
-tail (the plan and live budget counters). Keeping everything that changes turn
-to turn in the tail means the leading bytes stay identical across turns, which
-is what lets a provider's automatic prompt cache reuse them (ADR 0008).
+上下文是经过选择的，而不是不断累积的。它由稳定头部（系统规则、AGENTS.md 指引、
+目标）、只追加的 transcript 和易变尾部（计划与实时预算计数器）组成。将每轮都会变化
+的内容放在尾部，意味着前导字节在各轮之间保持一致，这正是提供商的自动提示缓存能够
+复用它们的原因（ADR 0008）。
 
-Oversized transcripts are compacted deterministically: the oldest tool outputs
-are dropped and replaced by a program-assembled digest of what they contained
-(`application.compaction`). The model is never asked to summarize, so a summary
-can never invent permission facts.
+过大的 transcript 会被确定性地压缩：最旧的工具输出被丢弃，并替换为程序根据其内容
+组装的摘要（`application.compaction`）。绝不会要求模型总结，因此摘要不可能凭空
+编造权限事实。
 """
 
 from __future__ import annotations
@@ -25,9 +23,8 @@ from haven.domain.budget import Budget, BudgetUsage
 
 MAX_CONTEXT_CHARS = 96_000
 
-#: Overflow recovery never shrinks the budget below this, so the fixed head
-#: (system rules + goal) and volatile tail always fit and `build()` cannot trip
-#: its over-budget guard from shrinking alone.
+#: 溢出恢复不会把预算缩小到此值以下，因此固定头部（系统规则 + goal）和
+#: 易变尾部始终能放下，`build()` 不会仅因缩小预算而触发超预算保护。
 MIN_CONTEXT_CHARS = 16_000
 
 Trust = Literal["trusted", "untrusted"]
@@ -35,7 +32,7 @@ Trust = Literal["trusted", "untrusted"]
 
 @dataclass(frozen=True, slots=True)
 class _Selected:
-    """One chosen context message plus the provenance we report for it."""
+    """一条选中的上下文消息，以及我们为其报告的来源信息。"""
 
     message: ModelMessage
     source: str
@@ -116,31 +113,28 @@ class ContextBuilder:
         self._reasoning_effort = reasoning_effort
 
     def reduce_budget(self, factor: float) -> int:
-        """Shrink the char budget for every subsequent build, flooring at
-        `MIN_CONTEXT_CHARS`.
+        """缩小后续每次构建使用的字符预算，最低不低于 `MIN_CONTEXT_CHARS`。
 
-        Recovery from a provider `context_overflow`: a 400 there means the char
-        budget overshot the model's real token window (the char→token ratio was
-        denser than the profile assumed), so the next build must drop more
-        history. The reduction sticks on the instance, so a run that overflowed
-        once keeps the tighter budget rather than rediscovering it every turn.
-        Returns the new budget.
+        从提供商的 `context_overflow` 中恢复：此时的 400 表示字符预算超过了模型真实的
+        token 窗口（字符到 token 的比例比 profile 假设的更密集），因此下一次构建必须
+        丢弃更多历史。缩小后的值会保留在实例上，因此曾经溢出的运行会持续使用更紧的
+        预算，而不是每轮重新发现问题。返回新的预算。
         """
         self._max_context_chars = max(MIN_CONTEXT_CHARS, int(self._max_context_chars * factor))
         return self._max_context_chars
 
     def _build_tail(self, plan: tuple[PlanStep, ...], usage: BudgetUsage) -> list[_Selected]:
-        """The volatile tail: the plan (if any) and the live run-status line,
-        both kept last so they never shift the cacheable prefix (ADR 0008)."""
+        """易变尾部：计划（如果有）和实时运行状态行始终放在最后，
+        从而不会移动可缓存前缀（ADR 0008）。"""
         tail: list[_Selected] = []
         if plan:
-            # Rendered fresh from State every turn rather than left in the
-            # transcript, so budget truncation can never drop the agent's plan.
+            # 每轮都从 State 重新渲染，而不是留在 transcript 中，因此预算截断
+            # 永远不会丢掉代理的计划。
             tail.append(
                 _Selected(
                     message=ModelMessage(role="user", content=_render_plan(plan)),
                     source="task_plan",
-                    # Model-authored text: untrusted, like any other model output.
+                    # 模型编写的文本：与其他模型输出一样不可信。
                     trust="untrusted",
                     reason="the agent's own plan, restated from run state (kept near the tail)",
                 )
@@ -155,7 +149,7 @@ class ContextBuilder:
                     ),
                 ),
                 source="run_status",
-                # Program-generated fact, not model output.
+                # 程序生成的事实，而不是模型输出。
                 trust="trusted",
                 reason="live budget counters, kept last so the prefix stays cacheable",
             )
@@ -163,12 +157,11 @@ class ContextBuilder:
         return tail
 
     def system_prompt(self) -> str:
-        """Fixed operating rules only.
+        """只返回固定的操作规则。
 
-        Repository-derived text (AGENTS.md) is deliberately kept out of the
-        system role: it is untrusted data and is passed as a labelled user
-        message instead, so its trust level is visible in `/context` and in the
-        `context.built` trace event.
+        有意将仓库派生文本（AGENTS.md）排除在 system 角色之外：它是不可信数据，会作为
+        带标签的 user 消息传入，因此其信任级别会显示在 `/context` 和 `context.built`
+        轨迹事件中。
         """
         if self._recipes:
             verification_rule = (
@@ -182,8 +175,8 @@ class ContextBuilder:
                 f"- Registered check recipes you may use: {', '.join(self._recipes)}."
             )
         else:
-            # Telling the model to run a check that does not exist sends it into
-            # an unwinnable loop the moment it edits anything.
+            # 告诉模型运行不存在的检查，会在它进行任何编辑后立即把它送入
+            # 无法取胜的循环。
             verification_rule = (
                 "- NO check recipes are registered for this workspace, so a change "
                 "cannot be verified here. Prefer answering from reading the code. "
@@ -200,8 +193,8 @@ class ContextBuilder:
                 "produces that."
             )
         else:
-            # Advertising a tool that always denies sends the model into an
-            # unwinnable loop, the same defect the Evidence Gate hit live.
+            # 宣传一个始终拒绝的工具，会把模型送入无法取胜的循环，这正是
+            # Evidence Gate 在线上运行中遇到的缺陷。
             exec_rule = (
                 "- repo.exec is UNAVAILABLE here (no OS sandbox backend on this "
                 "platform), so every call to it is denied. Do not attempt it."
@@ -246,25 +239,22 @@ class ContextBuilder:
             )
         selected.append(
             _Selected(
-                # The goal carries no volatile counter, so system rules +
-                # guidance + goal + transcript form a byte-stable prefix that a
-                # provider's automatic prompt cache can reuse across turns.
+                # goal 不携带易变计数器，因此 system rules + guidance + goal +
+                # transcript 构成字节稳定的前缀，提供商的自动提示缓存可以跨轮复用。
                 message=ModelMessage(role="user", content=f"Task: {self._goal}"),
                 source="user_goal",
                 trust="trusted",
                 reason="the task being solved",
             )
         )
-        # The volatile tail (plan + run status) is built first so its size can
-        # be reserved: it is always appended after the transcript, so the
-        # transcript's budget must leave room for it or the total would exceed
-        # the ceiling.
+        # 先构建易变尾部（plan + run status）以预留其大小：它总是追加在
+        # transcript 后面，因此 transcript 的预算必须给它留出空间，否则
+        # 总大小会超过上限。
         tail = self._build_tail(plan, usage)
-        # --- stable prefix ends; append-only transcript continues it ---
-        # `max_context_chars` is the budget for selected messages and sits well
-        # below the model's real token window (the profile leaves headroom for
-        # the tool schemas and the reserved output, which also travel on the
-        # wire); the assertion at the end of build() proves that headroom holds.
+        # --- 稳定前缀到此结束；只追加的 transcript 从这里继续 ---
+        # `max_context_chars` 是选中消息的预算，远低于模型实际的 token 窗口
+        # （profile 会为工具 schema 和预留输出留出余量，它们也会通过网络发送）；
+        # build() 末尾的断言证明这部分余量确实存在。
         history_limit = max(0, self._max_context_chars - _head_size(selected) - _head_size(tail))
         kept, digest, position = summarize_dropped(transcript, history_limit)
         history = [_classify(message) for message in kept]
@@ -274,39 +264,34 @@ class ContextBuilder:
                 _Selected(
                     message=ModelMessage(role="user", content=digest),
                     source="run_digest",
-                    # Program-assembled from structured tool results: paths,
-                    # digests, and exit codes only. No repository text and no
-                    # model prose reach it, which is what makes this label true.
+                    # 根据结构化工具结果由程序组装：只包含路径、摘要和退出码。仓库文本
+                    # 与模型 prose 都不会进入其中，这正是该标签成立的原因。
                     trust="trusted",
                     reason="facts condensed from tool outputs dropped to fit the budget",
                 ),
             )
-        # Hard backstop: summarize_dropped only removes droppable tool units,
-        # so a history of user/narrative turns (gate feedback) plus the digest
-        # can still overflow the same limit. Force it under, truncating as a
-        # last resort, so a request is never sent over budget (Phase 5). In the
-        # common case summarize_dropped already fit, so this is a no-op.
+        # 硬性后备保护：summarize_dropped 只会移除可丢弃的工具单元，因此
+        # 用户/叙事轮次的历史（门禁反馈）加上摘要仍可能超出同一上限。
+        # 必要时最后再截断，强制将其压回预算内，保证请求绝不会超预算发送
+        # （Phase 5）。通常 summarize_dropped 已经能放下，因此这里不会有操作。
         history = _fit_history(history, history_limit)
         selected.extend(history)
 
-        # --- volatile tail: everything that changes turn to turn goes last, so
-        # it never shifts the cacheable prefix (ADR 0008) ---
-        # Exception: a native prefix-continuation turn (ADR 0022) ends with an
-        # assistant message the provider must extend in place, so nothing may
-        # follow it on the wire. That turn drops the tail; it is a rare one-off
-        # and the cache prefix is unaffected (the tail returns next turn).
+        # --- 易变尾部：每轮都会变化的内容最后追加，从而不移动可缓存前缀
+        # （ADR 0008）---
+        # 例外是原生前缀续写轮次（ADR 0022）：它以一条提供商必须原地扩展的
+        # assistant 消息结尾，因此网络请求中不能在它后面追加任何内容。该轮
+        # 会省略尾部；这是一次性的少数情况，不影响缓存前缀（尾部下轮恢复）。
         ends_with_prefix = bool(transcript) and transcript[-1].is_prefix
         if not ends_with_prefix:
             selected.extend(tail)
 
         fitted = selected
-        # The hard budget is real: assembled messages must never exceed the
-        # message budget. The backstop above guarantees the transcript's share;
-        # the head is fixed and small. This turns any future regression (a new
-        # always-present segment that overflows) into a loud failure rather
-        # than a silent over-budget request — and it raises rather than
-        # asserts, because `python -O` strips assertions and would remove
-        # exactly the guard this comment promises.
+        # 硬预算是真实约束：组装后的消息绝不能超过消息预算。上面的后备保护
+        # 保证 transcript 占用的部分合规，头部固定且很小。这样未来的回归
+        # （新增始终存在且导致溢出的片段）会变成明显失败，而不是静默发送
+        # 超预算请求；这里使用 raise 而不是 assert，因为 `python -O` 会移除
+        # 断言，也就会移除这段注释所承诺的保护。
         assembled = sum(len(item.message.content) for item in fitted)
         if assembled > self._max_context_chars:
             raise RuntimeError(
@@ -333,27 +318,24 @@ class ContextBuilder:
 
 
 def _head_size(selected: list[_Selected]) -> int:
-    """Characters already spent on the stable head, so the transcript's share
-    of the budget accounts for the system rules and guidance above it."""
+    """稳定头部已经占用的字符数；这样 transcript 所占的预算会扣除其前面的系统规则
+    和指引。"""
     return sum(len(item.message.content) for item in selected)
 
 
 def _fit_history(history: list[_Selected], limit: int) -> list[_Selected]:
-    """Force the kept transcript under `limit` as a hard backstop.
+    """作为最后的后备保护，强制保留的 transcript 不超过 `limit`。
 
-    Reuses the same message-level clamp compaction uses, then re-wraps the
-    surviving (possibly truncated) messages back into `_Selected` so the
-    segment view stays honest. Dropped-oldest-first; the newest message is
-    truncated rather than removed, so history is never empty when it had
-    content.
+    复用压缩逻辑使用的消息级截断，然后将保留的（可能已截断的）消息重新包装为
+    `_Selected`，使分段视图保持准确。按从最旧到最新的顺序丢弃；最新消息会被截断
+    而不是移除，因此只要历史原本有内容，就不会变为空。
     """
     original = [item.message for item in history]
     fitted = enforce_hard_limit(original, limit)
     if fitted == original:
         return history
-    # Map surviving messages back to their selection metadata by identity;
-    # a truncated tail message is a fresh object, so fall back to the last
-    # item's metadata for it.
+        # 按对象身份将保留下来的消息映射回选择元数据；截断后的尾部消息是
+        # 新对象，因此对它回退使用最后一项的元数据。
     by_id = {id(item.message): item for item in history}
     out: list[_Selected] = []
     for message in fitted:

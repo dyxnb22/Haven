@@ -1,4 +1,4 @@
-"""Per-model defaults, expressed as data rather than as branches in the core."""
+"""按模型定义默认值，以数据表达，而不是在核心层使用分支。"""
 
 from haven.application.profiles import (
     DEEPSEEK_V4_FLASH,
@@ -13,30 +13,30 @@ class TestLookup:
         assert profile_for("deepseek-v4-flash") is DEEPSEEK_V4_FLASH
 
     def test_an_unknown_model_falls_back_to_the_conservative_default(self) -> None:
-        """An unfamiliar model must inherit today's behavior, not a guess."""
+        """陌生模型必须继承当前行为，而不是继承猜测。"""
         assert profile_for("some-model-nobody-has-heard-of") is DEFAULT_PROFILE
 
     def test_the_default_keeps_the_historical_context_budget(self) -> None:
         assert DEFAULT_PROFILE.max_context_chars == DEFAULT_CONTEXT_CHARS == 96_000
 
     def test_the_default_prices_nothing(self) -> None:
-        """Cost must stay zero for an unknown model rather than invented."""
+        """未知模型的成本必须保持为零，而不是臆造价格。"""
         assert DEFAULT_PROFILE.pricing.input_per_1m_usd == 0.0
         assert DEFAULT_PROFILE.pricing.cached_input_per_1m_usd is None
 
 
 class TestFlashProfile:
     def test_its_context_budget_is_far_larger_than_the_default(self) -> None:
-        """Retained prefix bills at the hit rate, so compacting early costs
-        money on this model rather than saving it."""
+        """保留的前缀按命中费率计费，因此在此模型上过早压缩会产生费用，而不是节省
+        费用。"""
         assert DEEPSEEK_V4_FLASH.max_context_chars > 4 * DEFAULT_CONTEXT_CHARS
 
     def test_its_context_budget_stays_inside_the_window_at_the_measured_worst_case(
         self,
     ) -> None:
-        """The char budget must imply a token count under the window even at
-        the densest chars-per-token ratio observed live (evals/
-        calibrate_context.py), so the hand-set constant is checked, not guessed."""
+        """即使采用实时观察到的最密集字符/token 比（`evals/calibrate_context.py`），
+        字符预算推导出的 token 数也必须低于窗口；这样手工设置的常量是经过检查的，
+        而不是猜出来的。"""
         from haven.application.profiles import MEASURED_MIN_CHARS_PER_TOKEN
 
         worst_case_tokens = DEEPSEEK_V4_FLASH.max_context_chars / MEASURED_MIN_CHARS_PER_TOKEN
@@ -49,18 +49,18 @@ class TestFlashProfile:
         assert pricing.input_per_1m_usd / pricing.cached_input_per_1m_usd > 10
 
     def test_it_leaves_reasoning_effort_to_the_provider(self) -> None:
-        """No default is changed on a guess; the A/B harness measures it first."""
+        """不会凭猜测改变默认值；A/B 工具会先进行测量。"""
         assert DEEPSEEK_V4_FLASH.reasoning_effort is None
 
     def test_it_allows_a_longer_idle_stream_gap_than_the_default(self) -> None:
-        """Thinking mode can pause between streamed tokens longer than a
-        non-reasoning model would, so the idle bound is more generous here."""
+        """思考模式在流式 token 之间可能比非推理模型暂停更久，因此这里的空闲上限
+        更宽松。"""
         assert DEEPSEEK_V4_FLASH.stream_idle_timeout_s > DEFAULT_PROFILE.stream_idle_timeout_s
 
     def test_it_supports_native_prefix_continuation_on_the_beta_endpoint(self) -> None:
-        """Confirmed live 2026-08: the beta endpoint extends an assistant
-        `prefix: true` message in place; the stable endpoint 400s on it. So the
-        capability is real but only when pointed at the beta endpoint."""
+        """2026-08 实时确认：beta endpoint 会原地续写带 `prefix: true` 的 assistant
+        消息；stable endpoint 会对此返回 400。因此该能力确实存在，但只有指向 beta
+        endpoint 时才启用。"""
         assert DEEPSEEK_V4_FLASH.supports_assistant_prefix is True
         assert DEEPSEEK_V4_FLASH.prefix_continuation_enabled("https://api.deepseek.com/beta")
         assert DEEPSEEK_V4_FLASH.prefix_continuation_enabled("https://api.deepseek.com/beta/")
@@ -68,10 +68,9 @@ class TestFlashProfile:
 
 
 class TestLegacyAliases:
-    """`deepseek-chat` and `deepseek-reasoner` are documented aliases of
-    v4-flash (non-thinking and thinking mode), retiring 2026-07-24. They are
-    the names a live run actually used, and resolving them to DEFAULT_PROFILE
-    silently gave those runs a 96k context budget and a $0.00 bill."""
+    """`deepseek-chat` 和 `deepseek-reasoner` 是 v4-flash 的文档别名（非思考和思考
+    模式），于 2026-07-24 退役。实时运行实际使用过这些名称；将它们解析为
+    DEFAULT_PROFILE 会悄悄给这些运行 96k 上下文预算和 $0.00 账单。"""
 
     def test_the_legacy_chat_alias_resolves_to_flash(self) -> None:
         assert profile_for("deepseek-chat") is DEEPSEEK_V4_FLASH
@@ -80,7 +79,7 @@ class TestLegacyAliases:
         assert profile_for("deepseek-reasoner") is DEEPSEEK_V4_FLASH
 
     def test_a_profiled_model_prices_a_real_run(self) -> None:
-        """The regression that matters: a run on this model must not bill $0."""
+        """重要的回归保证：该模型上的运行不得计费为 $0。"""
         assert profile_for("deepseek-chat").pricing.is_known is True
 
     def test_an_unknown_model_still_reports_an_unknown_price(self) -> None:
@@ -88,9 +87,8 @@ class TestLegacyAliases:
 
 
 class TestPrefixEndpointGuard:
-    """A profile that needs a specific endpoint for prefix continuation only
-    enables it there, so a truncated turn on the wrong endpoint falls back to
-    the shim instead of a guaranteed 400."""
+    """需要特定 endpoint 才能前缀续写的 profile 只在该 endpoint 启用能力，因此错误
+    endpoint 上的截断轮次会回退到 shim，而不是必然返回 400。"""
 
     def test_a_profile_without_a_required_endpoint_enables_prefix_anywhere(self) -> None:
         from haven.application.profiles import ModelProfile

@@ -1,9 +1,8 @@
-"""Sandbox port: how a child process is confined by the operating system.
+"""沙箱端口：操作系统如何限制子进程。
 
-A launcher turns a command into a wrapped command. Keeping it a pure
-transformation means the profile can be asserted in a test without running
-anything, and the only thing that ever executes is a program the OS is already
-holding to a policy.
+启动器将一条命令转换为包装后的命令。保持这一步为纯转换意味着无需真正运行
+任何东西即可在测试中断言配置，并且实际执行的始终是已经受到操作系统策略约束
+的程序。
 """
 
 from __future__ import annotations
@@ -16,22 +15,21 @@ from typing import Protocol
 
 @dataclass(frozen=True, slots=True)
 class SandboxSpec:
-    """What one confined process may touch."""
+    """一个受限进程可以接触的内容。"""
 
     workspace_root: Path
-    #: Writable temp directory, so tools that must write somewhere do not need
-    #: access outside the workspace.
+    #: 可写的临时目录，使必须写入某处的工具不需要访问工作区之外的路径。
     scratch_dir: Path
     writable: bool
     allow_network: bool = False
-    #: Never readable. The workspace and scratch grants re-open the parts a run
-    #: legitimately needs, which is how a workspace inside $HOME keeps working.
+    #: 永远不可读。工作区和临时目录的授权会重新打开运行确实需要的部分，
+    #: 这使得位于 $HOME 内的工作区仍能正常工作。
     private_roots: tuple[Path, ...] = ()
-    #: Readable beyond the system roots — the Python prefix, so an interpreter
-    #: living under $HOME stays executable.
+    #: 可在系统根目录之外读取的路径——Python 前缀目录，从而保证位于 $HOME
+    #: 下的解释器仍可执行。
     extra_readable_roots: tuple[Path, ...] = ()
-    #: Kept in step with FsWorkspace.PROTECTED_COMPONENTS: git history, the
-    #: local data dir, and the project config a run must never rewrite.
+    #: 与 FsWorkspace.PROTECTED_COMPONENTS 保持同步：Git 历史、本地数据目录
+    #: 以及运行绝不能重写的项目配置。
     protected_subpaths: tuple[str, ...] = (".git", ".haven", ".haven.toml")
 
 
@@ -47,7 +45,7 @@ class SandboxLauncher(Protocol):
 
 
 def default_private_roots() -> tuple[Path, ...]:
-    """The user's home directory, where credentials actually live."""
+    """用户主目录，凭据实际存放的位置。"""
     try:
         return (Path.home(),)
     except RuntimeError:
@@ -55,7 +53,6 @@ def default_private_roots() -> tuple[Path, ...]:
 
 
 def default_readable_roots() -> tuple[Path, ...]:
-    """The running interpreter's prefixes, so a virtualenv under $HOME can
-    still be executed by a check recipe."""
+    """当前解释器的前缀目录，使位于 $HOME 下的 virtualenv 仍能被检查配方执行。"""
     roots = {Path(sys.prefix), Path(sys.base_prefix), Path(sys.executable).parent}
     return tuple(sorted(roots))

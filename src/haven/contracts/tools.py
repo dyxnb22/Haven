@@ -1,8 +1,7 @@
-"""Tool argument and result contracts.
+"""工具参数和结果契约。
 
-Each tool has a strict Pydantic args model; the JSON Schema handed to the
-model is generated from these models, so validation and documentation can
-never drift apart.
+每个工具都有严格的 Pydantic 参数模型；提供给模型的 JSON Schema 从这些模型
+生成，因此校验逻辑和文档不会彼此漂移。
 """
 
 from __future__ import annotations
@@ -20,14 +19,14 @@ TOOL_VERSION = "4"
 
 
 class RepoListArgs(StrictModel):
-    """List entries of a directory inside the workspace."""
+    """列出工作区内某个目录的条目。"""
 
     path: str = Field(default=".", description="Directory path relative to the workspace root.")
     max_entries: int = Field(default=200, ge=1, le=500)
 
 
 class RepoSearchArgs(StrictModel):
-    """Search file contents with a regular expression."""
+    """使用正则表达式搜索文件内容。"""
 
     pattern: str = Field(min_length=1, max_length=512, description="Regular expression.")
     path: str = Field(default=".", description="Directory to search, relative to workspace root.")
@@ -35,7 +34,7 @@ class RepoSearchArgs(StrictModel):
 
 
 class RepoReadArgs(StrictModel):
-    """Read a file by line range."""
+    """按行范围读取文件。"""
 
     path: str = Field(description="File path relative to the workspace root.")
     start_line: int = Field(default=1, ge=1)
@@ -43,7 +42,7 @@ class RepoReadArgs(StrictModel):
 
 
 class RepoEditArgs(StrictModel):
-    """Replace occurrences of old_string with new_string in an existing file."""
+    """在现有文件中将 old_string 的匹配项替换为 new_string。"""
 
     path: str = Field(description="File path relative to the workspace root.")
     old_string: str = Field(
@@ -67,7 +66,7 @@ class RepoEditArgs(StrictModel):
 
 
 class RepoCreateArgs(StrictModel):
-    """Create a new file. Fails if the path already exists."""
+    """创建新文件。路径已存在时失败。"""
 
     path: str = Field(description="New file path relative to the workspace root.")
     content: str = Field(max_length=262144, description="Full contents of the new file.")
@@ -75,16 +74,15 @@ class RepoCreateArgs(StrictModel):
 
 
 class RepoDeleteArgs(StrictModel):
-    """Delete an existing file. Requires approval; the file's content is pinned
-    at approval time so a concurrent change fails closed."""
+    """删除现有文件。需要审批；文件内容会在审批时固定，因此并发修改会导致
+    操作失败并关闭。"""
 
     path: str = Field(description="File path relative to the workspace root.")
     summary: str = Field(default="", max_length=300, description="One-line intent of this change.")
 
 
 class RepoMoveArgs(StrictModel):
-    """Move or rename a file. Fails if the destination already exists, so a move
-    can never silently overwrite."""
+    """移动或重命名文件。目标已存在时失败，因此移动永远不会静默覆盖文件。"""
 
     src: str = Field(description="Existing file path relative to the workspace root.")
     dest: str = Field(description="New path relative to the workspace root.")
@@ -92,7 +90,8 @@ class RepoMoveArgs(StrictModel):
 
 
 class PatchEditOp(StrictModel):
-    """Replace text in a file that exists (on disk or earlier in this patch)."""
+    """替换已经存在的文件中的文本（文件可以在磁盘上存在，也可以由本补丁较早的
+    操作创建）。"""
 
     kind: Literal["edit"] = "edit"
     path: str = Field(description="File path relative to the workspace root.")
@@ -103,7 +102,7 @@ class PatchEditOp(StrictModel):
 
 
 class PatchCreateOp(StrictModel):
-    """Create a genuinely new file."""
+    """创建确实全新的文件。"""
 
     kind: Literal["create"] = "create"
     path: str = Field(description="New file path relative to the workspace root.")
@@ -111,14 +110,14 @@ class PatchCreateOp(StrictModel):
 
 
 class PatchDeleteOp(StrictModel):
-    """Delete an existing file."""
+    """删除现有文件。"""
 
     kind: Literal["delete"] = "delete"
     path: str = Field(description="File path relative to the workspace root.")
 
 
 class PatchMoveOp(StrictModel):
-    """Move or rename a file; the destination must not exist."""
+    """移动或重命名文件；目标路径不得存在。"""
 
     kind: Literal["move"] = "move"
     src: str = Field(description="Existing file path relative to the workspace root.")
@@ -131,8 +130,7 @@ PatchOp = Annotated[
 
 
 class RepoApplyPatchArgs(StrictModel):
-    """Apply one multi-file patch: several operations, one approval, one
-    atomic commit with rollback on failure."""
+    """应用一个多文件补丁：包含多个操作、一次审批，并在失败时回滚的原子提交。"""
 
     operations: tuple[PatchOp, ...] = Field(
         min_length=1,
@@ -146,7 +144,7 @@ class RepoApplyPatchArgs(StrictModel):
 
 
 class RepoExecArgs(StrictModel):
-    """Run one program inside an OS sandbox."""
+    """在操作系统沙箱中运行一个程序。"""
 
     argv: tuple[str, ...] = Field(
         min_length=1,
@@ -163,7 +161,7 @@ class RepoExecArgs(StrictModel):
     @field_validator("argv")
     @classmethod
     def _bound_item_length(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        # Field(max_length=...) bounds the tuple, not the strings inside it.
+        # Field(max_length=...) 限制的是元组，而不是其中的字符串。
         if any(len(item) > 4096 for item in value):
             raise ValueError("each argv item must be at most 4096 characters")
         return value
@@ -175,7 +173,7 @@ class PlanStep(StrictModel):
 
 
 class TaskPlanArgs(StrictModel):
-    """Record or update the ordered plan for the current task."""
+    """记录或更新当前任务的有序计划。"""
 
     steps: tuple[PlanStep, ...] = Field(
         min_length=1, max_length=12, description="Ordered steps, shortest useful list."
@@ -183,11 +181,11 @@ class TaskPlanArgs(StrictModel):
 
 
 class RepoDiffArgs(StrictModel):
-    """Show the diff of changes made by this run (not pre-existing changes)."""
+    """显示本次运行产生的变更差异（不包括运行前已存在的变更）。"""
 
 
 class RepoCheckArgs(StrictModel):
-    """Run a registered verification recipe (e.g. the project's test command)."""
+    """运行已注册的验证配方（例如项目的测试命令）。"""
 
     recipe_id: str = Field(min_length=1, max_length=100, description="Registered recipe id.")
 
@@ -286,7 +284,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
 
 
 class ToolResult(StrictModel):
-    """Structured, bounded result fed back to the model and the trace."""
+    """反馈给模型和追踪流的结构化、有界结果。"""
 
     call_id: str
     tool_name: str
@@ -298,7 +296,7 @@ class ToolResult(StrictModel):
     duration_ms: int = 0
 
     def to_model_text(self) -> str:
-        """Render for the model transcript, bounded and clearly typed."""
+        """渲染为模型对话记录中的文本，保证有界且类型清晰。"""
         body: dict[str, Any] = {"status": self.status.value}
         if self.error_code is not None:
             body["error_code"] = self.error_code.value
@@ -312,25 +310,23 @@ class ToolResult(StrictModel):
 
 
 class RecipeSpec(StrictModel):
-    """A registered verification command. The model can only pick an id."""
+    """已注册的验证命令。模型只能选择其 id。"""
 
     id: str
     argv: tuple[str, ...] = Field(min_length=1)
     timeout_seconds: float = 120.0
-    #: Recipes run sandboxed like any other process. A check that genuinely
-    #: needs the network (an integration suite) can opt in, because the recipe
-    #: comes from user-authored config rather than from the model.
+    #: 配方与其他进程一样在沙箱中运行。确实需要网络的检查（例如集成测试套件）
+    #: 可以选择启用，因为配方来自用户编写的配置，而不是模型。
     allow_network: bool = False
-    #: Extra roots this recipe may READ, on top of the interpreter prefixes
-    #: every recipe already gets. A toolchain keeps its dependency cache under
-    #: $HOME (`~/.m2`, `~/.gradle`), which the sandbox hides by default. Only a
-    #: check recipe may declare these, because only its argv is user-authored
-    #: (ADR 0029); never writable, and never available to `repo.exec`.
+    #: 此配方除所有配方默认获得的解释器前缀外，还可以读取的额外根目录。工具链
+    #: 会把依赖缓存放在 $HOME（`~/.m2`、`~/.gradle`）下，而沙箱默认会隐藏它。
+    #: 只有检查配方可以声明这些目录，因为只有它的 argv 由用户编写（ADR 0029）；
+    #: 这些目录永远不可写，也永远不提供给 `repo.exec`。
     readable_roots: tuple[str, ...] = ()
 
 
 def tool_schemas() -> tuple[ToolSchema, ...]:
-    """Build the provider-facing tool schema list from the args models."""
+    """根据参数模型构建面向提供商的工具模式列表。"""
     schemas = []
     for name, model in ARGS_MODELS.items():
         schema = model.model_json_schema()

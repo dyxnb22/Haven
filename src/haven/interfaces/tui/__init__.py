@@ -1,1 +1,1 @@
-"""Textual TUI for Haven."""
+"""Haven 的 Textual TUI。"""

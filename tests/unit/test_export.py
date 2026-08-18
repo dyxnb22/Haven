@@ -1,4 +1,4 @@
-"""Export rendering, including secret redaction."""
+"""导出渲染，包括秘密脱敏。"""
 
 import json
 
@@ -101,7 +101,7 @@ def test_jsonl_is_one_event_per_line() -> None:
     lines = [line for line in out.splitlines() if line]
     assert len(lines) == 4
     for line in lines:
-        json.loads(line)  # each line is valid JSON
+        json.loads(line)  # 每行都是有效 JSON
 
 
 def test_markdown_redacts_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -128,7 +128,7 @@ def test_markdown_redacts_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_redacts_any_provider_key_by_suffix(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A provider-specific variable name must be covered without a hardcoded list."""
+    """提供商特有的变量名也必须被覆盖，而不依赖硬编码列表。"""
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek-secret-value")
     env = EventEnvelope(
         seq=1,
@@ -146,7 +146,7 @@ def test_redacts_any_provider_key_by_suffix(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_short_env_values_are_not_treated_as_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Avoid mangling reports because some *_KEY variable holds 'on'."""
+    """避免因为某个 *_KEY 变量保存了 'on' 而破坏报告。"""
     monkeypatch.setenv("SORT_KEY", "id")
     env = EventEnvelope(
         seq=1,
@@ -159,9 +159,8 @@ def test_short_env_values_are_not_treated_as_secrets(monkeypatch: pytest.MonkeyP
 
 
 def test_foreign_credentials_are_masked_by_shape(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The env sweep only knows secrets this process holds. A key pasted into
-    a goal, or one a tool read out of a file, is invisible to it — so
-    well-known credential shapes are masked too."""
+    """环境扫描只能知道当前进程持有的秘密。粘贴到目标中的密钥，或工具从文件读取
+    的密钥，对它不可见——因此也要按形状遮盖常见凭据。"""
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     leaks = (
         "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
@@ -183,8 +182,8 @@ def test_foreign_credentials_are_masked_by_shape(monkeypatch: pytest.MonkeyPatch
 
 
 def test_ordinary_report_content_is_not_mangled(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A redactor that eats digests and paths makes reports untrustworthy, so
-    the patterns must not fire on the content every report is full of."""
+    """会吞掉摘要和路径的脱敏器会使报告不可信，因此模式不得匹配每份报告都包含的
+    普通内容。"""
     keep = (
         "sha256:3f58fbff3344719cad673dd17b497a3673fa28b3",
         "src/haven/adapters/workspace_fs.py",

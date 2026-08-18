@@ -1,11 +1,11 @@
-# Capstone — extend Haven, or build your own
+# 结业项目——扩展 Haven，或构建自己的版本
 
-You have read the machinery. Now prove you own it. Pick **one** track. Each is
-sized for a focused weekend and each ends with the same standard the project
-holds itself to: tests green, a named decision recorded, and every claim
-reproducible.
+[English](archive/en/capstone.md) | **中文**
 
-Before you start:
+你已经读过这套机制。现在不要再只复述它，选一条路线证明自己能使用它。每条路线都适合一个专注的
+周末，验收标准相同：测试通过、记录一个有名字的决定、每项声明都可以复现。
+
+开始前：
 
 ```bash
 uv sync --locked
@@ -13,100 +13,74 @@ uv run pytest -q && uv run haven eval --offline
 git switch -c capstone/<your-track>
 ```
 
-## Track A — Add a tool end to end
+## 路线 A：端到端添加一个工具
 
-Add `repo.symbols` (list function/class definitions in a file) or `repo.stat`
-(size, line count, digest without full contents). Touch every layer you learned:
+添加 `repo.symbols`（列出文件中的函数/类定义）或 `repo.stat`（获取大小、行数和 digest，但不
+读取完整内容）。不要只改一个函数，要走过你学到的每一层：
 
-1. **Contract** (`contracts/tools.py`): a strict args model; register it in
-   `ARGS_MODELS` and add a description.
-2. **Policy** (`domain/policy.py`): classify it. It's read-only, so it belongs in
-   `READ_ONLY_TOOLS`. The completeness test will fail until you do — that's the
-   point.
-3. **Facts + execution** (`application/tool_pipeline.py`, `adapters/workspace_fs.py`):
-   collect workspace facts and execute, returning a structured `ToolResult`.
-4. **Tests**: a unit test for the workspace method, an integration journey via
-   `ScriptedModel`, and — for `repo.symbols` — a security test that it refuses a
-   path outside the workspace.
-5. **Prove the invariant**: confirm a bad path yields `not_found`/`denied`, never
-   an exception (Module 03).
+1. **契约。** 在 `contracts/tools.py` 写严格参数 model，注册到 `ARGS_MODELS`，补上描述；
+2. **Policy。** 完成分类。它是只读工具，应加入 `READ_ONLY_TOOLS`。在分类前，完备性测试应该失败；
+3. **Facts 与执行。** 在 `application/tool_pipeline.py` 和 `adapters/workspace_fs.py` 中采集工作区
+   facts、执行工具并返回结构化 `ToolResult`；
+4. **测试。** 为 workspace 方法写单元测试；用 `ScriptedModel` 写集成流程；对 `repo.symbols`
+   加安全测试，确认工作区外路径被拒绝；
+5. **证明不变量。** 确认坏路径返回 `not_found`/`denied`，而不是异常（模块 03）。
 
-Done when: `pytest`, `mypy`, `ruff`, `lint-imports`, and `haven eval --offline`
-are all green, and `haven debug-context "..."` shows the new tool in the catalog.
+完成标准：`pytest`、`mypy`、`ruff`、`lint-imports` 和 `haven eval --offline` 全部通过，
+并且 `haven debug-context "..."` 能在工具目录中显示新工具。
 
-## Track B — A new provider adapter
+## 路线 B：实现一个新的 provider adapter
 
-Implement `ModelPort` for a provider Haven has never talked to (Anthropic
-Messages, Google, a local Ollama server — your choice).
+为 Haven 接入从未支持过的 provider，例如 Anthropic Messages、Google 或本地 Ollama server，任选其一。
 
-1. Put it in `adapters/providers/`; the core must not change at all.
-2. Map its wire format to the neutral `ModelEvent` union, including usage and any
-   cache/reasoning fields it reports.
-3. Handle its quirks *in the adapter* (Anthropic streams differently and uses
-   `cache_control`; a local model may report no usage at all).
-4. Contract-test it offline with `httpx.MockTransport` as in
-   `tests/contract/test_openai_compatible.py`: text assembly, tool-call
-   assembly, error mapping, and "the API key never appears in an error."
+1. 放入 `adapters/providers/`；核心不得修改；
+2. 把线格式映射到中立的 `ModelEvent` union，包括 provider 报告的用量、cache 和 reasoning 字段；
+3. 把怪癖留在 adapter：Anthropic 的流式方式不同且使用 `cache_control`，本地模型可能完全不报告用量；
+4. 用 `httpx.MockTransport` 做离线契约测试：文本组装、工具调用组装、错误映射，以及 API key 绝不出现在
+   错误中。
 
-Done when: the contract tests pass offline, and (optionally) `haven
-verify-provider --yes` succeeds against the real endpoint. Write down, in a short
-note, which quirks you had to absorb — that note is the deliverable that proves
-you understood the boundary.
+完成标准：契约测试离线通过；可选地运行 `haven verify-provider --yes` 对真实 endpoint 验证。另写一篇
+短笔记，记录你吸收了哪些 provider 怪癖；那篇笔记本身就是你理解边界的证据。
 
-## Track C — A durability drill
+## 路线 C：持久化恢复演练
 
-Make recovery earn your trust.
+让恢复真正值得信任：
 
-1. Reproduce all three interruption outcomes from `tests/recovery/`: edit
-   provably-not-run, provably-confirmed, and ambiguous.
-2. Add a *new* crash point of your own — e.g. a crash after `repo.check` started
-   but before its result was journaled — and decide the correct classification.
-   Is a process effect ever provably "not run"? Justify your answer in the test's
-   docstring.
-3. Confirm that no scenario you add can lead to an automatic replay of an
-   ambiguous effect. If you can find one that does, you've found a real bug —
-   write it up as a postmortem entry (Module 10).
+1. 复现 `tests/recovery/` 的三种中断结果：可证明未执行、可证明已确认、不明确；
+2. 自己加入一个崩溃点，例如 `repo.check` 已开始、结果尚未写入日志时进程退出，并决定正确分类。在测试
+   docstring 中解释：进程副作用是否可能被证明为“未运行”？
+3. 确认你新增的任何场景都不会自动重放不明确副作用。如果找到一个会重放的场景，那就是实际 bug：
+   写成模块 10 所要求的 postmortem 条目。
 
-Done when: your new recovery test passes and the "never auto-replay ambiguous"
-invariant demonstrably holds for your crash point.
+完成标准：新恢复测试通过，并能对你的崩溃点明确证明“绝不自动重放不明确副作用”。
 
-## Track D — A benefit-gated feature (the hard one)
+## 路线 D：经过收益门禁的功能（困难路线）
 
-Propose a capability the project deliberately deferred (context *summarization*,
-a read-only sandboxed shell, LSP-based navigation) and take it through the full
-discipline:
+提出一个项目明确推迟的能力，例如上下文摘要、只读 sandbox shell 或 LSP 导航，并让它经历完整纪律：
 
-1. Write the one-page benefit gate (Module 10): problem, baseline **with a real
-   measurement**, options, decision, metric, rollback.
-2. If — and only if — the gate passes, implement the smallest version that moves
-   the metric.
-3. Measure before/after. Offline where deterministic; live and clearly labelled
-   where not (Module 09).
-4. Write the ADR, including what you gave up.
+1. 写一页收益门禁：问题、带真实测量的基线、选项、决定、指标和回滚；
+2. **只有门禁通过后**，才实现能推动该指标的最小版本；
+3. 测量前后差异：确定的部分离线测，非确定的部分在线测并明确标注；
+4. 写 ADR，包括你放弃了什么。
 
-Done when: whether you shipped it or not, you can defend the decision with a
-number. A well-argued "I measured it and it wasn't worth it" is a passing
-capstone — that is the actual skill.
+完成标准不是“功能一定发布”。无论最后构建还是放弃，你都要用一个数字为决定辩护。
+“我测量过，它不值得”同样是通过——这才是本项目要训练的技能。
 
-## The bar for all tracks
+## 所有路线的共同标准
 
 ```bash
 uv run ruff format --check . && uv run ruff check .
 uv run mypy src
 uv run lint-imports
 uv run pytest -q
-uv run haven eval --offline        # security violations MUST be 0
+uv run haven eval --offline        # 安全违规必须为 0
 ```
 
-Then write a short `CAPSTONE.md`: what you built, the decision you recorded, the
-number you can reproduce, and one thing you'd do differently. That document —
-not the diff — is what you'd talk through in an interview.
+然后写一份简短的 `CAPSTONE.md`：构建了什么、记录了哪个决定、哪个数字可复现，以及你会做的一件
+不同的事。面试时真正要讲清楚的是这份判断记录，而不是 diff 的行数。
 
-## Where to go after
+## 之后去哪里
 
-- Re-read `docs/PROJECT_CARD.md` and rewrite its résumé bullets in your own
-  voice, backed by numbers *you* reproduced.
-- Read the original plan (`Haven_TUI_Coding_Agent_项目计划.md`) end to end. You
-  now have the context to see why each non-goal is a non-goal.
-- Teach one module to someone else. It is the fastest way to find the parts you
-  only think you understand.
+- 重读 `docs/PROJECT_CARD.md`，用自己的话重写简历 bullet，并用自己复现的数字支撑；
+- 从头读完原始计划 `Haven_TUI_Coding_Agent_项目计划.md`，现在你已经有足够上下文理解每个 non-goal；
+- 把一个模块教给别人，这是发现“以为理解了”的部分最快的方法。

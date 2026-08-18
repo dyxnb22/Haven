@@ -1,113 +1,90 @@
-# Module 03 — Tools and the single execution channel
+# 模块 03——工具与唯一执行通道
 
-> Files: `src/haven/application/tool_pipeline.py`,
-> `src/haven/application/registry.py`, `src/haven/contracts/tools.py`,
-> `src/haven/domain/ticket.py`, `src/haven/domain/policy.py`
-> Tests: `tests/integration/test_agent_journeys.py`,
-> `tests/integration/test_tool_error_containment.py`
-> ADR: [0002 — tool execution boundary](../docs/adr/0002-tool-execution-boundary.md)
+[English](archive/en/03-tools-and-the-execution-channel.md) | **中文**
 
-## Learning objectives
+> 文件：`src/haven/application/tool_pipeline.py`、`src/haven/application/registry.py`、
+> `src/haven/contracts/tools.py`、`src/haven/domain/ticket.py`、`src/haven/domain/policy.py`
+> 测试：`tests/integration/test_agent_journeys.py`、`tests/integration/test_tool_error_containment.py`
+> ADR：[0002——工具执行边界](../docs/adr/0002-tool-execution-boundary.md)
 
-- Build one pipeline that every model-proposed action must pass through.
-- Understand each gate and what it rejects.
-- See why the executor must accept a program-minted **ticket**, never raw model
-  JSON.
-- Make tool failures *structured results*, never exceptions that abort the run.
+## 学习目标
 
-## The channel
+- 建立一条所有模型提案都必须经过的管线；
+- 能指出每个门检查什么、拒绝什么；
+- 解释为什么 executor 只能接收程序签发的 **ticket**，不能接收模型原始 JSON；
+- 让工具失败变成结构化结果，而不是抛进代理循环的异常。
 
-There is exactly one path from a model proposal to a side effect:
+## 唯一通道
 
-```
+从模型提案到副作用，只有一条路：
+
+```text
 ModelResult
-  → Tool Registry        (tool exists, version pinned)
-  → Schema Validation    (strict Pydantic args → stable error code, not a traceback)
-  → Workspace Facts      (canonical path, preimage digest, escape/protected checks)
-  → Deterministic Policy (allow / ask / deny — a pure function)
-  → Exact Approval       (when policy says ask; digest-bound, single-use)
-  → ExecutionTicket      (raw model JSON stops here)
-  → Executor             (atomic workspace op, or fixed argv through one sandbox wrapper;
-                          mandatory for repo.exec, used for checks when available)
+  → Tool Registry        （工具存在，版本固定）
+  → Schema Validation     （严格 Pydantic 参数 → 稳定错误码）
+  → Workspace Facts       （规范化路径、preimage digest、越界/保护检查）
+  → Deterministic Policy  （allow / ask / deny；纯函数）
+  → Exact Approval        （需要询问时；绑定 digest，一次性）
+  → ExecutionTicket       （原始模型 JSON 在这里止步）
+  → Executor              （原子工作区操作，或固定 argv 经过唯一 sandbox 包装点）
   → ToolResult + Evidence + Trace
-  → next turn's Context
+  → 下一轮 Context
 ```
 
-Read `ToolPipeline.execute` in `tool_pipeline.py` top to bottom. Each stage is a
-named step you can point at. The exercise for this module is essentially "explain
-every line of that method," because that method *is* the security model in
-motion.
+从上到下阅读 `ToolPipeline.execute`。每一个箭头都是一个有名字的安全步骤；这不是普通的编排函数，
+而是安全模型正在运行的地方。
 
-## Why a ticket
+## 为什么需要 ExecutionTicket
 
-The executor (`adapters/workspace_fs.py`, `adapters/process_executor.py`) never
-sees the model's JSON. Instead the pipeline mints an `ExecutionTicket`
-(`domain/ticket.py`) that binds the tool name/version, the canonicalized
-arguments, the workspace, and the preimage digest into one value. The executor
-consumes only tickets.
+`workspace_fs.py` 和 `process_executor.py` 中的 executor 永远看不到模型 JSON。管线会签发一个
+`ExecutionTicket`，将工具名和版本、规范化参数、工作区身份、preimage digest 绑定成一个程序生成的值；
+executor 只消费这个值。
 
-Why bother? Because it makes "the model asked for X but we did Y" impossible by
-construction. There is no code path where an executor reads a model field. If you
-ever find yourself passing `tool_call.arguments` into something that touches
-disk, you have re-created the vulnerability this design removes.
+这样“模型想做 X、程序却做了 Y”在结构上就很难发生：executor 没有读取模型字段的代码路径。如果你
+发现自己把 `tool_call.arguments` 直接传给会碰磁盘的函数，就等于重新引入这个设计要消除的漏洞。
 
-## The registry pins the vocabulary
+## Registry 固定工具词汇
 
-`registry.py` validates a raw arguments string against the tool's strict Pydantic
-model and returns either typed args or a `ValidationFailure` with a stable code.
-Two subtleties worth internalizing:
+`registry.py` 用每个工具的严格 Pydantic model 验证原始参数字符串，返回类型化参数，或带稳定错误码
+的 `ValidationFailure`。有两个细节值得记住：
 
-- Validation happens on the JSON *text* via `model_validate_json`, not on a
-  pre-parsed dict. In strict mode, JSON mode accepts a JSON array for a tuple
-  field where Python mode would reject it. Providers hand you JSON text; validate
-  the thing you actually received. (This was a real bug; see the `task.plan`
-  story in Module 05.)
-- The tool set is compiled in. A test asserts `set(ARGS_MODELS) == KNOWN_TOOLS`
-  and that no side-effecting tool is ever auto-allowed, so adding a tool without
-  classifying it fails the build rather than silently creating an unguarded path.
+- 校验的是 provider 实际交给你的 JSON **文本**，通过 `model_validate_json` 完成，而不是先解析成 dict。
+  strict 模式下，JSON 模式可能接受 tuple 字段的 JSON array，而 Python 模式会拒绝它。验证真实收到的
+  形式，才能避免 `task.plan` 曾经出现的那类 bug。
+- 工具集合编译进程序。测试断言 `set(ARGS_MODELS) == KNOWN_TOOLS`，也断言任何有副作用的工具都
+  不能自动 `allow`。忘记分类的新工具会让构建失败，不会悄悄产生一条无保护路径。
 
-## Errors are results, not exceptions
+## 错误必须是结果
 
-A tool that fails returns a `ToolResult` with a stable `error_code`
-(`unknown_tool`, `invalid_arguments`, `denied`, `stale_preimage`, `timeout`, …).
-It is fed back to the model so it can recover. This is not a nicety — it is an
-invariant:
+工具失败返回带稳定 `error_code` 的 `ToolResult`：`unknown_tool`、`invalid_arguments`、
+`denied`、`stale_preimage`、`timeout` 等。这个结果会回到模型，让它有机会修正下一步。
 
-> A tool call never raises into the agent loop.
+> 工具调用不能以异常形式冒泡进代理循环。
 
-`tests/integration/test_tool_error_containment.py` exists because a live run
-violated this: searching a nonexistent path made `ripgrep` exit 2, which was
-raised as an exception, escaped the channel, and aborted an entire eval suite.
-The fix restored the invariant at three layers (validate the path, degrade a
-backend hiccup, wrap execution errors as results). When you build your own
-channel, write this test *first*; it is the one that catches the scariest class
-of bug — the one that takes down the whole run.
+`tests/integration/test_tool_error_containment.py` 就是因为一次在线运行违反了这条规则：搜索不存在的
+路径让 ripgrep 返回 2，异常冲出通道，整套评估被中止。修复分三层恢复了不变量：先校验路径，降低后端
+故障的影响，再把执行错误包装成结果。自己构建通道时，建议先写这条测试；它能抓住最致命的一类问题：
+一次工具失败拖垮整次运行。
 
-## Exercises
+## 练习
 
-1. **Narrate the channel.** Take the `repo.edit` journey from
-   `test_agent_journeys.py` and annotate each event (`tool.proposed`,
-   `policy.decided`, `approval.requested`, `execution.started`, `tool.completed`)
-   with the pipeline stage that emitted it.
-2. **Try to smuggle.** Attempt (on paper, then in a test) to make the executor
-   act on an argument the model supplied but the ticket did not bind. Explain why
-   you cannot.
-3. **Add a read-only tool.** Sketch a `repo.stat` tool: its args model, its
-   registry entry, its policy classification, and the one test that would fail if
-   you forgot to classify it.
-4. **Reproduce the containment bug.** Temporarily make `repo.search` raise on a
-   missing path (don't commit it) and watch a run abort; then see how the current
-   code turns it into a `not_found` result.
+1. **讲述通道。** 取 `test_agent_journeys.py` 中的 `repo.edit` 流程，把
+   `tool.proposed`、`policy.decided`、`approval.requested`、`execution.started`、
+   `tool.completed` 分别标到产生它们的管线阶段。
+2. **尝试走私参数。** 设法让 executor 执行模型提供、但 ticket 没有绑定的参数。先在纸上，再写测试，
+   然后解释为什么结构上做不到。
+3. **添加只读工具。** 设计一个 `repo.stat`：参数 model、registry 条目、policy 分类，以及忘记
+   分类时应该失败的测试。
+4. **重现隔离 bug。** 临时让 `repo.search` 在路径不存在时抛异常（不要提交），观察运行中止；再
+   看当前代码怎样把它变成 `not_found` 结果。
 
-## Self-check
+## 自测
 
-- What exactly does an `ExecutionTicket` bind, and why each field?
-- Why validate the JSON text rather than a parsed dict?
-- Give the invariant about tool failures in one sentence, and name the test that
-  guards it.
+- `ExecutionTicket` 绑定了哪些东西？每一项为什么必要？
+- 为什么要校验 JSON 文本，而不是解析后的 dict？
+- 用一句话说出工具失败的不变量，并指出保护它的测试。
 
-## Further reading
+## 延伸阅读
 
-- ADR 0002 for the boundary; `docs/SECURITY.md` §"single execution channel."
-- Commit `958d98a` (`feat(application)`) introduces the channel and loop;
-  `31fde25` and `95c0e78` are the containment fixes.
+- ADR 0002，以及 `docs/SECURITY.md` 的“唯一执行通道”。
+- 提交 `958d98a`（`feat(application)`）引入通道与循环；`31fde25`、`95c0e78` 是隔离修复。

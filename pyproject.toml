@@ -33,10 +33,10 @@ dev = [
     "respx",
     "ruff",
 ]
-# Test-only dependencies of the pinned third-party repos in evals/real
-# (their suites must run green in this venv; see evals/real/repos.lock):
-# markupsafe + trio are jinja's declared test deps, wcag-contrast-ratio is
-# pygments'. Pure test plumbing — Haven itself never imports any of them.
+# evals/real 中固定版本第三方仓库仅用于测试的依赖
+#（它们的测试套件必须在此虚拟环境中通过；见 evals/real/repos.lock）：
+# markupsafe + trio 是 jinja 声明的测试依赖，wcag-contrast-ratio 是 pygments
+# 的依赖。它们纯粹用于测试基础设施，Haven 本身不会导入任何一个。
 real-evals = [
     "markupsafe",
     "trio",
@@ -55,10 +55,10 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.format]
-# Ruff formats fenced Python inside Markdown. That is right for prose that
-# ships, but a plan's snippets are deliberate fragments — a lone argument
-# line, a partial call — and formatting them as whole modules corrupts the
-# instruction: `flag: bool = True,` came back as `flag: bool = (True,)`.
+# Ruff 会格式化 Markdown 中围栏里的 Python。对于随项目发布的 prose 这很合适，
+# 但计划中的片段是有意保留的代码碎片——可能只是一个参数行或不完整调用；
+# 把它们当作完整模块格式化会破坏指令：`flag: bool = True,` 会变成
+# `flag: bool = (True,)`。
 exclude = ["docs/superpowers/plans/*.md"]
 
 [tool.ruff.lint]
@@ -99,8 +99,7 @@ type = "forbidden"
 source_modules = ["haven.application"]
 forbidden_modules = ["haven.adapters"]
 
-# Interfaces may reach adapters only through the composition root
-# (haven.bootstrap) or the eval harness; direct imports are forbidden.
+# 接口只能通过组合根（haven.bootstrap）或评估测试框架访问适配器；禁止直接导入。
 [[tool.importlinter.contracts]]
 name = "interfaces do not import adapters directly"
 type = "forbidden"

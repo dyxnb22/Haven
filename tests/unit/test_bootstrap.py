@@ -1,4 +1,4 @@
-"""Composition-root wiring: what build_services opens, it must also close."""
+"""组合根组装：build_services 打开的资源也必须负责关闭。"""
 
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -10,7 +10,7 @@ from haven.domain.enums import PermissionMode
 
 
 class ClosableModel:
-    """A model port that records whether it was closed."""
+    """记录自身是否已关闭的模型端口。"""
 
     def __init__(self) -> None:
         self.closed = False
@@ -44,7 +44,7 @@ async def test_close_closes_the_provider_client(tmp_path: Path) -> None:
 
 
 async def test_close_is_safe_for_a_model_without_aclose(tmp_path: Path) -> None:
-    """A model port need not define aclose; closing must not blow up."""
+    """模型端口不必定义 aclose；关闭服务不能因此抛错。"""
 
     class Bare:
         @property

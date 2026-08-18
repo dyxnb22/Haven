@@ -1,11 +1,9 @@
-"""Store maintenance: the logic behind `haven gc`.
+"""存储维护：`haven gc` 背后的逻辑。
 
-The journal is append-only by design, so disk use grows with every run until
-the user prunes deliberately. Pruning is a user decision, never automatic:
-`collect_garbage` defaults to a dry run, keeps the newest runs, never touches
-an active run, and sweeps only artifacts that no surviving checkpoint
-references (artifacts are content-addressed and may be shared between runs,
-e.g. two runs that archived the same original file).
+日志按设计只追加，因此磁盘使用量会随着每次运行增长，直到用户明确执行清理。清理是
+用户决定的操作，绝不会自动发生：`collect_garbage` 默认只进行 dry run，保留最新运行，
+从不触碰活跃运行，并且只清理没有任何存活检查点引用的构件（构件采用内容寻址，可能
+在多个运行之间共享，例如两个运行归档了同一个原始文件）。
 """
 
 from __future__ import annotations
@@ -16,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from haven.domain.enums import ACTIVE_STATUSES
 from haven.ports.session import SessionStorePort
 
-#: Upper bound when enumerating runs; far beyond any realistic local journal.
+#: 枚举运行时的上限，远高于任何现实中的本地日志规模。
 _ALL_RUNS = 1_000_000
 
 
@@ -38,16 +36,15 @@ async def collect_garbage(
     apply: bool = False,
     now: datetime | None = None,
 ) -> GcReport:
-    """Prune old runs and unreferenced artifacts.
+    """清理旧运行和未引用的构件。
 
-    A run is deleted only when it is beyond the newest `keep` runs AND (when
-    `older_than_days` is given) older than that cutoff — both conditions
-    protect, neither forces. Active runs are always kept. With `apply=False`
-    (the default) nothing is touched and the report says what would happen.
+    只有当某个运行不在最新的 `keep` 个运行之内，并且（指定 `older_than_days` 时）
+    早于该截止时间，才会删除它——两个条件都用于保护，而不是强制删除。活跃运行始终
+    保留。`apply=False`（默认值）时不会触碰任何内容，报告只说明将会发生什么。
     """
     if keep < 0:
         raise ValueError("keep must be >= 0")
-    runs = await store.list_runs(_ALL_RUNS)  # newest first
+    runs = await store.list_runs(_ALL_RUNS)  # 按最新在前排列
     cutoff = None
     if older_than_days is not None:
         cutoff = (now or datetime.now(UTC)) - timedelta(days=older_than_days)
@@ -73,9 +70,9 @@ async def collect_garbage(
         for run_id in deleted:
             await store.delete_run(run_id)
 
-    # Artifact sweep: keep exactly what surviving checkpoints still reference.
-    # Computed against the post-delete survivor set either way, so the dry-run
-    # report shows the true count.
+    # 清理构件：只保留仍被存活 checkpoint 引用的内容。
+    # 无论是否实际删除，都基于删除后的存活集合计算，因此 dry-run 报告
+    # 显示的是真实数量。
     survivors = kept + skipped_active
     referenced: set[str] = set()
     for run_id in survivors:

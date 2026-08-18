@@ -1,22 +1,18 @@
-"""Application layer: use cases orchestrating domain logic through ports.
+"""应用层：通过 ports 编排领域逻辑的用例。
 
-The two files that define the system live here:
+定义系统核心的两个文件位于此处：
 
-    run_service.py    the bounded agent loop (one turn = context -> model ->
-                      tools -> evidence -> checkpoint)
-    tool_pipeline.py  the single execution channel every model-proposed
-                      action must pass through
+    run_service.py    有界代理循环（一次轮次 = context -> model -> tools ->
+                      evidence -> checkpoint）
+    tool_pipeline.py  每个模型提出的操作都必须经过的唯一执行通道
 
-supported by: context_builder (what the model sees), compaction (dropped
-history becomes recorded facts), approvals (broker between pipeline and
-human/auto policies), registry (static tool lookup + strict validation),
-recovery_service (crash recovery + user rewind), replay_service (journal
-projection), maintenance (haven gc: prune runs + sweep artifacts),
-profiles (per-model defaults), emitter (persist + fan out events),
-state (the mutable per-run RunContext).
+由以下模块支持：context_builder（模型看到什么）、compaction（被丢弃的历史变成记录
+事实）、approvals（流水线与人工/自动策略之间的 broker）、registry（静态工具查找和
+严格验证）、recovery_service（崩溃恢复和用户 rewind）、replay_service（日志投影）、
+maintenance（haven gc：清理运行和构件）、profiles（按模型的默认值）、emitter（持久化
+并分发事件）、state（每次运行可变的 RunContext）。
 
-This layer knows domain, ports, and contracts - never a concrete adapter;
-bootstrap.py injects those.
+此层只了解 domain、ports 和 contracts，绝不依赖具体 adapter；bootstrap.py 负责注入它们。
 """
 
 from haven.application.approvals import ApprovalResponder, AutoApprover, QueueApprovalBroker

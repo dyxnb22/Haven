@@ -1,7 +1,7 @@
-"""Provider-neutral model contract.
+"""与提供商无关的模型契约。
 
-Adapters translate provider wire formats into these types; nothing
-provider-specific may leak past this boundary into the core.
+适配器将提供商的线协议格式转换为这些类型；任何提供商特有的内容都不能越过
+此边界泄漏到核心层。
 """
 
 from __future__ import annotations
@@ -16,20 +16,18 @@ from haven.contracts.base import StrictModel
 class Usage(StrictModel):
     input_tokens: int = 0
     output_tokens: int = 0
-    #: Portion of output_tokens spent on hidden reasoning, when the provider
-    #: reports it. Already included in output_tokens; tracked separately so a
-    #: cost report can explain where the tokens went.
+    #: 提供商报告时，表示 output_tokens 中用于隐藏推理的部分。它已经包含在
+    #: output_tokens 内，但单独跟踪后，成本报告可以说明这些 token 的去向。
     reasoning_tokens: int = 0
-    #: Portion of input_tokens served from the provider's prompt cache. Already
-    #: included in input_tokens; a high ratio means the stable-prefix ordering
-    #: is paying off (ADR 0008).
+    #: input_tokens 中由提供商提示缓存提供的部分。它已经包含在 input_tokens
+    #: 内；较高的比例说明稳定前缀排序发挥了作用（ADR 0008）。
     cached_input_tokens: int = 0
     estimated: bool = False
 
 
 class ToolCallProposal(StrictModel):
-    """A complete tool call as proposed by the model. Arguments stay as raw
-    JSON text until the pipeline validates them against the tool schema."""
+    """模型提出的完整工具调用。参数在流水线根据工具模式完成校验前，保持为原始
+    JSON 文本。"""
 
     call_id: str
     tool_name: str
@@ -47,15 +45,13 @@ class ModelMessage(StrictModel):
     content: str
     tool_calls: tuple[ToolCallProposal, ...] = ()
     tool_call_id: str | None = None
-    #: Opaque provider reasoning, carried for wire-protocol replay only (some
-    #: providers require it back on tool-call turns; ADR 0014). It is never the
-    #: answer: not rendered, not evidence, not in the compaction digest, not
-    #: trusted. `content` remains the only field that is any of those.
+    #: 不透明的提供商推理，仅为线协议重放而携带（某些提供商要求在工具调用轮
+    #: 中原样传回；ADR 0014）。它永远不是答案：不渲染、不作为证据、不进入压缩
+    #: 摘要，也不可信。`content` 仍是唯一同时具备这些属性的字段。
     provider_reasoning: str = ""
-    #: A trailing assistant message the model should *continue in place* rather
-    #: than reply to — native prefix continuation of a length-truncated answer
-    #: (ADR 0022). Only meaningful on the last message; the adapter sends it
-    #: with the provider's prefix flag when the profile declares support.
+    #: 模型应当“原地继续”而不是回复的末尾 assistant 消息——用于继续生成因
+    #: 长度限制而截断的答案（ADR 0022）。仅对最后一条消息有意义；当 profile
+    #: 声明支持时，适配器会连同提供商的 prefix 标志一起发送。
     is_prefix: bool = False
 
 
@@ -64,13 +60,13 @@ class ModelRequest(StrictModel):
     tools: tuple[ToolSchema, ...] = ()
     max_output_tokens: int | None = None
     temperature: float = 0.0
-    #: Provider reasoning budget (e.g. "low"/"medium"/"high"). Sent only when
-    #: set, so leaving it None means "whatever the provider defaults to" rather
-    #: than a value Haven chose. Carried from the model profile.
+    #: 提供商的推理预算（例如 “low”/“medium”/“high”）。仅在设置后发送，因此
+    #: 保持为 None 表示“使用提供商默认值”，而不是 Haven 选择的某个值。该字段
+    #: 从模型 profile 传递而来。
     reasoning_effort: str | None = None
 
 
-# --- streaming events -------------------------------------------------------
+# --- 流式事件 -----------------------------------------------------------------
 
 
 class TextDelta(StrictModel):
@@ -79,11 +75,11 @@ class TextDelta(StrictModel):
 
 
 class ReasoningDelta(StrictModel):
-    """Hidden chain-of-thought from a reasoning model.
+    """推理模型产生的隐藏思维链。
 
-    Surfaced to the UI so a long think does not look like a hang, but never
-    added to `ModelResult.text` and never echoed back in the transcript: it is
-    not the answer, and most providers reject their own reasoning on input.
+    它会展示给 UI，避免长时间思考看起来像卡死，但绝不会加入
+    `ModelResult.text`，也不会回显到对话记录中：它不是答案，而且大多数提供商
+    会拒绝把自身的推理内容作为输入再次接收。
     """
 
     kind: Literal["reasoning_delta"] = "reasoning_delta"
@@ -112,7 +108,7 @@ ModelEvent = Annotated[
 
 
 class ModelResult(StrictModel):
-    """Assembled outcome of one streamed model turn."""
+    """一次模型流式轮次组装完成的结果。"""
 
     text: str
     tool_calls: tuple[ToolCallProposal, ...] = ()
@@ -120,5 +116,5 @@ class ModelResult(StrictModel):
     finish_reason: Literal["stop", "tool_calls", "length", "error"] = "stop"
     ttft_ms: int = 0
     duration_ms: int = 0
-    #: Provider reasoning streamed this turn, carried for wire replay (ADR 0014).
+    #: 本轮流式传出的提供商推理，为线协议重放而携带（ADR 0014）。
     provider_reasoning: str = ""

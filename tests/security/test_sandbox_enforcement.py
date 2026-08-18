@@ -1,9 +1,8 @@
-"""Does the sandbox actually stop things? Asserted by running real commands.
+"""沙箱是否真的能阻止越界操作？通过运行真实命令来断言。
 
-A profile that reads correctly and confines nothing is the failure mode these
-tests exist to catch, so nothing here inspects a profile string. They skip when
-the platform has no backend, and CI runs both Linux and macOS so a skip cannot
-hide a regression on either.
+这些测试要捕获的正是“读取正常但完全没有约束”的配置，因此这里不会检查配置
+字符串。平台没有后端时会跳过；CI 会同时运行 Linux 和 macOS，因此跳过不能
+掩盖任一平台上的回归。
 """
 
 import socket
@@ -91,9 +90,9 @@ class TestWriteConfinement:
         assert exit_code != 0
 
     async def test_a_read_only_profile_blocks_workspace_writes(self, tmp_path: Path) -> None:
-        """The profile repo.exec runs under (ADR 0017): the workspace is
-        read-only on every platform, which is what closes the Linux hole where
-        Landlock cannot carve `.git` out of a writable workspace."""
+        """`repo.exec` 使用的配置（ADR 0017）会在所有平台上将工作区设为只读；
+        这正是它堵住 Linux 漏洞的方式，因为 Landlock 无法从可写工作区中单独
+        排除 `.git`。"""
         exit_code, _ = await run(tmp_path, "open('inside.txt','w').write('x')", writable=False)
         assert exit_code != 0
         assert not (tmp_path / "ws" / "inside.txt").exists()
@@ -118,8 +117,8 @@ class TestWriteConfinement:
 
 class TestReadConfinement:
     async def test_a_private_root_is_unreadable(self, tmp_path: Path) -> None:
-        """repo.exec validates cwd, not the paths inside argv, so this is the
-        only thing standing between a command and a private key."""
+        """`repo.exec` 校验的是 `cwd`，而不是 `argv` 中的路径；因此这项限制是
+        命令与私钥之间唯一的屏障。"""
         home = tmp_path / "home"
         (home / ".ssh").mkdir(parents=True)
         (home / ".ssh" / "id_rsa").write_text("SECRET-KEY-MATERIAL")
@@ -130,14 +129,14 @@ class TestReadConfinement:
         assert "SECRET-KEY-MATERIAL" not in output
 
     async def test_a_declared_root_is_readable_and_its_sibling_is_not(self, tmp_path: Path) -> None:
-        """ADR 0029: the widened boundary must be exactly as wide as declared.
-        The granted directory opens, the one beside it stays shut — the two
-        probes differ in one variable, which is the whole assertion.
+        """ADR 0029：放宽后的边界必须与声明的范围完全一致。
+        已授权的目录可以打开，旁边的目录仍保持关闭；两个探测只改变一个变量，
+        这就是本断言的全部内容。
 
-        The private root here is a stand-in home under tmp_path rather than the
-        real one. Both backends treat it identically (seatbelt denies the root
-        then re-allows the grant; Landlock never lists the root at all), so this
-        exercises the same rule ordering without writing into a user's `$HOME`.
+        这里的私有根目录是 `tmp_path` 下模拟的 home，而不是真实的 home。两个后端
+        对它的处理完全相同（Seatbelt 先拒绝根目录，再重新允许已授权目录；Landlock
+        根本不会列出该根目录），因此可以在不写入用户 `$HOME` 的情况下验证相同的
+        规则顺序。
         """
         home = tmp_path / "home"
         granted = home / ".m2"
@@ -166,7 +165,7 @@ class TestReadConfinement:
         assert "WITHHELD-MARKER" not in nope_output
 
     async def test_ordinary_programs_still_run(self, tmp_path: Path) -> None:
-        """An over-tight profile is as much a bug as a leaky one."""
+        """限制过严的配置与限制过松的配置同样是缺陷。"""
         exit_code, output = await run(tmp_path, "import os; print(len(os.listdir('/usr')))")
         assert exit_code == 0, output
         assert output.strip().isdigit()

@@ -1,8 +1,7 @@
-"""repo.apply_patch through the full channel: one approval, one transaction.
+"""repo.apply_patch 经过完整通道：一次审批，一次事务。
 
-A multi-file change used to be N sequential edits — N approvals, N chances to
-go stale, no whole-change review. The patch tool carries the entire diff into
-a single digest-bound approval and commits atomically (ADR 0019).
+多文件变更过去是 N 次顺序编辑——N 次审批、N 次变过期的机会，而且无法审阅整体
+变更。补丁工具将完整差异放入一次绑定摘要的审批中，并以原子方式提交（ADR 0019）。
 """
 
 from pathlib import Path
@@ -58,7 +57,7 @@ class TestPatchJourney:
         ]
         patch_approvals = [a for a in approvals if a.tool_name == "repo.apply_patch"]
         assert len(patch_approvals) == 1, "the whole patch is one approval"
-        # The card shows the entire reviewable diff.
+        # 卡片展示完整的、可供审查的 diff。
         assert "return a + b" in patch_approvals[0].preview
         assert "HELPER" in patch_approvals[0].preview
 
@@ -193,7 +192,7 @@ class TestPatchRefusals:
 
 
 class _TamperingApprover(ApprovalResponder):
-    """Approves everything, but mutates a file first — the TOCTOU window."""
+    """批准所有内容，但先修改文件——制造 TOCTOU 窗口。"""
 
     def __init__(self, repo: Path, target: str) -> None:
         self._repo = repo

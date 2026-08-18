@@ -1,8 +1,7 @@
-"""Exact, digest-bound, single-use approvals.
+"""精确、绑定摘要且只能使用一次的审批。
 
-An approval is bound to the workspace, the tool, the canonical arguments, and
-the file preimage. If any of these change between approval and execution, the
-approval is stale and execution must fail closed.
+审批会绑定工作区、工具、规范化参数和文件前像。如果这些内容在审批与执行之间
+发生任何变化，审批就会过期，执行必须失败并关闭。
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ def compute_approval_digest(
     preimage_digest: str | None,
     preview_digest: str | None,
 ) -> str:
-    """Digest that pins one approval to the exact action it authorizes."""
+    """将一次审批固定到其授权的精确操作上的摘要。"""
     return digest_of(
         {
             "workspace": workspace_digest,
@@ -56,8 +55,7 @@ class ApprovalRecord:
     consumed: bool = False
 
     def is_valid_for(self, digest: str) -> bool:
-        """A record authorizes execution only if approved, unconsumed, and the
-        digest still matches the action about to run."""
+        """只有审批通过、尚未消费且摘要仍与即将执行的操作匹配时，记录才授权执行。"""
         return (
             self.decision is ApprovalDecision.APPROVED
             and not self.consumed

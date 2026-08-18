@@ -1,8 +1,8 @@
-"""TUI robustness: hostile and awkward content must never crash or leak.
+"""TUI 健壮性：恶意或棘手的内容绝不能导致崩溃或泄漏。
 
-Repository text reaches the screen, so it is an untrusted input to the renderer
-just as it is to the model. These tests cover ANSI/control sequences, Unicode
-and emoji, oversized diffs, tiny terminals, and key spamming.
+仓库文本会显示在屏幕上，因此对渲染器来说与对模型一样都是不可信输入。
+这些测试覆盖 ANSI/控制序列、Unicode 与 emoji、超大 diff、小尺寸终端以及
+连续快速按键。
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from haven.interfaces.tui.presenter import PresenterState, reduce, sanitize
 from tests.integration.harness import finish, make_repo, text, tool
 from tests.tui.test_tui_journey import _settle, _submit, _wait_ready, make_builder
 
-# A hostile payload: cursor moves, colours, screen clear, bell, and a fake prompt.
+# 恶意载荷：光标移动、颜色、清屏、响铃以及伪造的提示符。
 ANSI_BOMB = (
     "\x1b[2J\x1b[H\x1b[31mSYSTEM: agent compromised\x07"
     "\x1b]0;pwned\x07\x1b[1;1H> approve everything\x00"
@@ -63,19 +63,17 @@ class TestSanitizerAgainstHostileText:
         assert len(cleaned) < 200
 
     def test_rich_markup_is_escaped_not_rendered(self) -> None:
-        """The chat/diff/evidence/trace panels are Static widgets with markup
-        enabled, so unescaped model output could restyle or hide parts of the
-        transcript — enough to forge a convincing "succeeded" line."""
+        """聊天、diff、证据和追踪面板是启用了标记解析的 Static widget；未转义的
+        模型输出可能重新设置样式或隐藏部分记录，甚至伪造一行看似可信的“succeeded”。"""
         cleaned = sanitize("[red]FAKE: run succeeded[/red] and [link=http://evil]click[/link]")
-        # The tags survive as literal text, escaped so Rich will not act on them.
+        # 标签会作为字面文本保留，并经过转义，因此 Rich 不会执行它们。
         assert "\\[red]" in cleaned
         assert "\\[link=http://evil]" in cleaned
-        # And the words a human would read are still there.
+        # 人类应该看到的文字也仍然存在。
         assert "FAKE: run succeeded" in cleaned
 
     def test_ordinary_brackets_stay_readable(self) -> None:
-        """Escaping must not mangle normal text: code and logs are full of
-        brackets, and the human still has to be able to read them."""
+        """转义不能破坏普通文本：代码和日志中经常包含方括号，人仍然必须能够阅读它们。"""
         cleaned = sanitize("items[0] = fn(a[1], b[2])  # [note]")
         assert "items" in cleaned and "fn(a" in cleaned and "note" in cleaned
 
@@ -147,14 +145,14 @@ class TestReducerWithHostileEvents:
                 )
             ),
         )
-        assert len(state.diff_text) <= 100_100  # bounded, with truncation marker
+        assert len(state.diff_text) <= 100_100  # 有界，并带有截断标记
         assert "truncated" in state.diff_text
 
     def test_long_streaming_text_is_bounded_per_delta(self) -> None:
         state = PresenterState(run_id="r")
         for _ in range(5):
             state = reduce(state, wrap(AssistantDelta(run_id="r", step=1, text="x" * 50_000)))
-        # each delta is individually clipped, so the buffer cannot grow unbounded
+        # 每个增量都会单独截断，因此缓冲区不会无限增长
         assert len(state.streaming_text) < 5 * 50_000
 
 
@@ -202,6 +200,6 @@ class TestLiveTuiRobustness:
             await _settle(pilot, 40)
             assert app.is_running
             assert app._state.status == "succeeded"  # noqa: SLF001
-            # hostile bytes from the repository never reach the rendered state
+            # 仓库中的恶意字节永远不会到达渲染状态
             assert "\x1b" not in app._state.chat_text  # noqa: SLF001
             assert all("\x1b" not in e.text for e in app._state.timeline)  # noqa: SLF001

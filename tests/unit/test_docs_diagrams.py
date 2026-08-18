@@ -1,9 +1,8 @@
-"""Structural checks on the Mermaid diagrams in the docs.
+"""文档中 Mermaid 图的结构检查。
 
-Broken diagrams render as a raw error box on GitHub, which is exactly where a
-portfolio reader sees them first. These checks are not a full Mermaid parser;
-they catch the mistakes that actually happen: unbalanced fences, unbalanced
-brackets/quotes in node labels, and unknown diagram types.
+损坏的图在 GitHub 上会渲染为原始错误框，而作品集读者恰恰会先在那里看到它们。
+这些检查不是完整的 Mermaid 解析器；它们捕获实际会发生的错误：围栏不平衡、节点
+标签中的括号/引号不平衡，以及未知图类型。
 """
 
 from __future__ import annotations
@@ -46,7 +45,7 @@ def test_mermaid_block_is_structurally_sound(path: Path, block: str) -> None:
 
     for number, line in enumerate(lines, start=1):
         assert line.count('"') % 2 == 0, f"{path.name}:{number} unbalanced quote: {line!r}"
-        # brackets inside quoted labels are text, so only check outside quotes
+        # 引号内标签中的括号属于文本，因此只检查引号外的部分
         outside = re.sub(r'"[^"]*"', "", line)
         for opener, closer in (("[", "]"), ("(", ")"), ("{", "}")):
             assert outside.count(opener) == outside.count(closer), (
@@ -58,12 +57,12 @@ def test_mermaid_block_is_structurally_sound(path: Path, block: str) -> None:
 def test_mermaid_subgraphs_are_closed(path: Path, block: str) -> None:
     opened = len(re.findall(r"^\s*subgraph\b", block, re.MULTILINE))
     closed = len(re.findall(r"^\s*end\s*$", block, re.MULTILINE))
-    # stateDiagram notes also close with `end note`, which the regex above skips
+    # stateDiagram 注释也用 `end note` 结束，上面的正则会跳过它
     assert closed >= opened, f"{path.name}: {opened} subgraph(s) but only {closed} end(s)"
 
 
 def test_state_diagram_transition_labels_are_single_line() -> None:
-    """`<br/>` in stateDiagram transition labels renders inconsistently."""
+    """stateDiagram 转换标签中的 `<br/>` 会产生不一致的渲染结果。"""
     for path, block in mermaid_blocks():
         if not block.lstrip().startswith("stateDiagram"):
             continue

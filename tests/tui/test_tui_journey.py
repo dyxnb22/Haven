@@ -1,4 +1,4 @@
-"""TUI journey tests using Textual's Pilot with a ScriptedModel (offline)."""
+"""使用 Textual Pilot 和 ScriptedModel 的 TUI 流程测试（离线）。"""
 
 from pathlib import Path
 from typing import Any
@@ -46,9 +46,9 @@ def make_builder(repo: Path, turns: list[list[Any]]):  # type: ignore[no-untyped
     async def _builder(*, workspace: Path, approvals: Any, sinks: list[Any]) -> _Services:
         ws = FsWorkspace(repo)
         store = MemorySessionStore()
-        # The same launcher the headless harness uses, so the "TUI and headless
-        # produce the same trace" invariant compares like with like. In
-        # production both go through build_services and share one backend.
+        # 使用无头 harness 相同的 launcher，使“TUI 和无头模式产生相同 trace”
+        # 这一不变量能够进行同类比较。生产环境中两者都会经过 build_services
+        # 并共享同一个后端。
         launcher = RecordingLauncher()
         service = RunService(
             model=ScriptedModel(turns),
@@ -124,7 +124,7 @@ async def test_edit_journey_with_approval(tmp_path: Path) -> None:
     async with app.run_test() as pilot:
         await _wait_ready(app, pilot)
         await _submit(app, pilot, "Fix the bug in add()")
-        # approve the two side-effecting actions (edit, then check)
+        # 批准两个有副作用的操作（先 edit，再 check）
         await _approve_pending(app, pilot, "a", count=2)
         await _settle(pilot, 60)
 
@@ -136,9 +136,8 @@ async def test_edit_journey_with_approval(tmp_path: Path) -> None:
 
 @pytest.mark.timeout(30)
 async def test_rewind_command_restores_the_runs_edit(tmp_path: Path) -> None:
-    """/rewind is two-step (state intent, then confirm) and restores the
-    file the finished run edited — the TUI face of ADR 0020's fail-closed
-    user-level undo."""
+    """`/rewind` 分两步执行（先记录意图，再确认），并恢复已完成运行编辑过的文件；
+    这是 ADR 0020 在 TUI 中体现的、默认安全失败的用户级撤销。"""
     repo = make_repo(tmp_path)
     buggy = (repo / "src" / "calc.py").read_text()
     turns = [
@@ -168,7 +167,7 @@ async def test_rewind_command_restores_the_runs_edit(tmp_path: Path) -> None:
         assert app._state.status == "succeeded"  # noqa: SLF001
         assert "return a + b" in (repo / "src" / "calc.py").read_text()
 
-        # Step 1: without confirmation nothing changes, the intent is stated.
+        # 第 1 步：没有确认时不发生任何变化，只说明意图。
         await _submit(app, pilot, "/rewind")
         await _settle(pilot, 10)
         assert "return a + b" in (repo / "src" / "calc.py").read_text()
@@ -177,7 +176,7 @@ async def test_rewind_command_restores_the_runs_edit(tmp_path: Path) -> None:
             for entry in app._state.timeline  # noqa: SLF001
         )
 
-        # Step 2: confirmed — the run's edit is undone.
+        # 第 2 步：确认后，撤销本次运行的 edit。
         await _submit(app, pilot, "/rewind yes")
         await _settle(pilot, 40)
         assert (repo / "src" / "calc.py").read_text() == buggy
@@ -189,8 +188,8 @@ async def test_rewind_command_restores_the_runs_edit(tmp_path: Path) -> None:
 
 @pytest.mark.timeout(30)
 async def test_follow_up_continues_the_same_session(tmp_path: Path) -> None:
-    """A second prompt after a finished run continues it, so the model keeps
-    the first turn's context instead of starting from a blank run (Phase 2)."""
+    """运行结束后的第二个提示会继续原运行，因此模型保留第一轮的上下文，而不是从
+    空白运行开始（第 2 阶段）。"""
     from haven.contracts.events import RunCreated
 
     repo = make_repo(tmp_path)
@@ -248,8 +247,8 @@ async def test_reject_journey_leaves_file_untouched(tmp_path: Path) -> None:
 
 @pytest.mark.timeout(30)
 async def test_apply_patch_journey_through_the_approval_flow(tmp_path: Path) -> None:
-    """A multi-file patch is one approval in the TUI (ADR 0019). Soak journey:
-    the whole change is one card, and both files land on approve."""
+    """多文件补丁在 TUI 中只需要一次审批（ADR 0019）。稳定性流程验证：整个变更
+    展示为一张卡片，批准后两个文件都会落盘。"""
     repo = make_repo(tmp_path)
     turns = [
         [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
@@ -279,7 +278,7 @@ async def test_apply_patch_journey_through_the_approval_flow(tmp_path: Path) -> 
     async with app.run_test() as pilot:
         await _wait_ready(app, pilot)
         await _submit(app, pilot, "Fix add and add a helper module")
-        # Exactly two approvals: the patch (one card for both files) then check.
+        # 恰好两次审批：补丁（两个文件共一张卡片），然后是 check。
         await _approve_pending(app, pilot, "a", count=2)
         await _settle(pilot, 60)
         assert app._state.status == "succeeded"  # noqa: SLF001
@@ -290,8 +289,8 @@ async def test_apply_patch_journey_through_the_approval_flow(tmp_path: Path) -> 
 
 @pytest.mark.timeout(30)
 async def test_steering_while_running_queues_instead_of_starting_a_run(tmp_path: Path) -> None:
-    """Soak journey for ADR 0020: input typed while a run is active is routed
-    to the steer queue (delivered next turn), not refused and not a new run."""
+    """ADR 0020 的稳定性流程：运行活跃时输入的内容会进入 steer 队列（下一轮投递），
+    不会被拒绝，也不会启动新运行。"""
     repo = make_repo(tmp_path)
     steered: list[str] = []
 
@@ -299,8 +298,8 @@ async def test_steering_while_running_queues_instead_of_starting_a_run(tmp_path:
     async with app.run_test() as pilot:
         await _wait_ready(app, pilot)
 
-        # Force the "a run is active" branch deterministically, then confirm
-        # the submit routes to run_service.steer rather than a new run.
+        # 以确定性方式强制进入“运行活跃”分支，然后确认提交会路由到
+        # run_service.steer，而不是创建新运行。
         from dataclasses import replace
 
         app._state = replace(app._state, running=True)  # noqa: SLF001
@@ -319,7 +318,7 @@ async def test_steering_while_running_queues_instead_of_starting_a_run(tmp_path:
 
 @pytest.mark.timeout(30)
 async def test_sessions_and_fork_commands(tmp_path: Path) -> None:
-    """/sessions lists prior runs; /fork branches the next message from one."""
+    """`/sessions` 列出之前的运行；`/fork` 从其中一个运行分支出下一条消息。"""
     from haven.contracts.events import RunCreated
 
     repo = make_repo(tmp_path)
@@ -358,7 +357,7 @@ async def test_mention_expands_into_the_goal(tmp_path: Path) -> None:
         await _wait_ready(app, pilot)
         expanded = app._expand_mentions("please look at @src/calc.py now")  # noqa: SLF001
         assert "mentioned files" in expanded and "src/calc.py" in expanded
-        # A path that does not exist is left as-is.
+        # 不存在的路径保持原样。
         assert app._expand_mentions("see @nope.py") == "see @nope.py"  # noqa: SLF001
 
 

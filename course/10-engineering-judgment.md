@@ -1,119 +1,94 @@
-# Module 10 — Engineering judgment
+# 模块 10——工程判断
 
-> Files: `docs/adr/`, `docs/POSTMORTEM.md`, `docs/PROJECT_CARD.md`,
+[English](archive/en/10-engineering-judgment.md) | **中文**
+
+> 文件：`docs/adr/`、`docs/POSTMORTEM.md`、`docs/PROJECT_CARD.md`、
 > `Haven_TUI_Coding_Agent_项目计划.md`
-> ADR: all of them, but especially
-> [0007 — what was *not* built](../docs/adr/0007-subagents-mcp-and-deterministic-review.md)
+> ADR：全部，尤其是
+> [0007——没有构建什么](../docs/adr/0007-subagents-mcp-and-deterministic-review.md)
 
-## Learning objectives
+## 学习目标
 
-- Apply a **benefit gate** before building a feature, and write down why you did
-  *not* build something.
-- Record decisions as ADRs so future-you (and an interviewer) can see the
-  reasoning, not just the result.
-- Treat failures as artifacts: root cause, fix, and a regression test.
-- Tell the difference between "narrow but rigorous" and "broad but shallow," and
-  choose deliberately.
+- 在构建功能前执行收益门禁，并留下“为什么不构建”的记录；
+- 用 ADR 记录推理，让未来的自己和审阅者看见取舍，而不只是结果；
+- 把故障变成可复用的产物：症状、根因、修复和回归保护都要留下；
+- 区分“范围窄但严谨”和“范围广但浅薄”，并有意识地选择。
 
-This module has less code and more thinking. It is also the part that most
-distinguishes an engineer from a feature-lister, so do not skip it.
+这课代码不多，判断很多。它最能区分工程师和功能清单作者，所以不要跳过。
 
-## The benefit gate
+## 先过收益门禁，再加能力
 
-The project's rule: before adding a capability, write one page — the problem, the
-current baseline, the options, the decision, the metric that will tell you if it
-worked, and the rollback. If you cannot state a measurable benefit, you do not
-build it yet.
+项目规则是：添加能力前先写一页，包含问题、当前基线、候选方案、决定、衡量成败的指标和回滚方式。
+如果说不出可测量的收益，就还不到构建它的时候。
 
-ADR 0007 is the model case. Two capabilities common in "top-tier" agents — an
-MCP client and a model-driven Reviewer subagent — were evaluated and
-**deliberately not built**:
+ADR 0007 是典型案例。两个“顶级代理”常见能力——MCP client 和模型驱动的 Reviewer subagent——都被
+评估过，但**有意没有构建**：
 
-- **MCP** would break the invariant that every tool is compiled in and provably
-  classified (`set(ARGS_MODELS) == KNOWN_TOOLS`), and it improves no metric Haven
-  actually measures. Deferred, with a written list of what would have to be true
-  to revisit.
-- **A Reviewer subagent** cannot pass its own benefit gate offline: with a
-  scripted model it would only "find" the defects its script authored. The
-  cheaper, more reliable **deterministic review** (Module 06) was adopted
-  instead — the plan's own fallback.
+- **MCP** 会破坏“每个工具都编译进程序且可证明地完成分类”的不变量
+  （`set(ARGS_MODELS) == KNOWN_TOOLS`），而且没有改善 Haven 实际测量的指标。它被推迟，并写下
+  未来重新考虑时必须满足的条件。
+- **Reviewer subagent** 在线下无法通过自己的收益门禁：脚本模型只会“发现”脚本预先写好的缺陷。
+  因此项目采用成本更低、结果更稳定的确定性审查（模块 06）作为备用方案。
 
-Notice the shape: a *reasoned no* with conditions for a future *yes*. In an
-interview, "here's why I didn't build MCP" is stronger than a half-working MCP,
-because it demonstrates the scarce skill — scope control under a real invariant.
+注意这里的“不”不是懒惰，而是带条件的工程结论。面试中，“这是我为什么没有构建 MCP”比一个半成品
+MCP 更有说服力，因为它说明你能在真实不变量下控制范围。
 
-## ADRs: decisions with their reasons attached
+## ADR：把理由和决策绑在一起
 
-Read two or three ADRs in `docs/adr/`. Each has Status, Context, Decision,
-Consequences, and Alternatives-considered. The value is not the decision; it is
-the *discarded* options and the trade-off. Six months later nobody remembers why
-`repo.create` refuses existing files — unless it is written down (it is: so
-"create" can never blank a file the agent never read).
+读 `docs/adr/` 中的两三份 ADR。每份都有 Status、Context、Decision、Consequences 和
+Alternatives-considered。价值不只在最终决定，还在被舍弃的选项和付出的代价。
 
-Habit to copy: when you make a load-bearing choice, write the ADR *before* the
-memory of the alternatives fades. Number them; link them from the code and the
-tests they govern.
+六个月后，没人会凭记忆说出 `repo.create` 为什么拒绝已有文件；ADR 可以把原因留下：这样 create
+永远不会清空代理没有读过的文件。
 
-## Failures are artifacts
+值得复制的习惯是：做出承重选择时，在选项记忆消退前写 ADR，给它编号，并从约束它的代码和测试链接回去。
 
-Read `docs/POSTMORTEM.md`. Three real defects, each with symptom, root cause, the
-*tempting wrong fix*, the actual fix, and the regression guard:
+## 故障也是产物
 
-1. The security gate cried wolf on `__pycache__` — a measurement bug in the
-   safety metric itself. The wrong fix (widen every allow-list) would have
-   eroded the gate; the right fix excluded derived bytecode once, centrally.
-2. Building the `debug-context` tool immediately exposed that `AGENTS.md` was
-   mislabelled *trusted* and sitting in the system role. Observability paid for
-   itself before it was ever used in anger.
-3. The offline test suite quietly spent money because an exported provider key
-   leaked into pytest; the fix strips *every* credential-shaped variable, not a
-   named list, and a test now guards the guard.
+阅读 `docs/POSTMORTEM.md`。其中三个真实缺陷都记录了症状、根因、诱人的错误修复、实际修复和回归保护：
 
-The meta-lesson runs through all three: **when a safety signal fires, first ask
-whether the measurement is right.** And prefer one central, explainable rule over
-N local exceptions.
+1. 安全门禁把 `__pycache__` 当成未经授权的源文件变化。错误修复是扩大所有 allow-list；正确修复
+   是在中央快照逻辑中一次性排除派生字节码。
+2. 立刻构建 `debug-context` 工具暴露出 `AGENTS.md` 被错误标成 trusted 并放进 system role。
+   可观测性在第一次真正使用前就证明了价值。
+3. 离线测试套件因为 shell 中导出的 provider key 泄漏进 pytest，悄悄花了真实费用。修复不再列举几个
+   已知变量，而是剥离所有符合 credential 形状的环境变量，并用测试保护这条保护。
 
-## Narrow-but-rigorous vs. broad-but-shallow
+三件事共同指向一个元规则：**安全信号触发时，先检查测量是不是正确。** 同时优先使用一个集中、可解释
+的规则，而不是 N 个局部例外。
 
-The most important judgment in the whole project is the scope itself. Haven has
-twelve compiled-in tools, one provider connection, no shell-string tool, and no
-multi-agent orchestration. An explicit interpreter in `repo.exec` is still
-possible, but it always asks and runs inside the mandatory exec sandbox. In
-exchange Haven can make *provable* claims: unauthorized changes at 0 across the
-offline security gate, ambiguous effects never auto-replayed, and every run with
-one named stop reason.
+## 范围窄但严谨，还是范围广但浅薄
 
-An approval digest can bind an interpreter argv exactly; it cannot predict the
-program hidden behind that string. The kernel profile supplies that missing
-capability boundary. The lesson is not “narrow is always better.” It is:
-**choose your action space deliberately, and know which guarantee comes from
-schema, approval, sandbox, or evidence.** Articulating that trade-off is the
-deliverable.
+Haven 有十二个编译进程序的工具、一条 provider 连接、没有 shell-string 工具，也没有多代理编排。
+显式解释器仍可通过 `repo.exec` 使用，但必须审批并运行在强制 exec sandbox 中。
 
-## Exercises
+作为交换，系统能做出可证明的声明：离线安全门禁中的未授权变更为 0；不明确的副作用从不自动重放；
+每次运行都有一个命名的停止原因。
 
-1. **Write a gate.** Pick a feature you'd want in Haven (say, a `repo.symbols`
-   tool via tree-sitter). Write the one-page benefit gate. Be honest about the
-   baseline: is there evidence text search is failing? (ADR 0007's rejection of
-   LSP turned on exactly this.)
-2. **Write an ADR.** For a decision you have already made in your own code, write
-   it up in the `docs/adr/` format, especially the alternatives you discarded.
-3. **Write a postmortem.** Take a bug you fixed recently and write the
-   symptom / root cause / tempting-wrong-fix / fix / regression-test entry.
-4. **Argue the scope.** In a paragraph, defend Haven's “no implicit shell
-   string” decision to a reviewer who wants pipes and redirection. Include what
-   changes when the argv explicitly names `bash -c`, then argue the *other* side.
+审批 digest 可以精确绑定解释器 argv，却不能预测字符串背后程序的每一种行为；kernel profile 补上了
+这个能力边界。教训不是“范围窄总是更好”，而是：
 
-## Self-check
+> 有意识地选择动作空间，并知道每条保证来自 schema、审批、sandbox 还是证据。
 
-- What are the five parts of a benefit gate?
-- Why is a written "no" (like ADR 0007) valuable rather than a sign of
-  incompleteness?
-- Give the meta-rule that connects all three postmortems.
-- State the trade-off Haven's narrow scope buys, in one sentence.
+能够解释这项取舍，才是交付物。
 
-## Further reading
+## 练习
 
-- Every ADR in `docs/adr/`; `docs/PROJECT_CARD.md` for the trade-off table.
-- The original plan (`Haven_TUI_Coding_Agent_项目计划.md`) — §10 risk ledger and
-  §11 "enhancements behind a benefit gate."
+1. **写收益门禁。** 选一个 Haven 明确推迟的能力，例如通过 tree-sitter 提供 `repo.symbols`。写一页
+   门禁：问题、带真实测量的基线、选项、决定、指标和回滚。先问：有证据表明文本搜索真的失败吗？
+2. **写 ADR。** 选一个自己代码中已经做过的决定，按 `docs/adr/` 格式记录，尤其写清舍弃了什么。
+3. **写 postmortem。** 选一个最近修复的 bug，写出症状 / 根因 / 诱人的错误修复 / 修复 / 回归测试。
+4. **为范围辩护。** 向想要管道和重定向的 reviewer 解释 Haven 不使用隐式 shell 字符串。说明显式使用
+   `bash -c` 后安全边界改变了什么，再站到对方立场辩护一次。
+
+## 自测
+
+- 收益门禁包含哪五类信息？
+- 为什么写下一个“不”（例如 ADR 0007）不是不完整，而是能力？
+- 三份 postmortem 共同指向什么元规则？
+- Haven 的窄范围换来了哪条具体保证？
+
+## 延伸阅读
+
+- `docs/adr/` 中的 ADR，以及 `docs/PROJECT_CARD.md` 的取舍表。
+- 原始计划 `Haven_TUI_Coding_Agent_项目计划.md` 第 10 节“风险账本”和第 11 节“收益门禁之后的增强功能”。

@@ -1,4 +1,4 @@
-"""The offline eval suite is itself a CI gate: it must pass and stay clean."""
+"""离线评估套件本身就是 CI 门禁：必须通过并保持干净。"""
 
 from pathlib import Path
 
@@ -32,10 +32,9 @@ def test_no_security_violations(report) -> None:  # type: ignore[no-untyped-def]
 
 
 def test_quality_is_reported_apart_from_safety(report) -> None:  # type: ignore[no-untyped-def]
-    """Task success and the safety guarantee are headlined separately, never
-    averaged into one number."""
+    """任务成功和安全保证分别作为主要指标报告，绝不平均为一个数字。"""
     assert report.quality_total > 0
-    assert report.quality_passed == report.quality_total  # offline scripts all pass
+    assert report.quality_passed == report.quality_total  # 离线脚本全部通过
     assert "quality" in report.summary_line()
 
 
@@ -75,9 +74,8 @@ def test_unknown_category_is_an_error(tmp_path: Path) -> None:
 
 
 def test_discover_mode_registers_what_discovery_proposes(tmp_path: Path) -> None:
-    """A `discover: true` case simulates the zero-config flow: the harness runs
-    recipe discovery on the fixture and registers the suggestions, exactly as a
-    user accepting `haven discover` output would."""
+    """`discover: true` 用例模拟零配置流程：测试工具在夹具上运行配方发现并注册建议，
+    与用户接受 `haven discover` 输出时完全相同。"""
     import sys
 
     from haven.evalkit.runner import _discovered_recipes
@@ -98,9 +96,8 @@ def test_discover_mode_on_a_bare_repo_registers_nothing(tmp_path: Path) -> None:
 
 
 def test_one_crashing_case_does_not_discard_the_rest(tmp_path: Path) -> None:
-    """Found live: an unwrapped SSLError in case 7 aborted a 31-case run and
-    threw away the 24 that had not run yet. A live suite is expensive and not
-    reproducible, so a crash must be recorded as that case failing."""
+    """实时运行中发现：第 7 个用例中未经包装的 SSLError 中止了 31 用例运行，并丢弃
+    了尚未运行的 24 个用例。实时套件昂贵且不可复现，因此崩溃必须记录为该用例失败。"""
     import asyncio
 
     from haven.adapters.providers.scripted import ScriptedModel
@@ -140,10 +137,9 @@ def test_one_crashing_case_does_not_discard_the_rest(tmp_path: Path) -> None:
 
 
 def test_hidden_grader_fails_a_success_that_left_the_tree_broken(tmp_path: Path) -> None:
-    """A run can reach `succeeded` by answering without editing; on a bug-fix
-    case that is a false pass. The hidden grader reruns the verify recipe on
-    the final tree — red means the case fails no matter what the run said.
-    Found live on tier 4: a real-issue case passed with zero edits."""
+    """运行可以不编辑文件、直接回答并达到 `succeeded`；在修复 bug 的用例中这是假
+    通过。隐藏评估器会在最终目录树上重新运行验证配方——验证失败意味着用例失败，
+    不受运行结果文字影响。Tier 4 的实时运行曾发现：一个真实问题用例零编辑通过。"""
     import asyncio
     import json
 
@@ -151,7 +147,7 @@ def test_hidden_grader_fails_a_success_that_left_the_tree_broken(tmp_path: Path)
 
     fixture = tmp_path / "fixtures" / "broken"
     fixture.mkdir(parents=True)
-    (fixture / "check.py").write_text("import sys; sys.exit(1)\n")  # forever red
+    (fixture / "check.py").write_text("import sys; sys.exit(1)\n")  # 永远失败
     case = EvalCase.model_validate_json(
         json.dumps(
             {
@@ -177,8 +173,8 @@ def test_hidden_grader_fails_a_success_that_left_the_tree_broken(tmp_path: Path)
 
 
 def test_per_case_event_streams_are_persisted(tmp_path: Path) -> None:
-    """Failure forensics must be a read, not a re-run: each case leaves its
-    event envelopes (minus transient streaming chunks) as JSONL."""
+    """失败取证必须是读取，而不是重新运行：每个用例都会将自身的事件封装（不含瞬态
+    流式块）留下为 JSONL。"""
     import asyncio
     import json
 
@@ -194,8 +190,7 @@ def test_per_case_event_streams_are_persisted(tmp_path: Path) -> None:
 def test_live_mode_uses_the_injected_model_and_skips_scripted_expectations(
     tmp_path: Path,
 ) -> None:
-    """Live mode is exercised offline by injecting a fake 'real' provider, so
-    the code path is covered without spending money."""
+    """通过注入假的“real”提供商离线执行实时模式，因此无需花费资金也能覆盖这条代码路径。"""
     import asyncio
 
     from haven.adapters.providers.scripted import ScriptedModel
@@ -203,7 +198,7 @@ def test_live_mode_uses_the_injected_model_and_skips_scripted_expectations(
     from haven.evalkit.runner import run_suite
 
     def factory() -> ScriptedModel:
-        # answers immediately without touching any tool
+        # 立即回答，不触碰任何工具
         return ScriptedModel([[TextDelta(text="I did nothing."), StreamFinished()]])
 
     report = asyncio.run(
@@ -219,8 +214,8 @@ def test_live_mode_uses_the_injected_model_and_skips_scripted_expectations(
     assert '"mode": "live"' in report.to_json()
     assert "live eval" in report.summary_line()
     assert (tmp_path / "report-live.json").is_file()
-    # recovery scenarios are excluded from live mode
+    # recovery 场景不包含在 live 模式中
     assert all(r.category == "task" for r in report.results)
-    # the fake provider never edits anything, so file expectations fail —
-    # and no unauthorized change is reported either
+    # 虚拟提供商从不编辑任何内容，因此文件预期会失败——同时也不会报告
+    # 未授权的变更
     assert report.security_violations == 0

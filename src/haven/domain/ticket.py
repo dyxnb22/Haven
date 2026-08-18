@@ -1,7 +1,7 @@
-"""Execution tickets: the only currency the executor accepts.
+"""执行票据：执行器唯一接受的凭证。
 
-Raw model JSON never reaches the executor. The pipeline validates, authorizes,
-and then mints a ticket bound to the exact normalized action.
+模型的原始 JSON 永远不会到达执行器。流水线会先校验并授权，然后为绑定到精确
+规范化操作的内容铸造票据。
 """
 
 from __future__ import annotations

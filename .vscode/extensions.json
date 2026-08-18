@@ -1,0 +1,18 @@
+{
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-python.debugpy",
+    "charliermarsh.ruff",
+    "tamasfe.even-better-toml",
+    "davidanson.vscode-markdownlint",
+    "yzhang.markdown-all-in-one",
+    "codesmith.markdown-inline-editor-vscode",
+    "redhat.vscode-yaml",
+    "github.vscode-github-actions",
+    "eamodio.gitlens",
+    "openai.chatgpt",
+    "vsls-contrib.codetour",
+    "ryanluker.vscode-coverage-gutters"
+  ]
+}

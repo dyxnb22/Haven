@@ -1,7 +1,7 @@
-"""Versioned checkpoint schema.
+"""版本化的检查点模式。
 
-A checkpoint is a fast-resume snapshot; the event journal remains the audit
-authority. Loading fails closed on schema version or checksum mismatch.
+检查点是用于快速恢复的快照；事件日志仍然是审计权威。模式版本或校验和不匹配
+时，加载会失败并关闭。
 """
 
 from __future__ import annotations

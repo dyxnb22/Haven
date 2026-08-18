@@ -1,1 +1,1 @@
-"""OS sandbox backends. One per platform, selected at bootstrap."""
+"""操作系统沙箱后端。每个平台一个，由 bootstrap 选择。"""

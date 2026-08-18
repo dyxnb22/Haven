@@ -1,4 +1,4 @@
-"""Deterministic diff review (ADR 0007): catch obviously dangerous content."""
+"""确定性差异审查（ADR 0007）：捕获明显危险的内容。"""
 
 from haven.domain.review import review_diff
 
@@ -80,14 +80,14 @@ class TestMassDeletion:
 
 class TestScope:
     def test_only_added_lines_are_reviewed(self) -> None:
-        """Pre-existing content being *removed* must never trigger a finding."""
+        """删除原本已存在的内容绝不能触发发现。"""
         text = diff(added=["clean line"], removed=['password = "hunter2hunter2"'])
         assert codes(text) == set()
 
     def test_context_lines_are_ignored(self) -> None:
         text = (
             "--- a/x.py\n+++ b/x.py\n@@ -1,2 +1,2 @@\n"
-            ' password = "hunter2hunter2"\n'  # unchanged context line
+            ' password = "hunter2hunter2"\n'  # 未改变的上下文行
             "+clean = 1\n"
         )
         assert codes(text) == set()

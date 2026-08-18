@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Scripted offline demo of Haven. No API key, no network, no side effects
-# outside a temporary directory.
+# Haven 的脚本化离线演示。不需要 API key、不访问网络，也不会在临时目录之外
+# 产生副作用。
 #
-#   ./scripts/demo.sh              run it
-#   asciinema rec demo.cast -c ./scripts/demo.sh    record it
+#   ./scripts/demo.sh              运行
+#   asciinema rec demo.cast -c ./scripts/demo.sh    录制
 #
-# PACE=0 makes it instant (useful in CI); the default pacing is tuned to be
-# watchable in a recording.
+# PACE=0 会立即完成（适合 CI）；默认节奏经过调整，便于在录制内容中观看。
 
 set -euo pipefail
 

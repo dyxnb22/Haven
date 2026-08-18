@@ -1,7 +1,7 @@
-"""Static tool registry.
+"""静态工具注册表。
 
-Tools are compiled into the program; the model can never register, rename, or
-re-version a tool. Validation errors become stable codes, not raw tracebacks.
+工具在程序中静态编译；模型永远不能注册、重命名或重新设置工具版本。验证错误会转化
+为稳定的错误代码，而不是原始 traceback。
 """
 
 from __future__ import annotations
@@ -16,12 +16,12 @@ from haven.contracts.tools import ARGS_MODELS, TOOL_VERSION, ToolArgs
 
 @dataclass(frozen=True, slots=True)
 class ValidationFailure:
-    code: str  # "unknown_tool" | "invalid_arguments"
+    code: str  # 取值："unknown_tool" | "invalid_arguments"
     message: str
 
 
 class ToolRegistry:
-    """Looks up tools and validates raw model arguments strictly."""
+    """查找工具，并严格验证模型的原始参数。"""
 
     @property
     def tool_names(self) -> tuple[str, ...]:
@@ -43,9 +43,9 @@ class ToolRegistry:
         if not isinstance(raw, dict):
             return ValidationFailure("invalid_arguments", "arguments must be a JSON object")
         try:
-            # Validate the JSON text, not the parsed object: strict mode in JSON
-            # mode accepts a JSON array for a tuple field, which Python mode
-            # would reject. Providers always hand us JSON text.
+            # 校验 JSON 文本，而不是解析后的对象：JSON 模式的严格校验允许元组
+            # 字段使用 JSON 数组，而 Python 模式会拒绝它。提供商始终向我们
+            # 传递 JSON 文本。
             return model.model_validate_json(payload)
         except ValidationError as exc:
             issues = "; ".join(

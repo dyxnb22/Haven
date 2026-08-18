@@ -1,10 +1,9 @@
-"""Recovery from provider output limits and content-free replies.
+"""从提供商输出限制和无内容回复中恢复。
 
-A `finish_reason="length"` answer is incomplete by definition: accepting it
-silently would hand the user half an answer that looks whole. Haven requests a
-bounded continuation and stitches the parts. A reply with neither text nor tool
-calls (a reasoning-only response) is re-prompted, bounded, and then stops as
-no-progress rather than succeeding with an empty answer.
+`finish_reason="length"` 的回答按定义是不完整的：静默接受会把看起来完整的半截
+答案交给用户。Haven 会请求有界的续写并拼接各部分。既没有文本也没有工具调用的
+回复（只有 reasoning 的回复）会重新提示，在有界重试后以无进展停止，而不是用空
+答案报告成功。
 """
 
 from pathlib import Path
@@ -53,8 +52,8 @@ class TestTruncatedAnswers:
         assert "without repeating" in nudge
 
     async def test_continuations_are_bounded(self, tmp_path: Path) -> None:
-        """A model that truncates forever gets two continuations, then the
-        partial answer proceeds with a warning — it must not eat the budget."""
+        """一直截断的模型最多获得两次续写，然后带着警告继续处理部分答案——不能让
+        它耗尽预算。"""
         turns = [
             [text("a"), finish("length")],
             [text("b"), finish("length")],
@@ -69,9 +68,9 @@ class TestTruncatedAnswers:
 
 
 class TestNativePrefixContinuation:
-    """With a profile that supports native prefix continuation (ADR 0022), the
-    truncated partial is re-sent as an assistant *prefix* the model extends in
-    place, instead of a user 'continue' nudge — no seam duplication."""
+    """对于支持原生前缀续写的 profile（ADR 0022），截断的部分会作为 assistant
+    *prefix* 重新发送，由模型原地延长，而不是向用户发送“继续”提示——不会在接缝
+    处重复内容。"""
 
     async def test_prefix_capable_profile_resends_the_partial_as_assistant_prefix(
         self, tmp_path: Path, monkeypatch
@@ -90,8 +89,8 @@ class TestNativePrefixContinuation:
         outcome = await h.service.run("Explain something long")
 
         assert outcome.status is RunStatus.SUCCEEDED
-        # The continuation request ends with the partial as an assistant prefix,
-        # and carries no "cut off" user nudge.
+        # 续写请求以部分答案作为 assistant 前缀结尾，并且不携带“被截断”的
+        # 用户追加提示。
         last = h.model.requests_seen[-1].messages
         assert last[-1].role == "assistant"
         assert last[-1].is_prefix and last[-1].content == "first half"
@@ -100,10 +99,9 @@ class TestNativePrefixContinuation:
     async def test_the_endpoint_guard_falls_back_to_the_shim(
         self, tmp_path: Path, monkeypatch
     ) -> None:  # type: ignore[no-untyped-def]
-        """DeepSeek accepts `prefix: true` only on its beta endpoint. When the
-        deployment is pointed elsewhere the capability must be forced off, or
-        every truncated turn would 400 — so an explicit override beats the
-        profile's own flag."""
+        """DeepSeek 只在 beta endpoint 接受 `prefix: true`。部署指向其他位置时必须
+        强制关闭该能力，否则每次截断轮次都会返回 400——因此显式覆盖优先于 profile
+        自身的标志。"""
         import haven.application.run_service as rs
         from haven.application.profiles import ModelProfile
 
@@ -126,7 +124,7 @@ class TestNativePrefixContinuation:
 class TestEmptyReplies:
     async def test_an_empty_reply_is_reprompted_then_answered(self, tmp_path: Path) -> None:
         turns = [
-            [finish()],  # no content, no tool calls
+            [finish()],  # 没有内容，也没有工具调用
             [text("Here is the answer."), finish()],
         ]
         h = Harness(make_repo(tmp_path), turns)

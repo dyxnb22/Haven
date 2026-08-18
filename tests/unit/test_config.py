@@ -1,4 +1,4 @@
-"""Config layering and fail-closed parsing."""
+"""配置分层和失败即关闭的解析。"""
 
 from pathlib import Path
 
@@ -11,15 +11,15 @@ from haven.domain.budget import Budget
 def test_defaults_when_no_files(tmp_path: Path) -> None:
     config = load_config(tmp_path)
     assert config.budget == Budget()
-    assert config.provider.model  # a default model name exists
+    assert config.provider.model  # 存在默认模型名称
     assert config.recipes == {}
 
 
 def test_project_budget_tightens_only(tmp_path: Path) -> None:
     (tmp_path / ".haven.toml").write_text("[budget]\nmax_steps = 3\nmax_tool_calls = 999\n")
     config = load_config(tmp_path)
-    assert config.budget.max_steps == 3  # lowered
-    # cannot raise above the built-in default
+    assert config.budget.max_steps == 3  # 已降低
+    # 不能提高到内置默认值以上
     assert config.budget.max_tool_calls == Budget().max_tool_calls
 
 
@@ -47,7 +47,7 @@ def test_unknown_tier_is_rejected(tmp_path: Path) -> None:
 
 
 def test_a_project_can_tighten_a_tier_but_not_widen_it(tmp_path: Path) -> None:
-    """Tier is a user choice and may raise; a repository still may not."""
+    """档位是用户选择，可以提高预算；仓库仍然不能提高预算。"""
     (tmp_path / ".haven.toml").write_text("[budget]\nmax_steps = 5\nmax_tool_calls = 9999\n")
     budget = load_config(tmp_path, "deep").budget
     assert budget.max_steps == 5
@@ -65,7 +65,7 @@ def test_recipes_deny_network_by_default(tmp_path: Path) -> None:
 
 
 def test_a_recipe_may_opt_into_network(tmp_path: Path) -> None:
-    """A check that genuinely needs the network can say so; the model cannot."""
+    """确实需要网络的检查可以声明这一点；模型不能声明。"""
     (tmp_path / ".haven.toml").write_text(
         '[recipes.itest]\nargv = ["pytest", "-m", "integration"]\nallow_network = true\n'
     )
@@ -73,8 +73,8 @@ def test_a_recipe_may_opt_into_network(tmp_path: Path) -> None:
 
 
 def test_a_recipe_may_declare_a_readable_toolchain_root(tmp_path: Path) -> None:
-    """A Maven or Gradle check needs its dependency cache under $HOME, the same
-    exception the interpreter prefixes already get (ports/sandbox.py)."""
+    """Maven 或 Gradle 检查需要读取 $HOME 下的依赖缓存，这与解释器前缀已经获得的
+    例外相同（ports/sandbox.py）。"""
     (tmp_path / ".haven.toml").write_text(
         '[recipes.mvn]\nargv = ["mvn", "-o", "test"]\nreadable_roots = ["~/.m2"]\n',
         encoding="utf-8",
@@ -84,14 +84,13 @@ def test_a_recipe_may_declare_a_readable_toolchain_root(tmp_path: Path) -> None:
 
 
 def test_a_recipe_declares_no_readable_roots_by_default(tmp_path: Path) -> None:
-    """The absent case has to stay empty, or every existing recipe silently
-    gains a grant it never asked for."""
+    """缺省情况必须保持为空，否则每个已有配方都会悄悄获得它从未请求的授权。"""
     (tmp_path / ".haven.toml").write_text('[recipes.tests]\nargv = ["pytest", "-q"]\n')
     assert load_config(tmp_path).recipes["tests"].readable_roots == ()
 
 
 def test_project_cannot_weaken_the_sandbox(tmp_path: Path) -> None:
-    """No project file may turn confinement off, not even by naming a table."""
+    """项目文件不得关闭限制，即使只是声明一个表也不行。"""
     (tmp_path / ".haven.toml").write_text('[sandbox]\nbackend = "none"\n')
     with pytest.raises(ConfigError, match="may only contain"):
         load_config(tmp_path)

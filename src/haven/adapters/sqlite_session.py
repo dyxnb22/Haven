@@ -1,8 +1,7 @@
-"""SQLite session store: runs, append-only event journal, checkpoints,
-digest-bound approvals, execution journal, and content-addressed artifacts.
+"""SQLite 会话存储：运行、只追加事件日志、检查点、绑定摘要的审批、执行日志和
+内容寻址构件。
 
-Schema migrations fail closed: an unknown schema version aborts instead of
-guessing.
+Schema 迁移采用失败即拒绝策略：遇到未知 schema 版本时直接中止，而不是猜测如何处理。
 """
 
 from __future__ import annotations
@@ -83,10 +82,9 @@ CREATE TABLE IF NOT EXISTS executions (
 );
 """
 
-#: In-place migrations, applied in order from the stored version. Each entry
-#: takes the schema from `version` to `version + 1`. Additive-only by policy:
-#: a migration that cannot be expressed as additive DDL gets a new store, not
-#: a destructive rewrite of this one.
+#: 原地迁移，按存储版本依次应用。每个条目将 schema 从 `version` 迁移到
+#: `version + 1`。按策略只允许追加：无法用追加式 DDL 表达的迁移会创建新的
+#: 存储，而不是破坏性重写当前存储。
 _MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: ("ALTER TABLE executions ADD COLUMN dest_path TEXT NOT NULL DEFAULT ''",),
 }
@@ -101,7 +99,7 @@ def _now() -> str:
 
 
 class SqliteSessionStore:
-    """Implements SessionStorePort on aiosqlite."""
+    """在 aiosqlite 上实现 SessionStorePort。"""
 
     def __init__(self, db: aiosqlite.Connection, artifacts_dir: Path) -> None:
         self._db = db
@@ -146,7 +144,7 @@ class SqliteSessionStore:
     async def close(self) -> None:
         await self._db.close()
 
-    # -- runs ----------------------------------------------------------------
+    # -- 运行 ------------------------------------------------------------------
 
     async def create_run(
         self, run_id: str, workspace: str, workspace_digest: str, goal: str, mode: str
@@ -178,7 +176,7 @@ class SqliteSessionStore:
         rows = await cursor.fetchall()
         return [_row_to_run(row) for row in rows]
 
-    # -- events ----------------------------------------------------------------
+    # -- 事件 ------------------------------------------------------------------
 
     async def append_event(self, run_id: str, event: ApplicationEvent) -> EventEnvelope:
         seq = await self._allocate_seq(run_id)
@@ -222,7 +220,7 @@ class SqliteSessionStore:
             )
         return envelopes
 
-    # -- checkpoints -------------------------------------------------------------
+    # -- 检查点 --------------------------------------------------------------
 
     async def save_checkpoint(self, checkpoint: CheckpointV1) -> None:
         state_json = checkpoint.model_dump_json()
@@ -231,14 +229,13 @@ class SqliteSessionStore:
             "VALUES (?, ?, ?, ?, ?)",
             (checkpoint.run_id, checkpoint.last_seq, state_json, checkpoint.checksum(), _now()),
         )
-        # Drop what this row supersedes, in the same transaction. A checkpoint
-        # is a fast-resume snapshot of the whole transcript so far and one is
-        # written per tool batch, so retaining the chain costs O(run length^2)
-        # bytes — measured at 92% of a real store — while `load_checkpoint`
-        # only ever reads `ORDER BY seq DESC LIMIT 1`. The event journal, not
-        # this table, is the append-only history (ADR 0004).
-        # Strictly `<`: a higher-seq row, which load_checkpoint would still
-        # prefer, is never removed by an out-of-order save.
+        # 在同一事务中删除本行所取代的内容。checkpoint 是截至当前 transcript
+        # 的快速恢复快照，每个工具批次都会写入一个，因此保留整条链的成本
+        # 为 O(run length^2) 字节——实际存储测得占 92%——而 `load_checkpoint`
+        # 只会读取 `ORDER BY seq DESC LIMIT 1`。追加式历史属于事件日志，而
+        # 不是这张表（ADR 0004）。
+        # 严格使用 `<`：更高 seq 的行仍会被 load_checkpoint 优先选择，乱序
+        # 保存绝不能删除它。
         await self._db.execute(
             "DELETE FROM checkpoints WHERE run_id = ? AND seq < ?",
             (checkpoint.run_id, checkpoint.last_seq),
@@ -261,7 +258,7 @@ class SqliteSessionStore:
             raise StoreError(f"checkpoint schema {checkpoint.schema_version} is not supported")
         return checkpoint
 
-    # -- approvals ---------------------------------------------------------------
+    # -- 审批 --------------------------------------------------------------------
 
     async def record_approval(self, approval_id: str, run_id: str, request_digest: str) -> None:
         await self._db.execute(
@@ -278,8 +275,7 @@ class SqliteSessionStore:
         await self._db.commit()
 
     async def consume_approval(self, approval_id: str, request_digest: str) -> bool:
-        """Single-use consumption via conditional update: succeeds at most once
-        and only for the exact digest that was approved."""
+        """通过条件更新进行一次性消费：最多成功一次，并且只接受已审批的精确摘要。"""
         cursor = await self._db.execute(
             "UPDATE approvals SET consumed_at = ? WHERE id = ? AND request_digest = ? "
             "AND decision = ? AND consumed_at IS NULL",
@@ -288,7 +284,7 @@ class SqliteSessionStore:
         await self._db.commit()
         return cursor.rowcount == 1
 
-    # -- executions ----------------------------------------------------------------
+    # -- 执行 --------------------------------------------------------------------
 
     async def record_execution(self, record: ExecutionRecord) -> None:
         now = _now()
@@ -315,9 +311,8 @@ class SqliteSessionStore:
     async def update_execution_state(
         self, call_id: str, effect_state: EffectState, postimage_digest: str = ""
     ) -> None:
-        # An empty postimage must not erase one recorded at STARTED time (the
-        # expected postimage is what recovery classifies against) — matching
-        # the memory store's semantics.
+        # 空 postimage 不能擦除 STARTED 时记录的值（恢复逻辑正是依据预期
+        # postimage 进行分类），这与内存存储的语义一致。
         await self._db.execute(
             "UPDATE executions SET effect_state = ?, "
             "postimage_digest = CASE WHEN ? = '' THEN postimage_digest ELSE ? END, "
@@ -346,7 +341,7 @@ class SqliteSessionStore:
             for row in rows
         ]
 
-    # -- artifacts -------------------------------------------------------------------
+    # -- 构件 --------------------------------------------------------------------
 
     async def put_artifact(self, content: bytes) -> str:
         digest = sha256_bytes(content)
@@ -362,8 +357,8 @@ class SqliteSessionStore:
         return target.read_bytes() if target.exists() else None
 
     async def delete_run(self, run_id: str) -> None:
-        # One implicit transaction: either the run and all its rows go, or
-        # none do (the connection commits once at the end).
+        # 一个隐式事务：运行及其所有行要么全部删除，要么全部保留（连接在
+        # 末尾一次性提交）。
         for table in ("events", "checkpoints", "approvals", "executions"):
             await self._db.execute(f"DELETE FROM {table} WHERE run_id = ?", (run_id,))  # noqa: S608
         await self._db.execute("DELETE FROM runs WHERE id = ?", (run_id,))

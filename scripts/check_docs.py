@@ -1,9 +1,7 @@
-"""Check the documentation contracts that should survive the frozen baseline.
+"""检查冻结基线之后仍应保持的文档契约。
 
-Counts already have dedicated generators. This gate covers the structural facts
-that otherwise drift silently: local Markdown links, the public command surface,
-the package version, and labels that keep historical plans from masquerading as
-current documentation.
+数量已有专门的生成器。本门禁覆盖那些否则会悄悄漂移的结构事实：本地 Markdown
+链接、公开命令界面、包版本，以及防止历史计划冒充当前文档的标签。
 
     uv run python scripts/check_docs.py
 """
@@ -49,7 +47,7 @@ CLI_END = "<!-- END CLI COMMAND SURFACE -->"
 
 
 def _local_link_targets(path: Path, text: str) -> list[tuple[str, Path]]:
-    """Return local Markdown link targets and their resolved filesystem paths."""
+    """返回本地 Markdown 链接目标及其解析后的文件系统路径。"""
     targets: list[tuple[str, Path]] = []
     prose = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
     prose = re.sub(r"`[^`\n]+`", "", prose)
@@ -57,8 +55,8 @@ def _local_link_targets(path: Path, text: str) -> list[tuple[str, Path]]:
         raw = match.group(1).strip()
         if raw.startswith("<") and raw.endswith(">"):
             raw = raw[1:-1]
-        # A Markdown title follows whitespace. Local paths in this repository
-        # contain no unescaped spaces, so the first token is the target.
+        # Markdown 标题后面跟着空白。仓库中的本地路径不含未转义的空格，因此
+        # 第一个 token 就是目标路径。
         target = raw.split(maxsplit=1)[0]
         if not target or target.startswith(("#", "http://", "https://", "mailto:")):
             continue

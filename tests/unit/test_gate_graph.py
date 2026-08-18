@@ -1,9 +1,8 @@
-"""The quality gates are declared once and selected by mode.
+"""质量门禁只声明一次，并按模式选择。
 
-CI and the local command list used to be two hand-maintained copies of the same
-sequence, which drift silently: a gate added to one is simply absent from the
-other until something ships broken. Declaring them once, with dependencies,
-makes "what CI runs" and "what I can run here" the same object.
+CI 和本地命令列表过去是同一序列的两份手工维护副本，会悄悄漂移：某处新增门禁后，
+另一处会一直缺失，直到发布损坏内容。将它们连同依赖声明一次，使“CI 运行什么”和
+“我在这里能运行什么”成为同一个对象。
 """
 
 import pytest
@@ -25,8 +24,8 @@ class TestSelection:
         assert [g.id for g in select(_gates(), "fast")] == ["fmt", "lint"]
 
     def test_selection_pulls_in_dependencies(self) -> None:
-        """Selecting a gate whose dependency is in another mode must not run it
-        without that dependency; the dependency comes along."""
+        """选择一个依赖属于其他模式的门禁时，不得在没有该依赖的情况下运行；依赖会
+        一并加入。"""
         gates = [
             Gate("tests", "pytest", modes=("full",)),
             Gate("cov", "check-coverage", modes=("quick",), needs=("tests",)),
@@ -54,7 +53,7 @@ class TestValidation:
             validate(looped)
 
     def test_the_real_gate_graph_is_valid(self) -> None:
-        """The shipped declaration must itself pass every structural check."""
+        """发布的声明本身必须通过所有结构检查。"""
         from scripts.gates import GATES
 
         validate(GATES)

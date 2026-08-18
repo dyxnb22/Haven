@@ -1,9 +1,8 @@
-"""A follow-up turn continues the same conversation, not a blank run.
+"""后续轮次继续同一段对话，而不是启动空白运行。
 
-Haven ran one goal and stopped; asking again started a fresh RunContext with no
-memory. A session now carries the prior transcript forward so a follow-up sees
-what the first turn did (Phase 2). Durable-run semantics are unchanged: each
-turn is still its own Run with its own checkpoint and budget.
+Haven 运行一个目标后停止；再次提问过去会启动没有记忆的新 RunContext。现在会话
+会向前传递之前的对话记录，因此后续请求能看到第一轮做了什么（Phase 2）。持久
+运行语义不变：每一轮仍是拥有自身检查点和预算的独立 Run。
 """
 
 import sys
@@ -27,8 +26,7 @@ class TestFollowUpInheritsContext:
         assert second.run_id != first.run_id
         assert second.status is RunStatus.SUCCEEDED
 
-        # The first request had no prior conversation; the follow-up request
-        # carries the first turn's answer and the new instruction.
+        # 第一个请求没有既有对话；后续请求携带第一轮的答案和新指令。
         first_msgs = "\n".join(m.content for m in h.model.requests_seen[0].messages)
         follow_msgs = "\n".join(m.content for m in h.model.requests_seen[-1].messages)
         assert "FIRST-ANSWER" not in first_msgs
@@ -49,8 +47,7 @@ class TestFollowUpInheritsContext:
         assert created and created[0].parent_run_id == first.run_id
 
     async def test_a_fresh_budget_per_turn(self, tmp_path: Path) -> None:
-        """A follow-up is new work: its step budget is not the prior turn's
-        remainder."""
+        """后续请求是新的工作：它的步骤预算不是上一轮剩余的预算。"""
         turns = [
             [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
             [text("done"), finish()],
@@ -59,7 +56,7 @@ class TestFollowUpInheritsContext:
         h = Harness(make_repo(tmp_path), turns)
         first = await h.service.run("Read it")
         second = await h.service.continue_run(first.run_id, "Anything else?")
-        # The follow-up ran its own step, not continuing the first turn's count.
+        # 后续轮次使用自己的步骤计数，而不是延续第一轮的计数。
         assert second.steps == 1
 
     async def test_continuing_a_missing_run_is_refused(self, tmp_path: Path) -> None:
@@ -72,7 +69,7 @@ class TestFollowUpInheritsContext:
             raise AssertionError("continuing a run with no checkpoint should raise")
 
     async def test_continuing_a_different_workspace_is_refused(self, tmp_path: Path) -> None:
-        """A follow-up must not graft a run's transcript onto another repo."""
+        """后续请求不得将一次运行的对话记录嫁接到另一个仓库。"""
         import pytest
 
         h = Harness(make_repo(tmp_path), [[text("one"), finish()], [text("two"), finish()]])
@@ -86,14 +83,13 @@ class TestFollowUpInheritsContext:
             await h.service.continue_run(first.run_id, "Second")
 
     async def test_follow_up_diff_excludes_the_first_turns_changes(self, tmp_path: Path) -> None:
-        """The second turn's run diff is run-scoped: it must not re-report the
-        first turn's edit."""
+        """第二轮的运行差异只属于本轮：不得重新报告第一轮的编辑。"""
         from haven.contracts.events import DiffPreview
 
         repo = make_repo(tmp_path)
         turns = [
-            # Turn 1 fully satisfies the gate (edit + diff + check), so it ends
-            # cleanly and does not nudge into the turns meant for turn 2.
+            # 第 1 轮完整满足门禁（edit + diff + check），因此干净结束，不会把
+            # nudge 发到原本属于第 2 轮的 turn 中。
             [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
             [
                 tool(
@@ -108,7 +104,7 @@ class TestFollowUpInheritsContext:
             [tool("c3", "repo.diff"), finish("tool_calls")],
             [tool("c4", "repo.check", recipe_id="always-pass"), finish("tool_calls")],
             [text("Fixed in turn one."), finish()],
-            # Turn 2 (continue): just diff, no new edit.
+            # 第 2 轮（continue）：只有 diff，没有新的 edit。
             [tool("c5", "repo.diff"), finish("tool_calls")],
             [text("Nothing changed this turn."), finish()],
         ]
@@ -123,9 +119,8 @@ class TestFollowUpInheritsContext:
 
 
 class TestProcessToolsAcrossTurns:
-    """repo.check and repo.exec must behave identically on a continued run:
-    same recipes, recreated scratch, no state bleeding from the first turn.
-    The tier-3 audits asked for exactly this regression pin."""
+    """repo.check 和 repo.exec 在持续运行中必须保持一致：使用相同配方、重新创建临时
+    目录，且第一轮状态不得泄漏。Tier 3 审计正是要求固定这一回归。"""
 
     async def test_check_runs_green_again_on_the_follow_up_turn(self, tmp_path: Path) -> None:
         repo = make_repo(tmp_path)

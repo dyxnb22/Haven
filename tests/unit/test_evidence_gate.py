@@ -46,7 +46,7 @@ def test_stale_check_before_last_write_does_not_count() -> None:
         EvidenceLedger()
         .with_check(check(1))
         .with_diff(diff(2))
-        .with_edit(edit(3))  # write after the check invalidates it
+        .with_edit(edit(3))  # 检查后的写入会使检查失效
         .with_diff(diff(4))
     )
     result = evaluate_evidence_gate(ledger)
@@ -62,11 +62,10 @@ def test_failing_check_fails_gate() -> None:
 
 
 class TestUnwinnableGate:
-    """A gate that cannot be satisfied must stop, not nudge.
+    """无法满足的门禁必须停止，而不是继续推动。
 
-    Found live: a case with no registered recipes let the agent edit a file,
-    after which the gate demanded a check that could not exist. The loop nudged
-    until it burned all 48 tool calls and reported the wrong stop reason.
+    实时运行中发现：没有注册配方的用例允许代理编辑文件，之后门禁要求一个不存在
+    的检查。循环不断推动，直到耗尽 48 次工具调用，并报告错误的停止原因。
     """
 
     def test_writes_without_any_recipe_fail_terminally(self) -> None:

@@ -1,4 +1,4 @@
-"""Run report rendering (redacted)."""
+"""运行报告渲染（已脱敏）。"""
 
 from __future__ import annotations
 
@@ -20,29 +20,27 @@ from haven.contracts.events import (
 )
 from haven.ports.session import RunRecord
 
-#: Any environment variable whose name ends with one of these is treated as a
-#: secret, so a provider-specific name (DEEPSEEK_API_KEY, GROQ_TOKEN, ...) is
-#: covered without maintaining a list.
+#: 名称以其中任一后缀结尾的环境变量都会视为秘密，因此无需维护列表就能
+#: 覆盖提供商特定名称（DEEPSEEK_API_KEY、GROQ_TOKEN 等）。
 _SECRET_ENV_SUFFIXES = ("_API_KEY", "_KEY", "_TOKEN", "_SECRET", "_PASSWORD")
 _MIN_SECRET_LENGTH = 8
 
-#: Backstop for credentials this process never held, so the env sweep above
-#: cannot see them: a key pasted into a goal, one read out of a file by a
-#: tool, or another service's token quoted in model output. Matching is by
-#: the issuer's own published shape, which keeps false positives low —
-#: prose does not accidentally look like `ghp_` + 36 base62 characters.
-#: Deliberately not a general "high entropy string" heuristic: that would
-#: redact digests and diffs, and an export nobody trusts gets read past.
+#: 用于兜底处理本进程从未持有、因而上面的环境变量扫描看不到的凭据：粘贴
+#: 到 goal 中的密钥、工具从文件读取的密钥，或模型输出中引用的其他服务 token。
+#: 按发行方公布的自身格式匹配，从而降低误报——普通 prose 不会意外匹配
+#: `ghp_` + 36 个 base62 字符。
+#: 特意不使用通用的“高熵字符串”启发式：那会遮蔽摘要和 diff，使无人信任
+#: 的导出内容被读过去。
 _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bsk-ant-[A-Za-z0-9_-]{16,}"),  # Anthropic
-    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"),  # OpenAI and compatibles
-    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),  # AWS access key id
-    re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}"),  # GitHub
+    re.compile(r"\bsk-ant-[A-Za-z0-9_-]{16,}"),  # Anthropic 密钥
+    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"),  # OpenAI 及兼容服务密钥
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),  # AWS 访问密钥 ID
+    re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}"),  # GitHub 令牌
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}"),
-    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"),  # Slack
-    re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),  # Google
-    re.compile(r"\bSG\.[A-Za-z0-9_-]{16,}"),  # SendGrid
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),  # PEM/OpenSSH block
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"),  # Slack 令牌
+    re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),  # Google API 密钥
+    re.compile(r"\bSG\.[A-Za-z0-9_-]{16,}"),  # SendGrid API 密钥
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),  # PEM/OpenSSH 密钥块
 )
 
 
@@ -52,19 +50,17 @@ def _secret_values() -> list[str]:
         for name, value in os.environ.items()
         if name.upper().endswith(_SECRET_ENV_SUFFIXES) and len(value) >= _MIN_SECRET_LENGTH
     ]
-    # Longest first, so a secret that contains another is not partially masked.
+    # 按长度从长到短排列，避免包含其他秘密的字符串只被部分遮蔽。
     return sorted(set(values), key=len, reverse=True)
 
 
 def _redact(text: str) -> str:
-    """Mask credentials in a rendered report.
+    """遮盖渲染报告中的凭据。
 
-    Two passes, because they fail differently: the env sweep catches this
-    process's own secrets exactly (no false positives, but blind to anything
-    it never held), and the pattern sweep catches well-known credential
-    shapes from anywhere (a key pasted into a goal, one a tool read out of a
-    file). Neither is complete, and this is a redaction pass on an artifact —
-    not a reason to put secrets in front of the agent.
+    分两轮处理，因为两者的失效方式不同：环境变量扫描可以精确捕获当前进程自身
+    的秘密（没有误报，但看不到进程从未持有的内容）；模式扫描则能从任意位置捕获
+    常见凭据形状（例如粘贴到目标中的密钥，或工具从文件读出的密钥）。两者都不
+    完整；这是对构件进行脱敏的步骤，并不意味着应该把秘密交给代理。
     """
     for value in _secret_values():
         if value in text:

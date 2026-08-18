@@ -1,4 +1,4 @@
-"""The repo.exec argument contract: argv only, bounded, no shell string."""
+"""repo.exec 参数契约：仅接受有界 argv，不接受 shell 字符串。"""
 
 import pytest
 from pydantic import ValidationError
@@ -12,8 +12,8 @@ class TestRegistration:
         assert ARGS_MODELS["repo.exec"] is RepoExecArgs
 
     def test_tool_version_reflects_the_changed_tool_set(self) -> None:
-        # Bumped as the tool set grew: "1" pre-exec, "2" added repo.exec,
-        # "3" added repo.delete and repo.move, "4" added repo.apply_patch.
+        # 随工具集增长而递增："1" 表示 exec 之前，"2" 加入 repo.exec，
+        # "3" 加入 repo.delete 和 repo.move，"4" 加入 repo.apply_patch。
         assert TOOL_VERSION == "4"
 
     def test_schema_is_published_to_the_model(self) -> None:
@@ -50,7 +50,7 @@ class TestValidation:
             RepoExecArgs(argv=("ls", "x" * 5000))
 
     def test_a_command_string_is_not_accepted_as_argv(self) -> None:
-        """The model must not be able to smuggle a shell line into one item."""
+        """模型不得将一整行 shell 命令偷塞进单个参数。"""
         failure = ToolRegistry().validate("repo.exec", '{"argv": "rm -rf / && echo pwned"}')
         assert isinstance(failure, ValidationFailure)
         assert failure.code == "invalid_arguments"

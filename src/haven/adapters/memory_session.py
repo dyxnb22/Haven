@@ -1,4 +1,4 @@
-"""In-memory session store for tests and offline eval (same contract as SQLite)."""
+"""用于测试和离线评估的内存会话存储（与 SQLite 契约相同）。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ def _now() -> str:
 
 
 class MemorySessionStore:
-    """Implements SessionStorePort in process memory."""
+    """在进程内存中实现 SessionStorePort。"""
 
     def __init__(self) -> None:
         self.runs: dict[str, RunRecord] = {}
@@ -74,9 +74,8 @@ class MemorySessionStore:
         return list(self.events.get(run_id, []))
 
     async def save_checkpoint(self, checkpoint: CheckpointV1) -> None:
-        # Keep the highest-seq snapshot, matching the SQLite store's
-        # `ORDER BY seq DESC LIMIT 1` read. An out-of-order save must not
-        # move resume backwards onto an older transcript.
+        # 保留 seq 最高的快照，与 SQLite 存储的 `ORDER BY seq DESC LIMIT 1` 读取
+        # 逻辑一致。乱序保存不能让恢复退回到较旧的 transcript。
         existing = self.checkpoints.get(checkpoint.run_id)
         if existing is not None and existing.last_seq > checkpoint.last_seq:
             return

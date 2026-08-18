@@ -1,37 +1,30 @@
-"""RunService: owns the bounded agent loop for one run.
+"""RunService：负责一次运行的有界代理循环。
 
-Loop shape: Model -> Tool(s) -> Observation -> Model ... until the program
-decides to stop. Every stop has exactly one reason; success additionally
-requires the Evidence Gate to pass.
+循环形态为 Model -> Tool(s) -> Observation -> Model……直到程序决定停止。每次停止都
+只有一个原因；要判定成功，还必须通过证据门禁。
 
-One turn of the loop (see `_drive`) does, in order:
+循环的一轮（见 `_drive`）按以下顺序执行：
 
-    1. budget check           - steps/tools/wall-time/tokens/cost ceilings
-                                (domain/budget.py); a breach stops the run.
-    2. steering delivery      - user input queued via `steer()` becomes a
-                                plain user message at this boundary, never
-                                mid-stream (ADR 0020).
-    3. context build          - ContextBuilder selects head/history/tail,
-                                compacts if over budget, and reports the
-                                segments to the trace (`context.built`).
-    4. model stream           - provider events are re-emitted live to the
-                                UI; disconnects mid-stream are retried in a
-                                bounded way (`_stream_model`).
-    5a. tool calls            - handed to the ToolPipeline one at a time;
-                                results append to the transcript; a stuck
-                                loop (3 identical call+result) stops the run.
-    5b. no tool calls         - the text is the candidate final answer; a
-                                `finish_reason == "length"` answer triggers a
-                                bounded continuation rather than acceptance.
-    6. checkpoint             - durable snapshot for crash recovery.
-    7. finish                 - `_finish` applies the Evidence Gate: a run
-                                that edited files succeeds only with a diff
-                                plus a green check recorded after the last
-                                write; otherwise it fails with a stop reason.
+    1. 预算检查              - 步数/工具调用/墙上时间/token/成本上限
+                              （domain/budget.py）；超出任一上限就停止运行。
+    2. 投递 steering         - 通过 `steer()` 排队的用户输入在此边界变成普通 user 消息，
+                              绝不会插入流式输出中途（ADR 0020）。
+    3. 构建上下文            - ContextBuilder 选择头部/历史/尾部，超预算时执行压缩，
+                              并将分段报告到轨迹（`context.built`）。
+    4. 模型流                - 提供商事件实时重新发送给 UI；流中途断开时由
+                              `_stream_model` 以有界方式重试。
+    5a. 工具调用             - 逐个交给 ToolPipeline；结果追加到 transcript；三次相同
+                              调用加结果构成卡循环时停止运行。
+    5b. 没有工具调用         - 文本成为候选最终答案；`finish_reason == "length"` 时执行
+                              有界续写，而不是直接接受答案。
+    6. 检查点                - 为崩溃恢复保存持久化快照。
+    7. 完成                  - `_finish` 应用证据门禁：编辑过文件的运行只有在最后一次
+                              写入之后记录了 diff 和通过的 check 时才成功，否则以停止
+                              原因失败。
 
-Multi-turn sessions: `continue_run` restores the checkpointed transcript and
-appends a follow-up (fork = continue from any older run id, ADR 0015/0020);
-`rewind` (RecoveryService) is the user-level undo of a finished run's files.
+多轮会话：`continue_run` 恢复带检查点的 transcript 并追加后续请求（fork 表示从任意
+较早的运行 ID 继续，见 ADR 0015/0020）；`rewind`（RecoveryService）是对已完成运行
+文件的用户级撤销。
 """
 
 from __future__ import annotations
@@ -99,43 +92,38 @@ from haven.ports.workspace import WorkspacePort
 
 MAX_EVIDENCE_NUDGES = 2
 
-#: An answer the provider cut at its output-token limit is continued at most
-#: this many times before Haven proceeds with the partial text (with a warning),
-#: so a model that truncates forever cannot spend the whole budget.
+#: 对于被提供商的输出 token 限制截断的答案，最多续写这么多次；之后 Haven
+#: 会带着警告继续使用部分文本，从而避免一个不停截断的模型耗尽全部预算。
 MAX_OUTPUT_CONTINUATIONS = 2
 
-#: A reply with neither text nor tool calls (e.g. a reasoning-only response) is
-#: re-prompted this many times before the run stops for lack of progress.
+#: 对于既没有文本也没有工具调用的回复（例如只有推理的响应），会重新提示
+#: 这么多次，之后运行因没有进展而停止。
 MAX_EMPTY_REPLIES = 2
 
-#: A provider `context_overflow` (the char budget overshot the real token
-#: window) is recovered by shrinking the budget and rebuilding this many times
-#: before the run fails, so a genuinely un-fitting transcript still stops.
+#: 提供商返回的 `context_overflow`（字符预算超过实际 token 窗口）会通过缩小
+#: 预算并重建上下文来恢复，最多进行这么多次；之后运行失败，因此确实无法
+#: 放入的 transcript 仍会导致停止。
 MAX_CONTEXT_OVERFLOW_RETRIES = 2
-#: How much of the budget survives each overflow retry. Aggressive enough that
-#: a couple of shrinks clear a real overshoot; the builder floors it so the
-#: fixed head always fits.
+#: 每次溢出重试后保留多少预算。缩减幅度足以让几次缩小消除真实的超出；
+#: builder 会设置下限，以保证固定头部始终放得下。
 CONTEXT_OVERFLOW_SHRINK = 0.6
 
-#: Transient provider failures are common enough on real networks that losing a
-#: whole run to one is the wrong default. Measured: 3 of 8 live runs hit a
-#: ConnectError before any token arrived, and 2 of 31 real-repo cases later died
-#: on one the adapter was still classifying as non-retryable — this loop is only
-#: as good as that classification.
+#: 在真实网络中，提供商的临时故障很常见，因此因一次故障丢掉整个运行不应是
+#: 默认行为。实测：8 次在线运行中有 3 次在收到任何 token 前遇到 ConnectError，
+#: 31 个真实仓库案例中另有 2 个后来因一次适配器仍判定为不可重试的错误而失败——
+#: 这个循环的效果取决于该分类是否准确。
 MODEL_RETRY_ATTEMPTS = 2
 MODEL_RETRY_BASE_DELAY = 1.0
-#: A provider may ask (via `Retry-After`) for a wait longer than this, but a
-#: bounded retry loop honoring an arbitrary value could block a run for minutes
-#: past its wall-clock budget (checked only between turns, not during a sleep).
-#: Beyond this ceiling the run should fail and be resumed, not hang.
+#: 提供商可能通过 `Retry-After` 要求比此值更长的等待，但遵守任意时长的有界
+#: 重试循环可能让运行在墙上时钟预算之后仍阻塞数分钟（预算只在轮次之间检查，
+#: 睡眠期间不检查）。超过此上限后，运行应失败并等待恢复，而不是一直挂起。
 MODEL_RETRY_MAX_DELAY = 60.0
 
 
 def _retry_delay(attempt: int, retry_after_s: float | None) -> float:
-    """The wait before the next model retry: the longer of exponential backoff
-    and any provider-requested `Retry-After`, capped at `MODEL_RETRY_MAX_DELAY`.
-    Obeying `Retry-After` stops a fixed backoff from hammering a provider that
-    asked for a longer pause; the cap stops one header from blocking a run."""
+    """下一次模型重试前的等待时间：指数退避与提供商要求的 `Retry-After` 两者取较大值，
+    但不超过 `MODEL_RETRY_MAX_DELAY`。遵守 `Retry-After` 可以避免固定退避过短、持续
+    冲击要求更长等待的提供商；上限则避免某个响应头阻塞整个运行。"""
     backoff: float = MODEL_RETRY_BASE_DELAY * (2**attempt)
     wait = backoff if retry_after_s is None else max(backoff, retry_after_s)
     return min(wait, MODEL_RETRY_MAX_DELAY)
@@ -143,7 +131,7 @@ def _retry_delay(attempt: int, retry_after_s: float | None) -> float:
 
 @dataclass(slots=True)
 class _StreamProgress:
-    """Whether a stream produced anything before failing; gates retry safety."""
+    """记录流在失败前是否产生过内容，用于决定重试是否安全。"""
 
     started: bool = False
 
@@ -160,8 +148,7 @@ class RunOutcome:
     output_tokens: int
     cached_input_tokens: int
     cost_usd: float
-    #: False when no rate card exists for the model, so `cost_usd` is a
-    #: placeholder rather than a measurement.
+    #: 模型没有费率卡时为 False，此时 `cost_usd` 是占位值而不是测量结果。
     cost_known: bool
     usage_estimated: bool
     final_text: str
@@ -169,12 +156,11 @@ class RunOutcome:
 
 @dataclass
 class _AnswerAssembly:
-    """Cross-turn state for assembling one final answer.
+    """用于组装一个最终答案的跨轮状态。
 
-    `parts` holds the pieces of an answer the provider truncated at its
-    output-token limit, stitched across bounded continuations; the counters
-    bound the two recovery loops; `final_text` is the last assembled answer,
-    which every stop path reports as the run's final text.
+    `parts` 保存提供商因输出 token 上限而截断的答案片段，并在有界续写之间拼接；计数器
+    限制两条恢复循环；`final_text` 是最后组装出的答案，每条停止路径都会将其作为运行
+    的最终文本报告。
     """
 
     parts: list[str] = field(default_factory=list)
@@ -210,26 +196,23 @@ class RunService:
         self._emitter = emitter
         self._mode = mode
         self._budget = budget
-        # Per-model defaults; an unknown model inherits Haven's historical
-        # behavior rather than numbers guessed from a similar name.
+        # 每个模型的默认值；未知模型继承 Haven 的历史行为，而不是使用根据
+        # 相似名称猜出的数字。
         self._profile = profile_for(model.model_name)
-        # An eval/A/B override of the profile's context budget (0 = use the
-        # profile). Lets the compaction A/B force compaction early by shrinking
-        # the budget without inventing a fake model.
+        # 评估/A-B 对 profile 上下文预算的覆盖值（0 = 使用 profile）。这样压缩
+        # A-B 可以通过缩小预算来强制提前压缩，而无需虚构一个模型。
         self._context_chars = context_chars_override or self._profile.max_context_chars
-        # Native prefix continuation is a model capability *and* an endpoint
-        # fact: DeepSeek accepts `prefix: true` only on its beta base URL. The
-        # composition root resolves both and passes the verdict here; None means
-        # "no deployment opinion", so the profile's own flag decides.
+        # 原生前缀续写既是模型能力，也是 endpoint 事实：DeepSeek 只在 beta base
+        # URL 接受 `prefix: true`。组合根解析两者后将结论传到这里；None 表示
+        # “没有部署层面的判断”，因此由 profile 自己的标志决定。
         self._supports_prefix = (
             self._profile.supports_assistant_prefix
             if supports_prefix_continuation is None
             else supports_prefix_continuation
         )
-        # Configured rates win; otherwise fall back to the model's published
-        # rate card. Reporting a documented price for the model actually in use
-        # beats reporting $0.00, but it is a published figure and not an
-        # invoice — see the dated comment on the profile.
+        # 已配置的费率优先，否则回退到模型公布的费率卡。报告实际使用模型的
+        # 已记录价格优于报告 $0.00，但它是公布值而不是发票金额——见 profile
+        # 中带日期的注释。
         self._pricing = pricing if pricing is not None else self._profile.pricing
         self._git_branch = git_branch
         self._git_commit = git_commit
@@ -237,14 +220,12 @@ class RunService:
         self._recipes = recipes
         self._registry = ToolRegistry()
         self._launcher = launcher
-        # Steering: user input accepted while a run is active, delivered only
-        # at a turn boundary so the tool channel is never interrupted
-        # mid-effect. Journaled on arrival (durable), drained by the loop.
+        # Steering：运行活跃时接受用户输入，但只在轮次边界投递，避免工具通道
+        # 在副作用进行中被打断。到达时写入日志（持久化），由循环取出处理。
         self._steer_queue: deque[str] = deque()
         self._active_run_id: str | None = None
-        # One scratch directory per service, removed when a run finishes. It
-        # exists so sandboxed tools that must write somewhere do not need write
-        # access outside the workspace.
+        # 每个服务一个临时目录，运行结束时删除。它使必须写入某处的沙箱工具
+        # 不需要获得工作区之外的写权限。
         self._scratch_dir = Path(tempfile.mkdtemp(prefix="haven-scratch-"))
         self._pipeline = ToolPipeline(
             workspace=workspace,
@@ -259,7 +240,7 @@ class RunService:
             scratch_dir=self._scratch_dir,
         )
 
-    # -- entry points -------------------------------------------------------
+    # -- 入口 -----------------------------------------------------------------
 
     async def run(self, goal: str) -> RunOutcome:
         goal = goal.strip()
@@ -276,13 +257,11 @@ class RunService:
         return await self._drive(ctx)
 
     async def continue_run(self, previous_run_id: str, follow_up: str) -> RunOutcome:
-        """Start a follow-up turn that inherits the prior run's transcript.
+        """启动继承此前运行 transcript 的后续轮次。
 
-        The prior conversation is carried forward so the model has context, but
-        this is a fresh Run: a new id, a fresh budget, and a fresh evidence
-        ledger, so the follow-up's success is judged on its own edits. The
-        session's head goal stays stable (good for the prompt cache) and the
-        follow-up is threaded in as a user message.
+        之前的对话会被带入，使模型拥有上下文，但这是一次全新的 Run：新的 ID、新的
+        预算和新的证据账本，因此后续轮次的成功只根据其自身编辑来判断。会话的头部目标
+        保持稳定（有利于提示缓存），后续内容作为 user 消息接入。
         """
         follow_up = follow_up.strip()
         if not (3 <= len(follow_up) <= 4000):
@@ -292,18 +271,17 @@ class RunService:
         if checkpoint is None:
             raise ValueError(f"no checkpoint for run {previous_run_id!r}; cannot continue it")
 
-        # Refuse to graft a run's transcript and file state onto a different
-        # repository: recovery makes this check, and a follow-up must too.
+        # 拒绝将某次运行的 transcript 和文件状态嫁接到另一个仓库：恢复流程
+        # 会执行此检查，后续轮次也必须执行。
         if checkpoint.workspace_digest != self._workspace.workspace_digest:
             raise ValueError(
                 "workspace identity changed since the run being continued; "
                 "continue it from the same workspace"
             )
 
-        # A follow-up is a new turn: its run diff must show only its own
-        # changes, so the run-scoped originals from the prior turn are reset
-        # (harmless in a fresh process, load-bearing in the long-lived TUI
-        # workspace that a session reuses).
+        # 后续轮次是新的 turn：它的运行 diff 必须只显示自身的改动，因此要重置
+        # 上一轮的运行范围原始内容（在新进程中无害，但在会话复用的长期 TUI
+        # 工作区中是必需的）。
         self._workspace.restore_originals({})
 
         transcript = list(checkpoint.messages)
@@ -350,7 +328,7 @@ class RunService:
         )
 
     async def resume(self, ctx: RunContext) -> RunOutcome:
-        """Continue a recovered run context (built by RecoveryService)."""
+        """继续由 RecoveryService 构建的已恢复运行上下文。"""
         await self._emitter.emit(
             ctx.run_id,
             Notice(run_id=ctx.run_id, level="info", message="run resumed from checkpoint"),
@@ -359,18 +337,15 @@ class RunService:
 
     @property
     def active_run_id(self) -> str | None:
-        """The run currently being driven, if any."""
+        """返回当前正在驱动的运行 ID；没有运行时返回 None。"""
         return self._active_run_id
 
     async def steer(self, text: str) -> bool:
-        """Queue user input for the active run, delivered at the next turn
-        boundary.
+        """为活跃运行排队用户输入，并在下一轮边界投递。
 
-        Nothing is interrupted: the current model call and any in-flight tool
-        execution finish untouched; the text becomes a user message before the
-        next model request. Returns False when no run is active (the caller
-        should start a run or a follow-up instead). The queued text is
-        journaled immediately, so it survives a crash.
+        当前模型调用和正在执行的工具都不会被打断；文本会在下一次模型请求前变成 user
+        消息。没有活跃运行时返回 False（调用方应改为启动运行或后续轮次）。排队文本
+        会立即写入日志，因此可以跨越崩溃保留。
         """
         text = text.strip()
         if not text or self._active_run_id is None:
@@ -388,13 +363,12 @@ class RunService:
             drained.append(self._steer_queue.popleft())
         return drained
 
-    # -- the loop -------------------------------------------------------------
+    # -- 循环 ------------------------------------------------------------------
 
     async def _drive(self, ctx: RunContext) -> RunOutcome:
-        """The turn loop. The numbered stages are documented in the module
-        docstring. Every RunOutcome is minted by `_finish` (directly, or
-        inside `_handle_tool_calls`), so there is exactly one place where a
-        stop reason and the Evidence Gate are applied."""
+        """轮次循环。编号阶段记录在模块文档字符串中。每个 RunOutcome 都由 `_finish` 生成
+        （直接生成，或在 `_handle_tool_calls` 内生成），因此停止原因和证据门禁只有
+        一个应用位置。"""
         builder = ContextBuilder(
             goal=ctx.goal,
             tools=tool_schemas(),
@@ -406,13 +380,12 @@ class RunService:
             reasoning_effort=self._profile.reasoning_effort,
         )
         stuck = StuckLoopDetector()
-        # Digest of the last logged request envelope, so an unchanged one is not
-        # re-logged every step.
+        # 最近一次记录的 request envelope 摘要，因此未变化的 envelope 不会
+        # 每一步都重复写日志。
         envelope_digest = ""
         started = time.monotonic()
         elapsed_base = ctx.usage.wall_time_seconds
-        # Output-truncation and empty-reply recovery state (a truncated answer
-        # must never be silently accepted as a complete one).
+        # 输出截断和空回复的恢复状态（截断答案绝不能被静默接受为完整答案）。
         answer = _AnswerAssembly()
 
         self._active_run_id = ctx.run_id
@@ -429,9 +402,8 @@ class RunService:
                     ctx.move_to(RunStatus.RUNNING_MODEL)
                 await self._emitter.emit(ctx.run_id, StepStarted(run_id=ctx.run_id, step=step))
 
-                # Turn boundary: queued steering becomes ordinary user
-                # messages before the next model request — never mid-stream,
-                # never mid-tool-call.
+                # 轮次边界：排队中的 steering 会在下一次模型请求前变成普通 user
+                # 消息——绝不在流式输出或工具调用中途插入。
                 for steered in self._drain_steering():
                     ctx.transcript.append(
                         ModelMessage(role="user", content=f"User update: {steered}")
@@ -445,10 +417,9 @@ class RunService:
                         ),
                     )
 
-                # Build + stream, with bounded recovery from a provider context
-                # overflow: a 400 there means the char budget overshot the real
-                # token window, so shrink the budget (forcing more compaction)
-                # and rebuild rather than failing the run.
+                # 构建并流式请求，且对提供商上下文溢出进行有界恢复：这里的 400 表示
+                # 字符预算超过了实际 token 窗口，因此要缩小预算（强制进行更多压缩）
+                # 并重建请求，而不是让运行失败。
                 overflow_retries = 0
                 while True:
                     request, segments = builder.build(ctx.transcript, ctx.usage, ctx.plan)
@@ -534,9 +505,9 @@ class RunService:
                         return stopped
                     continue
 
-                # No tool calls: the reply is the candidate final answer.
-                # Recover a truncated or empty one first (bounded), then let
-                # the Evidence Gate decide — the model's claim never does.
+                # 没有工具调用：该回复是候选最终答案。
+                # 先有界地恢复截断或空回复，再由 Evidence Gate 决定——模型的声明
+                # 永远不能代替门禁判断。
                 recovered = await self._recover_incomplete_reply(ctx, result, answer)
                 if isinstance(recovered, RunOutcome):
                     return recovered
@@ -551,23 +522,21 @@ class RunService:
         finally:
             self._active_run_id = None
             if self._steer_queue:
-                # Undelivered steering must not leak into a later run; the
-                # queued events stay in the journal for the record.
+                # 未投递的 steering 不能泄漏到后续运行；排队事件会留在日志中
+                # 作为记录。
                 self._steer_queue.clear()
             shutil.rmtree(self._scratch_dir, ignore_errors=True)
 
     async def _recover_incomplete_reply(
         self, ctx: RunContext, result: ModelResult, answer: _AnswerAssembly
     ) -> RunOutcome | bool:
-        """The truncation / empty-reply recovery machine, both loops bounded.
+        """截断/空回复恢复机制，两条循环都有上限。
 
-        Returns a RunOutcome to stop the run (repeated empty replies), True
-        when a continuation or re-prompt was queued (take another turn), or
-        False when the reply is complete enough to face the Evidence Gate.
+        返回 RunOutcome 表示停止运行（重复的空回复）；返回 True 表示已排队续写或重新
+        提示（继续下一轮）；返回 False 表示回复已经完整到足以进入证据门禁。
         """
-        # An answer cut off at the provider's output-token limit is not a
-        # final answer. Ask for the rest — bounded, because a model that
-        # truncates forever must not be able to spend the budget.
+        # 被提供商输出 token 限制截断的答案不是最终答案。请求它继续——次数
+        # 必须有界，不能让一个不断截断的模型耗尽预算。
         if result.finish_reason == "length" and answer.continuations < MAX_OUTPUT_CONTINUATIONS:
             answer.continuations += 1
             answer.parts.append(result.text)
@@ -583,18 +552,15 @@ class RunService:
                 ),
             )
             if self._supports_prefix:
-                # Native prefix continuation (ADR 0022): re-issue with the
-                # partial answer as an assistant *prefix* the model extends in
-                # place — no seam duplication, no extra user turn. The adapter
-                # recognises a trailing assistant message and sends it with
-                # the provider's prefix flag.
+                # 原生前缀续写（ADR 0022）：将部分答案作为 assistant“前缀”重新
+                # 发出，让模型原地扩展——没有接缝重复，也不增加 user 轮次。适配器
+                # 会识别末尾的 assistant 消息，并连同提供商的 prefix 标志发送。
                 ctx.transcript.append(
                     ModelMessage(role="assistant", content=result.text, is_prefix=True)
                 )
             else:
-                # Conversational shim: ask the next turn to continue. Can
-                # duplicate at the seam and costs a full extra request, but
-                # needs no provider-specific support.
+                # 对话式垫片：要求下一轮继续。接缝处可能重复内容，而且会多消耗
+                # 一次完整请求，但不需要提供商特定的支持。
                 ctx.transcript.append(
                     ModelMessage(
                         role="user",
@@ -608,9 +574,8 @@ class RunService:
                 )
             return True
 
-        # A reply with neither text nor tool calls (a reasoning-only response)
-        # would sail through the no-edit gate as an empty answer. Re-prompt,
-        # bounded.
+        # 既没有文本也没有工具调用的回复（只有推理的响应）会以空答案通过
+        # no-edit 门禁。重新提示，但次数必须有界。
         if not result.text.strip() and not answer.parts:
             answer.empty_replies += 1
             if answer.empty_replies > MAX_EMPTY_REPLIES:
@@ -650,11 +615,10 @@ class RunService:
     async def _finish_with_gate(
         self, ctx: RunContext, result: ModelResult, answer: _AnswerAssembly
     ) -> RunOutcome | None:
-        """Assemble the final answer and apply the Evidence Gate.
+        """组装最终答案并应用证据门禁。
 
-        Returns the run's outcome, or None when the gate rejected the answer
-        and the model was nudged toward producing evidence (bounded by
-        MAX_EVIDENCE_NUDGES) — the caller takes another turn.
+        返回运行结果；如果门禁拒绝了答案，并且已经向模型发送提示要求其生成证据
+        （次数受 MAX_EVIDENCE_NUDGES 限制），则返回 None，由调用方继续下一轮。
         """
         answer.final_text = "".join((*answer.parts, result.text))
         answer.parts = []
@@ -672,8 +636,8 @@ class RunService:
                 ),
             )
         ctx.move_to(RunStatus.VERIFYING)
-        # Re-read the accumulated diff so the review sees what is on disk
-        # now, not what a stale event recorded.
+        # 重新读取累计 diff，使审查看到的是当前磁盘内容，而不是过时事件
+        # 记录的内容。
         diff_text = (await self._workspace.run_diff()).diff if ctx.ledger.has_edits else ""
         gate = evaluate_evidence_gate(
             ctx.ledger, diff_text, verification_available=bool(self._recipes)
@@ -687,8 +651,8 @@ class RunService:
             )
 
         if gate.terminal:
-            # Nudging here would loop until the budget dies without any
-            # possibility of success, and report the wrong reason.
+            # 在这里发送 nudge 会循环到预算耗尽，却没有任何成功可能，还会报告
+            # 错误的停止原因。
             await self._emitter.emit(
                 ctx.run_id,
                 Notice(run_id=ctx.run_id, level="error", message=gate.detail),
@@ -739,12 +703,11 @@ class RunService:
         calls: tuple[ToolCallProposal, ...],
         stuck: StuckLoopDetector,
     ) -> RunOutcome | None:
-        """Execute a turn's tool calls strictly in order through the pipeline.
+        """严格按顺序通过流水线执行一轮中的工具调用。
 
-        Returns a RunOutcome to stop the run (tool budget exhausted, an
-        unknown effect, a stuck loop) or None to hand the observations back
-        to the model. Deliberately sequential: parallel side effects would
-        make approvals, preimage pins, and the journal order ambiguous.
+        返回 RunOutcome 表示停止运行（工具预算耗尽、未知副作用或卡循环），返回 None
+        则将观察结果交还模型。这里有意采用串行执行：并行副作用会使审批、preimage
+        固定值和日志顺序产生歧义。
         """
         for call in calls:
             if ctx.usage.tool_calls >= ctx.budget.max_tool_calls:
@@ -797,13 +760,11 @@ class RunService:
     async def _record_envelope(
         self, ctx: RunContext, step: int, request: ModelRequest, previous: str
     ) -> str:
-        """Journal the model-visible request envelope when it changes.
+        """在模型可见的请求信封发生变化时记录日志。
 
-        Returns the current digest so the caller can compare on the next step.
-        The system prompt and the tool set are stable across a run by design
-        (ADR 0008), so in practice this writes one event per run — and writes a
-        second one precisely when something that shapes the model's behaviour
-        moved, which is the case worth seeing in a trace.
+        返回当前摘要，使调用方可以在下一步比较。系统提示和工具集按设计在一次运行中
+        保持稳定（ADR 0008），因此实际通常每次运行只写入一个事件；只有在影响模型行为
+        的内容发生移动时才会写入第二个事件，而这正是轨迹中值得关注的情况。
         """
         system = next((m.content for m in request.messages if m.role == "system"), "")
         tool_names = tuple(tool.name for tool in request.tools)
@@ -832,17 +793,15 @@ class RunService:
         )
         return digest
 
-    # -- model streaming ---------------------------------------------------------
+    # -- 模型流式输出 ------------------------------------------------------------
 
     async def _stream_model(self, ctx: RunContext, step: int, request: ModelRequest) -> ModelResult:
-        """Stream one model turn, retrying only when it is provably safe.
+        """流式处理一轮模型调用，只在能够证明安全时重试。
 
-        A model call has no side effects, so retrying a connection failure
-        cannot double-apply anything — unlike a tool call, which is never
-        retried. A partially streamed turn is also safe to retry: the assembled
-        text and tool calls are local to the attempt and discarded, and nothing
-        reaches the transcript or the tool pipeline until the turn completes.
-        Only the already-displayed text is stale, so the UI is told to reset.
+        模型调用没有副作用，因此重试连接失败不会重复应用任何操作——工具调用则从不
+        重试。部分流式输出的轮次也可以安全重试：组装中的文本和工具调用只属于当前尝试，
+        会被丢弃；在轮次完成前，任何内容都不会进入 transcript 或工具流水线。只有已经
+        展示给用户的文本会过时，因此会通知 UI 重置。
         """
         for attempt in range(MODEL_RETRY_ATTEMPTS + 1):
             progress = _StreamProgress()
@@ -897,10 +856,9 @@ class RunService:
                     AssistantDelta(run_id=ctx.run_id, step=step, text=event.text),
                 )
             elif isinstance(event, ReasoningDelta):
-                # Shown so a long think is visible, and captured for wire replay
-                # (ADR 0014) — but deliberately kept out of `text`: reasoning is
-                # not the answer and must never re-enter the transcript as
-                # assistant content.
+                # 用于让用户看到长时间推理，也用于线协议重放（ADR 0014）；但特意
+                # 不放进 `text`：推理不是答案，绝不能作为 assistant 内容重新进入
+                # transcript（对话记录）。
                 reasoning_parts.append(event.text)
                 await self._emitter.emit(
                     ctx.run_id,
@@ -929,7 +887,7 @@ class RunService:
         input_tokens = usage.input_tokens
         output_tokens = usage.output_tokens
         if input_tokens == 0 and output_tokens == 0:
-            # Provider gave no usage: estimate conservatively and say so.
+            # 提供商没有返回用量：采用保守估算，并明确说明这一点。
             estimated = True
             input_tokens = sum(len(m.content) for m in request.messages) // 4
             output_tokens = max(1, len(result.text) // 4)
@@ -942,7 +900,7 @@ class RunService:
             cached_input_tokens=usage.cached_input_tokens,
         )
 
-    # -- persistence -------------------------------------------------------------
+    # -- 持久化 ------------------------------------------------------------------
 
     async def _checkpoint(self, ctx: RunContext) -> None:
         ctx.last_seq = self._emitter.last_seq(ctx.run_id)
@@ -974,15 +932,14 @@ class RunService:
         final_text: str,
         gate_reason: str = "",
     ) -> RunOutcome:
-        """The single exit: every run ends here exactly once.
+        """唯一出口：每次运行都恰好在这里结束一次。
 
-        Persists the final status, checkpoints, and emits `run.finished`.
-        Callers that claim SUCCEEDED have already passed the Evidence Gate
-        (see the final-answer branch in `_drive`); this method never upgrades
-        a status, it only records the decision and its stop reason.
+        持久化最终状态和检查点，并发出 `run.finished`。声称 SUCCEEDED 的调用方已经
+        通过证据门禁（见 `_drive` 的最终答案分支）；此方法不会提升状态，只记录决定
+        及其停止原因。
         """
         if ctx.status is not status:
-            ctx.status = status  # direct set: _finish targets are always terminal-ish
+            ctx.status = status  # 直接设置：_finish 的目标始终接近终态
         await self._store.update_run_status(ctx.run_id, status, stop_reason.value)
         await self._checkpoint(ctx)
         await self._emitter.emit(
@@ -1023,7 +980,7 @@ class RunService:
 def build_run_context_from_checkpoint(
     checkpoint: CheckpointV1,
 ) -> RunContext:
-    """Rebuild working state from a checkpoint (used by recovery)."""
+    """根据检查点重建工作状态（供恢复流程使用）。"""
     ctx = RunContext(
         run_id=RunId(checkpoint.run_id),
         goal=checkpoint.goal,
@@ -1036,6 +993,6 @@ def build_run_context_from_checkpoint(
         plan=checkpoint.plan,
         last_seq=checkpoint.last_seq,
     )
-    # Resumed runs continue from the model turn.
+    # 恢复后的运行从模型轮次继续。
     ctx.status = RunStatus.RUNNING_MODEL
     return ctx

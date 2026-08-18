@@ -1,4 +1,4 @@
-"""repo.create: new files only, atomic, and attributed to this run's diff."""
+"""repo.create：只创建新文件，保证原子性，并归因到本次运行的差异。"""
 
 from pathlib import Path
 
@@ -69,7 +69,7 @@ class TestCreate:
             "mod.py", "VALUE = 1", "VALUE = 2", created.postimage_digest
         )
         assert (workspace.root / "mod.py").read_text() == "VALUE = 2\n"
-        # the run diff still compares against "file did not exist"
+        # 运行 diff 仍然会与“文件不存在”进行比较
         run_diff = await workspace.run_diff()
         assert run_diff.files == ("mod.py",)
         assert "+VALUE = 2" in run_diff.diff

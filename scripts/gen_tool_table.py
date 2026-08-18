@@ -1,14 +1,12 @@
-"""Generate the tool/policy table in ARCHITECTURE.md from the policy itself.
+"""根据策略本身生成 ARCHITECTURE.md 中的工具/策略表。
 
-The table answers the question the whole project exists to answer — "why was
-this exact side effect allowed?" — so a transcribed copy that drifts from
-`evaluate_policy` is worse than no table. Every decision below is produced by
-calling the real policy function; only the constraints column is prose, and it
-lives here beside the generator with a completeness guard, so a tool cannot be
-added to the code and left undocumented.
+该表回答整个项目存在所要回答的问题——“为什么允许这个精确的副作用？”——因此
+与 `evaluate_policy` 漂移的手抄副本还不如没有表。下面的每个决定都通过调用真实
+策略函数生成；只有约束列是文字，并且与生成器放在一起，同时有完整性检查，避免
+工具加入代码后没有文档。
 
-    uv run python scripts/gen_tool_table.py            # rewrite the block
-    uv run python scripts/gen_tool_table.py --check    # fail if it drifted
+    uv run python scripts/gen_tool_table.py            # 重写区块
+    uv run python scripts/gen_tool_table.py --check    # 漂移时失败
 """
 
 from __future__ import annotations
@@ -38,8 +36,8 @@ TARGET = ROOT / "docs" / "ARCHITECTURE.md"
 BEGIN = "<!-- BEGIN GENERATED TOOL TABLE (scripts/gen_tool_table.py; do not edit by hand) -->"
 END = "<!-- END GENERATED TOOL TABLE -->"
 
-#: The one column no code can derive: why each tool is safe to offer at all.
-#: Keep each entry to the constraints a reviewer needs, not a description.
+#: 代码无法推导的唯一列：为什么提供每个工具本身是安全的。
+#: 每项只保留审查者需要的约束，不要写成普通描述。
 CONSTRAINTS: dict[str, str] = {
     "repo.list": "workspace-confined, entry cap",
     "repo.search": (
@@ -72,7 +70,7 @@ CONSTRAINTS: dict[str, str] = {
     "task.plan": "touches only run state; no path, no external effect",
 }
 
-#: Which set a tool belongs to, for the class column.
+#: 工具所属的集合，用于 class 列。
 _CLASSES = (
     ("read-only", READ_ONLY_TOOLS),
     ("effect", EFFECT_TOOLS),
@@ -98,11 +96,10 @@ def _class_of(tool: str) -> str:
 
 
 def _decide(tool: str, mode: PermissionMode) -> str:
-    """The real policy's decision for a representative, well-formed proposal.
+    """真实策略对一个有代表性、格式正确的提议所作的决定。
 
-    The facts are the benign case (inside the workspace, no protected path, a
-    registered recipe, a sandbox present) so the table reports the *baseline*
-    friction of each tool rather than a hard deny that any tool would earn.
+    事实采用良性情况（位于工作区内、不触碰受保护路径、已注册配方且存在沙箱），
+    因此表格报告的是每个工具的*基线*摩擦，而不是任何工具都可能获得的硬拒绝。
     """
     facts = ToolFacts(
         tool_name=tool,
@@ -116,7 +113,7 @@ def _decide(tool: str, mode: PermissionMode) -> str:
 
 
 def rows_for_tools(tools: set[str] | None = None) -> list[Row]:
-    """One row per tool, decisions computed by the real policy."""
+    """每个工具一行，决定由真实策略计算。"""
     selected = sorted(KNOWN_TOOLS if tools is None else tools)
     missing = [tool for tool in selected if tool not in CONSTRAINTS]
     if missing:

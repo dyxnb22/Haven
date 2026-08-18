@@ -1,9 +1,8 @@
-"""Provider reasoning is captured and carried, without becoming the answer.
+"""捕获并携带提供商 reasoning，但不将其变成答案。
 
-DeepSeek V4 requires the reasoning that preceded a tool call to be replayed on
-later requests (ADR 0014). Haven captures it onto the assistant message so the
-adapter can replay it — but it must never leak into the answer, the transcript
-content, or the evidence path.
+DeepSeek V4 要求在后续请求中重放工具调用之前的 reasoning（ADR 0014）。Haven 将其
+捕获到 assistant 消息上，使适配器可以重放；但它绝不能泄漏到答案、对话记录内容
+或证据路径中。
 """
 
 from pathlib import Path
@@ -40,7 +39,7 @@ class TestReasoningCapture:
         assert carriers, "the tool-call turn should have been re-sent on turn 2"
         assert any(m.provider_reasoning == THINK for m in carriers)
 
-        # Reasoning is not the answer: it is absent from content and final text.
+        # 推理不是答案：它不会出现在 content 或最终文本中。
         assert all(THINK not in m.content for m in carriers)
         assert THINK not in outcome.final_text
 

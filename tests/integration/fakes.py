@@ -1,4 +1,4 @@
-"""Test doubles shared by the executor, pipeline, and eval tests."""
+"""执行器、流水线和评估测试共享的测试替身。"""
 
 from __future__ import annotations
 
@@ -6,10 +6,10 @@ from haven.ports.sandbox import SandboxSpec
 
 
 class RecordingLauncher:
-    """Records what was asked to be confined, without confining it.
+    """记录要求限制的内容，但不实际进行限制。
 
-    Lets every layer above the OS be tested identically on any platform; real
-    confinement is asserted separately in tests/security.
+    使操作系统之上的每一层都能在任何平台上以相同方式测试；真实限制会在
+    tests/security 中单独断言。
     """
 
     def __init__(self) -> None:

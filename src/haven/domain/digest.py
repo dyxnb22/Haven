@@ -1,4 +1,4 @@
-"""Canonical hashing helpers used by approvals, tickets, and the journal."""
+"""供审批、票据和日志使用的规范化哈希辅助函数。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ def sha256_bytes(data: bytes) -> str:
 
 
 def canonical_json(value: Any) -> str:
-    """Deterministic JSON used for digest binding (sorted keys, no spaces)."""
+    """用于绑定摘要的确定性 JSON（键排序且不含空格）。"""
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 

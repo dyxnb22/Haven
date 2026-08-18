@@ -1,18 +1,16 @@
-"""What does a non-converging run actually look like?
+"""不收敛的运行实际上是什么样？
 
-ADR 0023 attributed the dominant live failure to budget-tail non-convergence and
-left the shape of it unexamined. The repetition nudge was built on the assumption
-that non-convergence looks like repetition; the A/B meant to test it was void
-because the detector never fired (docs/notes/rejected/0002). This reads the run
-journals that experiment left behind and asks the prior question directly.
+ADR 0023 将主要实时失败归因于预算尾部不收敛，却没有检查其具体形态。重复提示
+建立在“不收敛看起来像重复”的假设上；用于验证这一点的 A/B 因检测器从未触发而
+作废（`docs/notes/rejected/0002`）。本脚本读取该实验留下的运行日志，直接回答
+前述问题。
 
     uv run python evals/trace_study.py evals/real/report-nudge-*/report-live-events
 
-Reads `tool.proposed` (which carries step, tool name, and an argument summary)
-joined to `tool.completed` by call id. The argument and result strings are the
-clipped summaries the journal stores, so two genuinely different results sharing
-a long prefix would read as identical here — the bias is toward *over*-counting
-repetition, which is the conservative direction for the question being asked.
+读取 `tool.proposed`（包含步骤、工具名和参数摘要），再通过 call id 与
+`tool.completed` 连接。参数和结果字符串是日志保存的截断摘要，因此两个真正不同
+但共享长前缀的结果在这里会被视为相同——这种偏差会*高估*重复次数，对于当前问题
+来说是更保守的方向。
 """
 
 from __future__ import annotations
@@ -24,10 +22,9 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-#: A run at or above this many steps is treated as non-converging. The A/B
-#: corpus medians at 11, and the step ceiling is 24.
+#: 达到或超过此步数的运行视为未收敛。A/B 样本的中位数为 11，步数上限为 24。
 SLOW_STEPS = 15
-#: A run at or below this converged without difficulty.
+#: 不超过此步数的运行视为顺利收敛。
 FAST_STEPS = 11
 
 
@@ -50,15 +47,14 @@ class RunTrace:
 
     @property
     def consecutive_identical(self) -> int:
-        """Adjacent calls identical in tool, args, *and* result — exactly what
-        `StuckLoopDetector` compares."""
+        """工具、参数和*结果*都相同的相邻调用数——正是 `StuckLoopDetector` 比较的内容。"""
         keys = [(c.tool, c.args, c.result) for c in self.calls]
         return sum(1 for i in range(1, len(keys)) if keys[i] == keys[i - 1])
 
     @property
     def repeated_calls(self) -> int:
-        """Repeats of the same (tool, args) anywhere in the run, adjacent or
-        not — what a *windowed* detector could catch."""
+        """运行中任意位置重复的相同（工具、参数）调用数，无论是否相邻——这是
+        *窗口式*检测器可能捕获的内容。"""
         counts = collections.Counter((c.tool, c.args) for c in self.calls)
         return sum(v - 1 for v in counts.values() if v > 1)
 
@@ -68,7 +64,7 @@ class RunTrace:
 
 
 def read_trace(path: Path) -> RunTrace:
-    """One run journal into an ordered call list."""
+    """将一次运行日志读取为有序调用列表。"""
     proposed: dict[str, tuple[int, str, str]] = {}
     trace = RunTrace(name=path.stem)
     for line in path.read_text(errors="replace").splitlines():
@@ -93,7 +89,7 @@ def read_trace(path: Path) -> RunTrace:
 
 
 def render(traces: list[RunTrace]) -> str:
-    """Compare the slow cohort against the fast one."""
+    """比较慢运行组和快速运行组。"""
     slow = [t for t in traces if t.steps >= SLOW_STEPS]
     fast = [t for t in traces if t.steps <= FAST_STEPS]
     lines = [

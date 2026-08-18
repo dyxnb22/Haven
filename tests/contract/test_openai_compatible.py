@@ -1,4 +1,4 @@
-"""Contract tests for the OpenAI-compatible streaming adapter (offline)."""
+"""OpenAI 兼容流式适配器的契约测试（离线）。"""
 
 import asyncio
 import json
@@ -194,9 +194,8 @@ def _tool_result(call_id: str = "c1") -> ModelMessage:
 
 
 class TestHistorySanitizer:
-    """The wire boundary repairs the tool-call/tool-result pairing a strict
-    provider 400s on, so no upstream path (compaction, recovery) can leak a
-    malformed history onto the wire."""
+    """线协议边界会修复严格提供商会返回 400 的工具调用/工具结果配对，因此任何
+    上游路径（压缩、恢复）都不能将格式错误的历史记录泄漏到线协议上。"""
 
     async def test_a_well_formed_history_is_unchanged(self) -> None:
         wire = await _wire_messages(
@@ -205,8 +204,8 @@ class TestHistorySanitizer:
         assert [m["role"] for m in wire] == ["assistant", "tool"]
 
     async def test_an_orphaned_tool_result_is_dropped(self) -> None:
-        # A tool message answering a call that is not in the prior assistant
-        # turn (its assistant turn was compacted away).
+        # 工具消息回答的调用不在上一条 assistant 轮次中（那条 assistant 轮次
+        # 已被压缩丢弃）。
         wire = await _wire_messages(
             (ModelMessage(role="user", content="hi"), _tool_result("ghost")),
             requires_reasoning=False,
@@ -214,8 +213,8 @@ class TestHistorySanitizer:
         assert [m["role"] for m in wire] == ["user"]
 
     async def test_an_unanswered_tool_call_gets_a_synthetic_result(self) -> None:
-        # The tool result was dropped; the dangling call is what 400s, so a
-        # minimal error result is synthesized to close it.
+        # 工具结果被丢弃；悬空调用正是会触发 400 的原因，因此合成一个最小
+        # 错误结果来关闭它。
         wire = await _wire_messages(
             (_assistant_with_tool_call("t"), ModelMessage(role="user", content="next")),
             requires_reasoning=False,
@@ -230,9 +229,8 @@ class TestHistorySanitizer:
 
 
 class TestMissingReasoningRetry:
-    """If the profile flag is off but the provider demands replayed reasoning,
-    the first request 400s before any event; the adapter retries once with
-    replay forced on."""
+    """如果 profile 标志关闭但提供商要求重放 reasoning，第一个请求会在任何事件
+    产生前返回 400；适配器会强制开启重放并重试一次。"""
 
     async def test_a_reasoning_400_is_retried_with_replay(self) -> None:
         calls: list[dict[str, Any]] = []
@@ -277,9 +275,8 @@ class TestMissingReasoningRetry:
 
 
 class TestPrefixContinuation:
-    """Native prefix continuation (ADR 0022): a trailing assistant message
-    flagged is_prefix goes on the wire with `prefix: true` so the provider
-    extends it in place instead of replying."""
+    """原生前缀续写（ADR 0022）：标记为 is_prefix 的末尾 assistant 消息会以
+    `prefix: true` 进入线协议，使提供商在原位置续写，而不是直接回答。"""
 
     async def test_a_prefix_assistant_message_carries_the_prefix_flag(self) -> None:
         partial = ModelMessage(role="assistant", content="The answer so far", is_prefix=True)
@@ -326,8 +323,8 @@ async def test_reasoning_effort_is_sent_only_when_set() -> None:
 
 
 async def test_interleaved_tool_calls_are_assembled_separately() -> None:
-    """A model may emit several calls in one turn, and their argument deltas
-    arrive interleaved. Each index must accumulate into its own call."""
+    """模型可能在一轮中发出多个调用，参数增量会交错到达。每个索引都必须累积到
+    自己的调用中。"""
     body = (
         chunk(
             {
@@ -372,9 +369,9 @@ async def test_error_status_mapping(status: int, code: str) -> None:
 
 
 class TestRetryAfter:
-    """A 429/503 may carry a `Retry-After` header naming when to try again.
-    Honoring it beats a fixed backoff that hammers a provider asking for a
-    longer pause. The adapter surfaces the hint; RunService decides the wait."""
+    """429/503 可能带有 `Retry-After` 标头，说明何时重试。遵守该标头优于使用固定
+    退避，因为固定退避会在提供商要求更长暂停时持续施压。适配器暴露这一提示，
+    RunService 决定等待时长。"""
 
     async def test_a_429_surfaces_retry_after_seconds(self) -> None:
         model = make_model(
@@ -395,7 +392,7 @@ class TestRetryAfter:
         with pytest.raises(ProviderError) as exc:
             await collect(model)
         assert exc.value.retry_after_s is not None
-        # Allow a little slack for the second that elapses during the request.
+        # 为请求期间经过的一秒留出少量余量。
         assert 20.0 <= exc.value.retry_after_s <= 30.0
 
     async def test_no_retry_after_header_leaves_the_hint_unset(self) -> None:
@@ -413,9 +410,9 @@ class TestRetryAfter:
     ],
 )
 async def test_a_context_length_400_maps_to_context_overflow(message: str) -> None:
-    """A provider 400 that means 'the prompt is too long' must be a distinct,
-    recoverable signal — RunService can force compaction and retry — not the
-    generic terminal `protocol` error every other malformed request gets."""
+    """表示“提示词过长”的提供商 400 必须映射为独立且可恢复的信号——RunService
+    可以强制压缩并重试——而不是与其他格式错误请求一样使用终止性的通用
+    `protocol` 错误。"""
     model = make_model(lambda req: httpx.Response(400, json={"error": {"message": message}}))
     with pytest.raises(ProviderError) as exc:
         await collect(model)
@@ -432,9 +429,8 @@ async def test_an_unrelated_400_stays_a_protocol_error() -> None:
 
 
 async def test_insufficient_balance_maps_to_a_non_retryable_quota_error() -> None:
-    """DeepSeek returns 402 when the account is out of credit. Retrying cannot
-    add balance, so it must surface as a distinct, terminal `quota` code rather
-    than the opaque `protocol` bucket a user cannot act on."""
+    """账户余额不足时 DeepSeek 返回 402。重试不能增加余额，因此必须暴露为独立的
+    终止性 `quota` 代码，而不是用户无法据此行动的模糊 `protocol` 类别。"""
     model = make_model(
         lambda req: httpx.Response(402, json={"error": {"message": "Insufficient Balance"}})
     )
@@ -460,13 +456,12 @@ async def test_malformed_json_chunk_is_protocol_error() -> None:
 
 
 class TestTransportErrorClassification:
-    """Which transport failures the adapter marks retryable.
+    """适配器将哪些传输失败标记为可重试。
 
-    RunService's retry loop only fires when `ProviderError.retryable` is set, so
-    this classification is what decides whether a dropped connection costs a
-    whole run. Its own tests construct retryable errors by hand, which is how a
-    non-retryable ConnectError went unnoticed until 2 of 31 live real-repo cases
-    died on one.
+    RunService 的重试循环只有在设置 `ProviderError.retryable` 时才会触发，因此
+    该分类决定连接断开是否会耗尽整个运行。此类测试会手动构造可重试错误，这正是
+    非可重试 ConnectError 一直未被发现的原因，直到 31 个实时真实仓库用例中有 2 个
+    因此失败。
     """
 
     async def _error_from(self, handler: Any, **kwargs: Any) -> ProviderError:
@@ -502,7 +497,7 @@ class TestTransportErrorClassification:
         assert error.retryable is True
 
     async def test_a_misconfigured_url_is_not_retryable(self) -> None:
-        """Retrying a configuration mistake just burns the budget slower."""
+        """重试配置错误只会让预算消耗得更慢。"""
 
         def handler(req: httpx.Request) -> httpx.Response:
             raise httpx.UnsupportedProtocol("unsupported scheme")
@@ -516,9 +511,9 @@ class TestTransportErrorClassification:
         assert API_KEY not in str(await self._error_from(handler))
 
     async def test_a_tls_failure_becomes_a_retryable_provider_error(self) -> None:
-        """Found live: a TLS record-layer failure is not an httpx.HTTPError, so
-        it escaped unwrapped, sailed past RunService's `except ProviderError`,
-        and took down a whole 31-case suite mid-run."""
+        """实时运行中发现：TLS 记录层失败不是 httpx.HTTPError，因此它曾未经包装地
+        逃出，绕过 RunService 的 `except ProviderError`，并在套件运行中途击垮整个
+        31 用例套件。"""
 
         def handler(req: httpx.Request) -> httpx.Response:
             raise ssl.SSLError("[SSL] record layer failure")
@@ -534,7 +529,7 @@ class TestTransportErrorClassification:
         assert (await self._error_from(handler)).retryable is True
 
     async def test_a_bad_certificate_is_not_retryable(self) -> None:
-        """Retrying an untrusted certificate cannot make it trusted."""
+        """重试不受信任的证书不会使它变得可信。"""
 
         def handler(req: httpx.Request) -> httpx.Response:
             raise ssl.SSLCertVerificationError("certificate verify failed")
@@ -542,8 +537,8 @@ class TestTransportErrorClassification:
         assert (await self._error_from(handler)).retryable is False
 
     async def test_a_programming_error_is_not_disguised_as_a_network_fault(self) -> None:
-        """Only I/O failures are translated; a logic bug must surface as itself
-        rather than being reported (and retried) as a network blip."""
+        """只有 I/O 失败会被转换；逻辑错误必须以自身形式暴露，而不是被报告（并作为
+        网络抖动重试）。"""
 
         def handler(req: httpx.Request) -> httpx.Response:
             raise KeyError("a bug in our own parsing")
@@ -553,14 +548,13 @@ class TestTransportErrorClassification:
 
 
 class TestIdleTimeout:
-    """The post-TTFT timeout bounds the gap *between* events, not the whole
-    stream. A reasoning model that streams steadily for minutes must not be
-    killed by a total deadline; only a genuine stall should time out."""
+    """TTFT 之后的超时限制的是事件*之间*的间隔，而不是整个流。持续稳定流式输出
+    数分钟的推理模型不应因总截止时间被杀死；只有真正卡住时才应超时。"""
 
     async def test_a_slow_but_steady_stream_outlasts_the_idle_bound(self) -> None:
-        # Five events 0.1s apart span 0.5s total — well past a 0.3s idle bound —
-        # but no single gap exceeds it, so the stream must complete. A total
-        # deadline (the old behavior) would kill this mid-stream.
+        # 五个间隔 0.1 秒的事件总跨度为 0.5 秒，远超 0.3 秒的空闲上限；但
+        # 没有任何单个间隔超过上限，因此流必须完成。总截止时间（旧行为）
+        # 会在流式过程中杀掉它。
         class SteadyStream(httpx.AsyncByteStream):
             async def __aiter__(self) -> AsyncIterator[bytes]:
                 for i in range(5):
@@ -633,7 +627,7 @@ async def test_cancellation_mid_stream() -> None:
 
 
 async def test_response_size_limit() -> None:
-    huge = chunk({"content": "x" * 1024}) * 8192  # far beyond 4 MiB
+    huge = chunk({"content": "x" * 1024}) * 8192  # 远超 4 MiB
 
     model = make_model(lambda req: httpx.Response(200, content=huge))
     with pytest.raises(ProviderError) as exc:

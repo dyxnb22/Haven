@@ -1,4 +1,4 @@
-"""Model port: the only way the core talks to an LLM provider."""
+"""模型端口：核心层与 LLM 提供商通信的唯一方式。"""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ ProviderErrorCode = Literal[
 
 
 class ProviderError(Exception):
-    """Stable provider failure surface; raw provider payloads never leak out."""
+    """稳定的提供商失败接口；原始提供商载荷绝不会泄漏出去。"""
 
     def __init__(
         self,
@@ -35,14 +35,14 @@ class ProviderError(Exception):
         super().__init__(message)
         self.code: ProviderErrorCode = code
         self.retryable = retryable
-        #: Provider-requested wait before retrying, parsed from a `Retry-After`
-        #: header when present. Advisory: the retry loop takes the longer of
-        #: this and its own backoff, so a provider asking for a pause is obeyed.
+        #: 提供商要求重试前等待的时长（如果存在 `Retry-After` 标头，则从中
+        #: 解析）。这是建议值：重试循环会取它与自身退避时长中较大的一个，
+        #: 因而会遵守提供商要求的暂停时间。
         self.retry_after_s = retry_after_s
 
 
 class ModelPort(Protocol):
-    """Streams provider-neutral model events for one request."""
+    """为一次请求流式产生与提供商无关的模型事件。"""
 
     @property
     def model_name(self) -> str: ...

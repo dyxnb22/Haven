@@ -1,8 +1,7 @@
-"""A failing tool must never raise into the agent loop.
+"""失败的工具绝不能将异常抛入代理循环。
 
-Found by a live run: searching a path that does not exist made ripgrep exit 2,
-which propagated as an exception and aborted the entire eval suite instead of
-becoming a structured `not_found` result the model could recover from.
+实时运行中发现：搜索不存在的路径会使 ripgrep 以 2 退出，该异常曾向上传播并中止
+整个评估套件，而不是变成模型可以恢复的结构化 `not_found` 结果。
 """
 
 from pathlib import Path
