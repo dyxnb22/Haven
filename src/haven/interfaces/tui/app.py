@@ -28,8 +28,14 @@ from haven.contracts.events import (
     EventEnvelope,
 )
 from haven.domain.enums import ApprovalDecision, PermissionMode
+from haven.interfaces.tui.commands import HELP_TEXT, route_command
+from haven.interfaces.tui.input_helpers import expand_mentions
 from haven.interfaces.tui.presenter import PresenterState, TimelineEntry, reduce, sanitize
+from haven.interfaces.tui.rendering import panel_text, timeline_text
+from haven.interfaces.tui.session_actions import export_run_text, list_sessions_text, rewind_text
 from haven.ports.session import SessionStorePort
+
+__all__ = ["HELP_TEXT", "ApprovalScreen", "HavenApp", "QueueSink"]
 
 
 class SessionServices(Protocol):
@@ -63,27 +69,6 @@ class SessionServices(Protocol):
 
 
 ServicesBuilder = Callable[..., Awaitable[SessionServices]]
-
-HELP_TEXT = """\
-Commands:
-  /help      show this help
-  /budget    show remaining budget
-  /context   show what the model saw last turn
-  /sessions  list recent runs you can continue or fork
-  /fork ID   start a new turn branched from run ID (fork the session)
-  /rewind    undo this session's last run (fail-closed; asks to confirm)
-  /diff      switch to the Diff tab
-  /export    write a markdown report of the current run
-  /quit      exit Haven
-Input:
-  @path      mention a file — the agent is pointed at it explicitly (it
-             still reads the file itself through repo.read)
-Keys:
-  Enter      submit a task
-  a / r      approve / reject (in the approval dialog)
-  F1..F4     switch tabs (Chat, Diff, Evidence, Trace)
-  Ctrl+C     cancel the running task; press again to quit\
-"""
 
 
 class QueueSink:
@@ -322,20 +307,8 @@ class HavenApp(App[None]):
 
     # -- 渲染 -------------------------------------------------------------------
 
-    _ICONS = {
-        "user": ">",
-        "agent": "●",
-        "tool": "⚙",
-        "policy": "✋",
-        "approval": "?",
-        "plan": "☰",
-        "notice": "!",
-        "system": "◆",
-    }
-
     def _write_timeline(self, entry: TimelineEntry) -> None:
-        icon = self._ICONS.get(entry.kind, "·")
-        self.query_one("#timeline", RichLog).write(f"{icon} {entry.text}")
+        self.query_one("#timeline", RichLog).write(timeline_text(entry))
 
     def _log_line(self, kind: str, text: str) -> None:
         """仅供 UI 使用的系统消息：渲染它，并记录到视图状态中，
@@ -348,21 +321,11 @@ class HavenApp(App[None]):
         self._write_timeline(entry)
 
     def _refresh_panels(self) -> None:
-        state = self._state
-        chat = state.chat_text
-        if state.reasoning_text:
-            chat += f"\n[dim]thinking… {state.reasoning_text[-800:]}[/dim]"
-        if state.streaming_text:
-            chat += f"\n● {state.streaming_text}▌"
-        if state.plan_lines:
-            plan = "\n".join(state.plan_lines)
-            chat = f"[b]Plan[/b]\n{plan}\n\n{chat}"
-        self.query_one("#chat", Static).update(chat or "(no conversation yet)")
-        self.query_one("#diff", Static).update(state.diff_text or "(no diff yet)")
-        self.query_one("#evidence", Static).update(
-            "\n".join(state.evidence_rows) or "(no evidence yet)"
-        )
-        self.query_one("#trace", Static).update("\n".join(state.trace_rows) or "(no trace yet)")
+        panels = panel_text(self._state)
+        self.query_one("#chat", Static).update(panels.chat)
+        self.query_one("#diff", Static).update(panels.diff)
+        self.query_one("#evidence", Static).update(panels.evidence)
+        self.query_one("#trace", Static).update(panels.trace)
 
     def _refresh_chrome(self) -> None:
         self.query_one("#header", Static).update(self._state.header_line())
@@ -409,14 +372,7 @@ class HavenApp(App[None]):
         """将 @path 提及展开为列出文件的说明，让目标明确指向这些文件。
         代理仍会通过 repo.read 读取文件（来源和 preimage 绑定仍保留在工具通道中）；
         提及内容只是替它省去一次搜索。"""
-        import re
-
-        mentions = re.findall(r"(?:^|\s)@([\w./-]+)", text)
-        existing = [m for m in mentions if (self._workspace / m).is_file()]
-        if not existing:
-            return text
-        note = " (mentioned files, read them first: " + ", ".join(dict.fromkeys(existing)) + ")"
-        return text + note
+        return expand_mentions(text, self._workspace)
 
     def _queue_steering(self, text: str) -> None:
         async def _do() -> None:
@@ -430,47 +386,26 @@ class HavenApp(App[None]):
         self.run_worker(_do(), exclusive=False)
 
     def _handle_command(self, command: str) -> None:
-        name = command.split()[0].lower()
-        if name == "/help":
-            self._log_line("system", HELP_TEXT)
-        elif name == "/budget":
-            state = self._state
-            budget = getattr(getattr(self._services, "config", None), "budget", None)
-            if budget is None:
-                self._log_line("system", "budget unavailable before startup completes")
-                return
+        budget = getattr(getattr(self._services, "config", None), "budget", None)
+        action = route_command(command, self._state, budget)
+        if action.kind == "log":
+            self._log_line("system", action.value)
+        elif action.kind == "sessions":
+            self._list_sessions()
+        elif action.kind == "fork":
+            self._fork_run_id = action.value
             self._log_line(
                 "system",
-                f"budget: step {state.step}/{budget.max_steps}, "
-                f"tools {state.tool_calls}/{budget.max_tool_calls}, "
-                f"tokens {state.input_tokens}/{state.output_tokens}, "
-                f"cost ${state.cost_usd:.4f}/{budget.max_cost_usd:.2f}"
-                + (" (estimated)" if state.usage_estimated else ""),
+                f"next message will fork from {self._fork_run_id}; type it and press Enter",
             )
-        elif name == "/context":
-            self._log_line("system", self._state.context_summary or "no context recorded yet")
-        elif name == "/sessions":
-            self._list_sessions()
-        elif name == "/fork":
-            parts = command.split(maxsplit=1)
-            if len(parts) < 2:
-                self._log_line("system", "usage: /fork RUN_ID (see /sessions)")
-            else:
-                self._fork_run_id = parts[1].strip()
-                self._log_line(
-                    "system",
-                    f"next message will fork from {self._fork_run_id}; type it and press Enter",
-                )
-        elif name == "/diff":
+        elif action.kind == "diff":
             self.query_one("#tabs", TabbedContent).active = "tab-diff"
-        elif name == "/rewind":
-            self._rewind_command(command)
-        elif name == "/export":
+        elif action.kind == "rewind":
+            self._rewind_command(action.value)
+        elif action.kind == "export":
             self._export_run()
-        elif name == "/quit":
+        elif action.kind == "quit":
             self.exit()
-        else:
-            self._log_line("system", f"unknown command {name}; try /help")
 
     def _rewind_command(self, command: str) -> None:
         """用户级撤销本会话最近一次已完成的运行（ADR 0020）。
@@ -500,29 +435,13 @@ class HavenApp(App[None]):
             return
 
         async def _do() -> None:
-            report = await self._svc.recovery.rewind(run_id)
-            if report.blockers:
-                self._log_line("system", "rewind blocked:\n  " + "\n  ".join(report.blockers))
-                return
-            parts = []
-            if report.restored:
-                parts.append(f"restored {len(report.restored)} file(s)")
-            if report.deleted:
-                parts.append(f"removed {len(report.deleted)} run-created file(s)")
-            self._log_line("system", "rewind complete: " + (", ".join(parts) or "nothing to undo"))
+            self._log_line("system", await rewind_text(self._svc.recovery, run_id))
 
         self.run_worker(_do(), exclusive=False)
 
     def _list_sessions(self) -> None:
         async def _do() -> None:
-            runs = await self._svc.store.list_runs(10)
-            if not runs:
-                self._log_line("system", "no recorded runs yet")
-                return
-            lines = ["recent runs (use /fork RUN_ID to branch from one):"]
-            for r in runs:
-                lines.append(f"  {r.run_id}  [{r.status.value}]  {r.goal[:60]}")
-            self._log_line("system", "\n".join(lines))
+            self._log_line("system", await list_sessions_text(self._svc.store))
 
         self.run_worker(_do(), exclusive=False)
 
@@ -532,16 +451,8 @@ class HavenApp(App[None]):
             return
 
         async def _do() -> None:
-            from haven.interfaces.export import render_markdown
-
-            run = await self._svc.store.get_run(self._state.run_id)
-            envelopes = await self._svc.store.load_events(self._state.run_id)
-            if run is None:
-                self._log_line("system", "run not found in the store")
-                return
-            target = Path.cwd() / f"haven-{self._state.run_id}.md"
-            target.write_text(render_markdown(run, envelopes), encoding="utf-8")
-            self._log_line("system", f"exported to {target}")
+            message = await export_run_text(self._svc.store, self._state.run_id, Path.cwd())
+            self._log_line("system", message)
 
         self.run_worker(_do(), exclusive=False)
 

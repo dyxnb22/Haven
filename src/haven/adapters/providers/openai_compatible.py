@@ -10,20 +10,44 @@ from __future__ import annotations
 import asyncio
 import json
 import ssl
-from collections.abc import AsyncIterator, Sequence
-from datetime import UTC, datetime
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 
+from haven.adapters.providers.openai_wire import (
+    ToolCallCollector as _ToolCallCollector,
+)
+from haven.adapters.providers.openai_wire import (
+    inline_refs as _inline_refs,
+)
+from haven.adapters.providers.openai_wire import (
+    is_context_overflow as _is_context_overflow,
+)
+from haven.adapters.providers.openai_wire import (
+    map_finish_reason as _map_finish_reason,
+)
+from haven.adapters.providers.openai_wire import (
+    parse_retry_after as _parse_retry_after,
+)
+from haven.adapters.providers.openai_wire import (
+    parse_sse_line as _parse_sse_line,
+)
+from haven.adapters.providers.openai_wire import (
+    sanitize_history as _sanitize_history,
+)
+from haven.adapters.providers.openai_wire import (
+    to_wire_message as _to_wire_message,
+)
+from haven.adapters.providers.openai_wire import (
+    to_wire_tool_name as _to_wire_tool_name,
+)
 from haven.contracts.model import (
     ModelEvent,
-    ModelMessage,
     ModelRequest,
     ReasoningDelta,
     StreamFinished,
     TextDelta,
-    ToolCallProposal,
     ToolCallReady,
     Usage,
     UsageReport,
@@ -293,209 +317,3 @@ class OpenAICompatibleModel:
             if detail
             else f"unexpected provider status ({status})",
         )
-
-    # -- 线协议转换辅助函数 ------------------------------------------------------
-    # 以下内容负责在 Haven 与提供商无关的契约（contracts/model.py）和 OpenAI
-    # chat-completions 线协议格式之间转换。提供商的特殊行为在这里吸收，
-    # 上游代码无需感知。
-
-
-#: OpenAI 兼容 API 将函数名限制为 ^[a-zA-Z0-9_-]+$，因此会拒绝 Haven 带命名
-#: 空间的 `repo.read`。点号是核心命名选择，所以替换只存在于线协议边界，
-#: 绝不向内部泄漏。
-_WIRE_NAME_SEPARATOR = "__"
-
-
-def _to_wire_tool_name(name: str) -> str:
-    return name.replace(".", _WIRE_NAME_SEPARATOR)
-
-
-def _inline_refs(schema: dict[str, Any]) -> dict[str, Any]:
-    """将 Pydantic 的 `$defs`/`$ref` 解析为自包含的模式。
-
-    嵌套模型会生成 `$ref`，而几个 OpenAI 兼容提供商会在函数参数中拒绝它。本处
-    模式规模较小且不存在递归，因此内联是安全的，并能让面向模型的契约保持为
-    字面结构。
-    """
-    defs = schema.get("$defs")
-    if not isinstance(defs, dict):
-        return schema
-
-    def resolve(node: Any) -> Any:
-        if isinstance(node, dict):
-            ref = node.get("$ref")
-            if isinstance(ref, str) and ref.startswith("#/$defs/"):
-                target = defs.get(ref.rsplit("/", 1)[-1], {})
-                merged = {**resolve(target), **{k: v for k, v in node.items() if k != "$ref"}}
-                return merged
-            return {k: resolve(v) for k, v in node.items() if k != "$defs"}
-        if isinstance(node, list):
-            return [resolve(item) for item in node]
-        return node
-
-    inlined = resolve(schema)
-    return inlined if isinstance(inlined, dict) else schema
-
-
-#: 在 OpenAI 兼容提供商中识别“prompt 过长”400 的子字符串。DeepSeek 和 OpenAI
-#: 将其表述为 “maximum context length”；规范的 OpenAI 错误代码是
-#: `context_length_exceeded`。按消息匹配使逻辑停留在线协议边界，不会向内部
-#: 泄漏提供商字符串——核心只会看到 `context_overflow` 代码。
-_CONTEXT_OVERFLOW_MARKERS = ("maximum context length", "context_length_exceeded", "context length")
-
-
-def _is_context_overflow(detail: str) -> bool:
-    lowered = detail.lower()
-    return any(marker in lowered for marker in _CONTEXT_OVERFLOW_MARKERS)
-
-
-def _parse_retry_after(value: str | None) -> float | None:
-    """解析 `Retry-After` 标头指定的等待秒数；无法解析时返回 None。
-
-    标头要么是非负整数秒数，要么是 HTTP 日期；实际环境中两种形式都存在。过去的
-    日期或无法解析的日期会返回 None，而不是负数或虚假的延迟，因此格式错误的
-    标头最多让程序回退到重试循环自身的退避时间，绝不会缩短它。
-    """
-    if value is None:
-        return None
-    value = value.strip()
-    if value.isdigit():
-        return float(value)
-    from email.utils import parsedate_to_datetime
-
-    try:
-        when = parsedate_to_datetime(value)
-    except (TypeError, ValueError):
-        return None
-    if when is None:
-        return None
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=UTC)
-    delta = (when - datetime.now(tz=UTC)).total_seconds()
-    return delta if delta > 0 else None
-
-
-def _parse_sse_line(line: str) -> str | None:
-    line = line.strip()
-    if not line or line.startswith(":"):
-        return None
-    if line.startswith("data:"):
-        return line[5:].strip()
-    return None
-
-
-def _map_finish_reason(reason: str) -> Any:
-    mapping = {"stop": "stop", "tool_calls": "tool_calls", "length": "length"}
-    return mapping.get(reason, "stop")
-
-
-def _sanitize_history(messages: Sequence[ModelMessage]) -> list[ModelMessage]:
-    """修复严格提供商（DeepSeek V4）会返回 400 的结构缺陷。
-
-    每个 OpenAI 兼容提供商都执行相同的工具调用/工具结果契约：assistant 轮次中的
-    每个 tool_calls 必须恰好由其后的一条 tool 消息回答，而 tool 消息必须回答紧邻
-    的上一条 assistant 轮次中的某个 tool_call。压缩和崩溃恢复可能在局部破坏这个
-    不变量；与其相信所有上游路径都能维护它，不如在每个请求都会经过的线协议边界
-    处由适配器确定性地强制执行。
-
-    修复方式（全部是确定性的，不会凭空编造内容）：
-    - 丢弃没有回答任何未完成 tool_call 的 tool 消息（孤立结果——发起调用的
-      assistant 轮次已被丢弃）；
-    - 为历史记录从未回答的每个 tool_call 合成最小错误工具结果（孤立调用——
-      结果已被丢弃），因为悬空调用正是触发 400 的原因。
-    """
-    out: list[ModelMessage] = []
-    pending: dict[str, int] = {}  # 未回答的 call_id -> `out` 中的索引
-
-    def flush_pending() -> None:
-        # 下一次 assistant/user 轮次开始时，仍未回答的所有 tool_call 都会按
-        # 调用顺序追加一个合成结果。
-        for call_id in list(pending):
-            out.append(
-                ModelMessage(
-                    role="tool",
-                    content='{"status":"error","message":"result unavailable '
-                    '(dropped from history)"}',
-                    tool_call_id=call_id,
-                )
-            )
-        pending.clear()
-
-    for message in messages:
-        if message.role == "tool":
-            if message.tool_call_id and message.tool_call_id in pending:
-                del pending[message.tool_call_id]
-                out.append(message)
-            # 否则是孤立结果——静默丢弃。
-            continue
-        # 新的 assistant 或 user 轮次：先关闭所有未回答的调用。
-        flush_pending()
-        out.append(message)
-        if message.role == "assistant":
-            for call in message.tool_calls:
-                pending[call.call_id] = len(out) - 1
-    flush_pending()
-    return out
-
-
-def _to_wire_message(message: ModelMessage, *, replay_reasoning: bool = False) -> dict[str, Any]:
-    wire: dict[str, Any] = {"role": message.role, "content": message.content}
-    if message.role == "assistant" and message.tool_calls:
-        wire["tool_calls"] = [
-            {
-                "id": call.call_id,
-                "type": "function",
-                "function": {
-                    "name": _to_wire_tool_name(call.tool_name),
-                    "arguments": call.arguments_json,
-                },
-            }
-            for call in message.tool_calls
-        ]
-        # DeepSeek V4 要求逐字重放工具调用之前的推理，否则会返回 400；对于
-        # 早于捕获机制的历史，空字符串是可接受的回填值（ADR 0014）。
-        if replay_reasoning:
-            wire["reasoning_content"] = message.provider_reasoning
-    if message.role == "tool" and message.tool_call_id:
-        wire["tool_call_id"] = message.tool_call_id
-    if message.role == "assistant" and message.is_prefix:
-        # 原生前缀续写（ADR 0022）：提供商会原地扩展这段部分内容，而不是回复
-        # 它。DeepSeek 用 `prefix: true` 标记这类消息（beta prefix-completion 模式）。
-        wire["prefix"] = True
-    return wire
-
-
-class _ToolCallCollector:
-    """按索引累积流式工具调用增量。"""
-
-    def __init__(self) -> None:
-        self._calls: dict[int, dict[str, str]] = {}
-
-    def feed(self, delta: dict[str, Any]) -> None:
-        index = int(delta.get("index", 0))
-        slot = self._calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
-        if call_id := delta.get("id"):
-            slot["id"] = str(call_id)
-        function = delta.get("function") or {}
-        if name := function.get("name"):
-            slot["name"] += str(name)
-        if args := function.get("arguments"):
-            slot["arguments"] += str(args)
-
-    def completed(self, from_wire: dict[str, str]) -> list[ToolCallProposal]:
-        calls = []
-        for index in sorted(self._calls):
-            slot = self._calls[index]
-            if not slot["name"]:
-                continue
-            wire_name = slot["name"]
-            calls.append(
-                ToolCallProposal(
-                    call_id=slot["id"] or f"call-{index}",
-                    # 未知名称保持不变地传递，使注册表可以用 `unknown_tool` 拒绝它，
-                    # 而不是静默改写成一个确实存在的名称。
-                    tool_name=from_wire.get(wire_name, wire_name),
-                    arguments_json=slot["arguments"] or "{}",
-                )
-            )
-        return calls

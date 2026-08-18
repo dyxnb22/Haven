@@ -34,53 +34,57 @@ import shutil
 import tempfile
 import time
 from collections import deque
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
 
+from haven.application.answer_resolution import (
+    MAX_EMPTY_REPLIES as MAX_EMPTY_REPLIES,
+)
+from haven.application.answer_resolution import (
+    MAX_EVIDENCE_NUDGES as MAX_EVIDENCE_NUDGES,
+)
+from haven.application.answer_resolution import (
+    MAX_OUTPUT_CONTINUATIONS as MAX_OUTPUT_CONTINUATIONS,
+)
+from haven.application.answer_resolution import (
+    AnswerAssembly,
+    AnswerResolver,
+)
 from haven.application.approvals import ApprovalResponder
 from haven.application.context_builder import ContextBuilder
 from haven.application.emitter import EventEmitter
+from haven.application.model_stream import (
+    MODEL_RETRY_MAX_DELAY,
+    ModelStreamer,
+)
+from haven.application.model_stream import retry_delay as _retry_delay
 from haven.application.profiles import profile_for
 from haven.application.registry import ToolRegistry
+from haven.application.run_persistence import (
+    CheckpointManager,
+    RunFinalizer,
+    RunOutcome,
+)
+from haven.application.run_telemetry import RunTelemetry
 from haven.application.state import RunContext
 from haven.application.tool_pipeline import ToolPipeline
-from haven.contracts.checkpoint import (
-    BudgetSnapshot,
-    CheckpointV1,
-    EvidenceSnapshot,
-    UsageSnapshot,
-)
+from haven.contracts.checkpoint import CheckpointV1
 from haven.contracts.events import (
-    AssistantDelta,
-    AssistantReasoning,
     ContextBuilt,
     ModelCompleted,
     Notice,
-    RequestEnvelope,
     RunCreated,
-    RunFinished,
     SteerQueued,
     StepStarted,
-    StreamRestarted,
 )
 from haven.contracts.model import (
     ModelMessage,
     ModelRequest,
     ModelResult,
-    ReasoningDelta,
-    StreamFinished,
-    TextDelta,
     ToolCallProposal,
-    ToolCallReady,
-    Usage,
-    UsageReport,
 )
 from haven.contracts.tools import RecipeSpec, tool_schemas
 from haven.domain.budget import Budget, check_budget
-from haven.domain.digest import digest_of
 from haven.domain.enums import PermissionMode, RunStatus, StopReason
-from haven.domain.evidence import evaluate_evidence_gate
 from haven.domain.ids import RunId, new_run_id
 from haven.domain.pricing import Pricing
 from haven.domain.stuck import StuckLoopDetector, call_fingerprint
@@ -89,16 +93,6 @@ from haven.ports.model import ModelPort, ProviderError
 from haven.ports.sandbox import SandboxLauncher
 from haven.ports.session import SessionStorePort
 from haven.ports.workspace import WorkspacePort
-
-MAX_EVIDENCE_NUDGES = 2
-
-#: 对于被提供商的输出 token 限制截断的答案，最多续写这么多次；之后 Haven
-#: 会带着警告继续使用部分文本，从而避免一个不停截断的模型耗尽全部预算。
-MAX_OUTPUT_CONTINUATIONS = 2
-
-#: 对于既没有文本也没有工具调用的回复（例如只有推理的响应），会重新提示
-#: 这么多次，之后运行因没有进展而停止。
-MAX_EMPTY_REPLIES = 2
 
 #: 提供商返回的 `context_overflow`（字符预算超过实际 token 窗口）会通过缩小
 #: 预算并重建上下文来恢复，最多进行这么多次；之后运行失败，因此确实无法
@@ -112,61 +106,7 @@ CONTEXT_OVERFLOW_SHRINK = 0.6
 #: 默认行为。实测：8 次在线运行中有 3 次在收到任何 token 前遇到 ConnectError，
 #: 31 个真实仓库案例中另有 2 个后来因一次适配器仍判定为不可重试的错误而失败——
 #: 这个循环的效果取决于该分类是否准确。
-MODEL_RETRY_ATTEMPTS = 2
-MODEL_RETRY_BASE_DELAY = 1.0
-#: 提供商可能通过 `Retry-After` 要求比此值更长的等待，但遵守任意时长的有界
-#: 重试循环可能让运行在墙上时钟预算之后仍阻塞数分钟（预算只在轮次之间检查，
-#: 睡眠期间不检查）。超过此上限后，运行应失败并等待恢复，而不是一直挂起。
-MODEL_RETRY_MAX_DELAY = 60.0
-
-
-def _retry_delay(attempt: int, retry_after_s: float | None) -> float:
-    """下一次模型重试前的等待时间：指数退避与提供商要求的 `Retry-After` 两者取较大值，
-    但不超过 `MODEL_RETRY_MAX_DELAY`。遵守 `Retry-After` 可以避免固定退避过短、持续
-    冲击要求更长等待的提供商；上限则避免某个响应头阻塞整个运行。"""
-    backoff: float = MODEL_RETRY_BASE_DELAY * (2**attempt)
-    wait = backoff if retry_after_s is None else max(backoff, retry_after_s)
-    return min(wait, MODEL_RETRY_MAX_DELAY)
-
-
-@dataclass(slots=True)
-class _StreamProgress:
-    """记录流在失败前是否产生过内容，用于决定重试是否安全。"""
-
-    started: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class RunOutcome:
-    run_id: str
-    status: RunStatus
-    stop_reason: StopReason
-    gate_reason: str
-    steps: int
-    tool_calls: int
-    input_tokens: int
-    output_tokens: int
-    cached_input_tokens: int
-    cost_usd: float
-    #: 模型没有费率卡时为 False，此时 `cost_usd` 是占位值而不是测量结果。
-    cost_known: bool
-    usage_estimated: bool
-    final_text: str
-
-
-@dataclass
-class _AnswerAssembly:
-    """用于组装一个最终答案的跨轮状态。
-
-    `parts` 保存提供商因输出 token 上限而截断的答案片段，并在有界续写之间拼接；计数器
-    限制两条恢复循环；`final_text` 是最后组装出的答案，每条停止路径都会将其作为运行
-    的最终文本报告。
-    """
-
-    parts: list[str] = field(default_factory=list)
-    continuations: int = 0
-    empty_replies: int = 0
-    final_text: str = ""
+__all__ = ["MODEL_RETRY_MAX_DELAY", "RunOutcome", "RunService", "_retry_delay"]
 
 
 class RunService:
@@ -191,6 +131,7 @@ class RunService:
         supports_prefix_continuation: bool | None = None,
     ) -> None:
         self._model = model
+        self._streamer = ModelStreamer(emitter)
         self._workspace = workspace
         self._store = store
         self._emitter = emitter
@@ -214,6 +155,11 @@ class RunService:
         # 已记录价格优于报告 $0.00，但它是公布值而不是发票金额——见 profile
         # 中带日期的注释。
         self._pricing = pricing if pricing is not None else self._profile.pricing
+        self._telemetry = RunTelemetry(emitter, self._pricing)
+        self._checkpoints = CheckpointManager(store, workspace, emitter)
+        self._finalizer = RunFinalizer(
+            store, emitter, self._checkpoints, cost_known=self._pricing.is_known
+        )
         self._git_branch = git_branch
         self._git_commit = git_commit
         self._project_guidance = project_guidance
@@ -238,6 +184,14 @@ class RunService:
             mode=mode,
             launcher=launcher,
             scratch_dir=self._scratch_dir,
+        )
+        self._answers = AnswerResolver(
+            emitter=emitter,
+            workspace=workspace,
+            verification_available=lambda: bool(self._recipes),
+            supports_prefix=self._supports_prefix,
+            finish=self._finish,
+            checkpoint=self._checkpoint,
         )
 
     # -- 入口 -----------------------------------------------------------------
@@ -386,7 +340,7 @@ class RunService:
         started = time.monotonic()
         elapsed_base = ctx.usage.wall_time_seconds
         # 输出截断和空回复的恢复状态（截断答案绝不能被静默接受为完整答案）。
-        answer = _AnswerAssembly()
+        answer = AnswerAssembly()
 
         self._active_run_id = ctx.run_id
         self._steer_queue.clear()
@@ -423,7 +377,7 @@ class RunService:
                 overflow_retries = 0
                 while True:
                     request, segments = builder.build(ctx.transcript, ctx.usage, ctx.plan)
-                    envelope_digest = await self._record_envelope(
+                    envelope_digest = await self._telemetry.record_envelope(
                         ctx, step, request, envelope_digest
                     )
                     await self._emitter.emit(
@@ -471,7 +425,7 @@ class RunService:
                             ctx, RunStatus.FAILED, StopReason.PROVIDER_ERROR, answer.final_text
                         )
 
-                self._charge_usage(ctx, request, result)
+                self._telemetry.charge_usage(ctx, request, result)
                 await self._emitter.emit(
                     ctx.run_id,
                     ModelCompleted(
@@ -508,12 +462,12 @@ class RunService:
                 # 没有工具调用：该回复是候选最终答案。
                 # 先有界地恢复截断或空回复，再由 Evidence Gate 决定——模型的声明
                 # 永远不能代替门禁判断。
-                recovered = await self._recover_incomplete_reply(ctx, result, answer)
+                recovered = await self._answers.recover_incomplete_reply(ctx, result, answer)
                 if isinstance(recovered, RunOutcome):
                     return recovered
                 if recovered:
                     continue
-                outcome = await self._finish_with_gate(ctx, result, answer)
+                outcome = await self._answers.finish_with_gate(ctx, result, answer)
                 if outcome is not None:
                     return outcome
         except asyncio.CancelledError:
@@ -526,175 +480,6 @@ class RunService:
                 # 作为记录。
                 self._steer_queue.clear()
             shutil.rmtree(self._scratch_dir, ignore_errors=True)
-
-    async def _recover_incomplete_reply(
-        self, ctx: RunContext, result: ModelResult, answer: _AnswerAssembly
-    ) -> RunOutcome | bool:
-        """截断/空回复恢复机制，两条循环都有上限。
-
-        返回 RunOutcome 表示停止运行（重复的空回复）；返回 True 表示已排队续写或重新
-        提示（继续下一轮）；返回 False 表示回复已经完整到足以进入证据门禁。
-        """
-        # 被提供商输出 token 限制截断的答案不是最终答案。请求它继续——次数
-        # 必须有界，不能让一个不断截断的模型耗尽预算。
-        if result.finish_reason == "length" and answer.continuations < MAX_OUTPUT_CONTINUATIONS:
-            answer.continuations += 1
-            answer.parts.append(result.text)
-            await self._emitter.emit(
-                ctx.run_id,
-                Notice(
-                    run_id=ctx.run_id,
-                    level="warning",
-                    message=(
-                        "answer hit the output token limit; requesting a "
-                        f"continuation ({answer.continuations}/{MAX_OUTPUT_CONTINUATIONS})"
-                    ),
-                ),
-            )
-            if self._supports_prefix:
-                # 原生前缀续写（ADR 0022）：将部分答案作为 assistant“前缀”重新
-                # 发出，让模型原地扩展——没有接缝重复，也不增加 user 轮次。适配器
-                # 会识别末尾的 assistant 消息，并连同提供商的 prefix 标志发送。
-                ctx.transcript.append(
-                    ModelMessage(role="assistant", content=result.text, is_prefix=True)
-                )
-            else:
-                # 对话式垫片：要求下一轮继续。接缝处可能重复内容，而且会多消耗
-                # 一次完整请求，但不需要提供商特定的支持。
-                ctx.transcript.append(
-                    ModelMessage(
-                        role="user",
-                        content=(
-                            "Your previous message was cut off at the output token "
-                            "limit. Continue exactly from where it stopped, without "
-                            "repeating anything. If no answer text was produced yet, "
-                            "give the answer directly and concisely."
-                        ),
-                    )
-                )
-            return True
-
-        # 既没有文本也没有工具调用的回复（只有推理的响应）会以空答案通过
-        # no-edit 门禁。重新提示，但次数必须有界。
-        if not result.text.strip() and not answer.parts:
-            answer.empty_replies += 1
-            if answer.empty_replies > MAX_EMPTY_REPLIES:
-                await self._emitter.emit(
-                    ctx.run_id,
-                    Notice(
-                        run_id=ctx.run_id,
-                        level="error",
-                        message="model repeatedly returned no content and no tool calls",
-                    ),
-                )
-                return await self._finish(
-                    ctx, RunStatus.STOPPED, StopReason.NO_PROGRESS, answer.final_text
-                )
-            await self._emitter.emit(
-                ctx.run_id,
-                Notice(
-                    run_id=ctx.run_id,
-                    level="warning",
-                    message="model returned no content; asking again "
-                    f"({answer.empty_replies}/{MAX_EMPTY_REPLIES})",
-                ),
-            )
-            ctx.transcript.append(
-                ModelMessage(
-                    role="user",
-                    content=(
-                        "Your reply contained no answer text and no tool calls. "
-                        "Reply with either a tool call or your answer."
-                    ),
-                )
-            )
-            return True
-
-        return False
-
-    async def _finish_with_gate(
-        self, ctx: RunContext, result: ModelResult, answer: _AnswerAssembly
-    ) -> RunOutcome | None:
-        """组装最终答案并应用证据门禁。
-
-        返回运行结果；如果门禁拒绝了答案，并且已经向模型发送提示要求其生成证据
-        （次数受 MAX_EVIDENCE_NUDGES 限制），则返回 None，由调用方继续下一轮。
-        """
-        answer.final_text = "".join((*answer.parts, result.text))
-        answer.parts = []
-        if result.finish_reason == "length":
-            await self._emitter.emit(
-                ctx.run_id,
-                Notice(
-                    run_id=ctx.run_id,
-                    level="warning",
-                    message=(
-                        "answer still truncated after "
-                        f"{MAX_OUTPUT_CONTINUATIONS} continuations; "
-                        "proceeding with the partial answer"
-                    ),
-                ),
-            )
-        ctx.move_to(RunStatus.VERIFYING)
-        # 重新读取累计 diff，使审查看到的是当前磁盘内容，而不是过时事件
-        # 记录的内容。
-        diff_text = (await self._workspace.run_diff()).diff if ctx.ledger.has_edits else ""
-        gate = evaluate_evidence_gate(
-            ctx.ledger, diff_text, verification_available=bool(self._recipes)
-        )
-        if gate.passed:
-            reason = (
-                StopReason.EVIDENCE_SATISFIED if ctx.ledger.has_edits else StopReason.FINAL_ANSWER
-            )
-            return await self._finish(
-                ctx, RunStatus.SUCCEEDED, reason, answer.final_text, gate.reason_code
-            )
-
-        if gate.terminal:
-            # 在这里发送 nudge 会循环到预算耗尽，却没有任何成功可能，还会报告
-            # 错误的停止原因。
-            await self._emitter.emit(
-                ctx.run_id,
-                Notice(run_id=ctx.run_id, level="error", message=gate.detail),
-            )
-            return await self._finish(
-                ctx,
-                RunStatus.STOPPED,
-                StopReason.VERIFICATION_UNAVAILABLE,
-                answer.final_text,
-                gate.reason_code,
-            )
-
-        ctx.nudges += 1
-        if ctx.nudges > MAX_EVIDENCE_NUDGES:
-            return await self._finish(
-                ctx,
-                RunStatus.STOPPED,
-                StopReason.EVIDENCE_MISSING,
-                answer.final_text,
-                gate.reason_code,
-            )
-        await self._emitter.emit(
-            ctx.run_id,
-            Notice(
-                run_id=ctx.run_id,
-                level="warning",
-                message=f"final answer rejected by evidence gate: {gate.detail}",
-            ),
-        )
-        ctx.transcript.append(
-            ModelMessage(
-                role="user",
-                content=(
-                    "Your answer was NOT accepted as success: "
-                    f"{gate.detail} Run repo.diff and a repo.check recipe to "
-                    "produce fresh evidence, then answer again."
-                ),
-            )
-        )
-        ctx.move_to(RunStatus.RUNNING_MODEL)
-        await self._checkpoint(ctx)
-        return None
 
     async def _handle_tool_calls(
         self,
@@ -757,172 +542,15 @@ class RunService:
                 return await self._finish(ctx, RunStatus.STOPPED, StopReason.NO_PROGRESS, "")
         return None
 
-    async def _record_envelope(
-        self, ctx: RunContext, step: int, request: ModelRequest, previous: str
-    ) -> str:
-        """在模型可见的请求信封发生变化时记录日志。
-
-        返回当前摘要，使调用方可以在下一步比较。系统提示和工具集按设计在一次运行中
-        保持稳定（ADR 0008），因此实际通常每次运行只写入一个事件；只有在影响模型行为
-        的内容发生移动时才会写入第二个事件，而这正是轨迹中值得关注的情况。
-        """
-        system = next((m.content for m in request.messages if m.role == "system"), "")
-        tool_names = tuple(tool.name for tool in request.tools)
-        digest = digest_of(
-            {
-                "system": system,
-                "tools": list(tool_names),
-                "reasoning_effort": request.reasoning_effort or "",
-                "max_output_tokens": request.max_output_tokens or 0,
-            }
-        )
-        if digest == previous:
-            return digest
-        await self._emitter.emit(
-            ctx.run_id,
-            RequestEnvelope(
-                run_id=ctx.run_id,
-                step=step,
-                reason="initial" if not previous else "changed",
-                system_prompt_digest=digest,
-                system_prompt_chars=len(system),
-                tool_names=tool_names,
-                reasoning_effort=request.reasoning_effort or "",
-                max_output_tokens=request.max_output_tokens or 0,
-            ),
-        )
-        return digest
-
     # -- 模型流式输出 ------------------------------------------------------------
 
     async def _stream_model(self, ctx: RunContext, step: int, request: ModelRequest) -> ModelResult:
-        """流式处理一轮模型调用，只在能够证明安全时重试。
-
-        模型调用没有副作用，因此重试连接失败不会重复应用任何操作——工具调用则从不
-        重试。部分流式输出的轮次也可以安全重试：组装中的文本和工具调用只属于当前尝试，
-        会被丢弃；在轮次完成前，任何内容都不会进入 transcript 或工具流水线。只有已经
-        展示给用户的文本会过时，因此会通知 UI 重置。
-        """
-        for attempt in range(MODEL_RETRY_ATTEMPTS + 1):
-            progress = _StreamProgress()
-            try:
-                return await self._stream_once(ctx, step, request, progress)
-            except ProviderError as exc:
-                exhausted = attempt == MODEL_RETRY_ATTEMPTS
-                if not exc.retryable or exhausted:
-                    raise
-                if progress.started:
-                    await self._emitter.emit(
-                        ctx.run_id, StreamRestarted(run_id=ctx.run_id, step=step)
-                    )
-                delay = _retry_delay(attempt, exc.retry_after_s)
-                await self._emitter.emit(
-                    ctx.run_id,
-                    Notice(
-                        run_id=ctx.run_id,
-                        level="warning",
-                        message=(
-                            f"provider error ({exc.code}); retrying in {delay:.1f}s "
-                            f"({attempt + 1}/{MODEL_RETRY_ATTEMPTS})"
-                        ),
-                    ),
-                )
-                await asyncio.sleep(delay)
-        raise ProviderError("server", "model retry loop exhausted")
-
-    async def _stream_once(
-        self,
-        ctx: RunContext,
-        step: int,
-        request: ModelRequest,
-        progress: _StreamProgress,
-    ) -> ModelResult:
-        started = time.monotonic()
-        ttft_ms = 0
-        text_parts: list[str] = []
-        reasoning_parts: list[str] = []
-        tool_calls: list[ToolCallProposal] = []
-        usage = Usage()
-        finish: Literal["stop", "tool_calls", "length", "error"] = "stop"
-
-        async for event in self._model.generate_stream(request):
-            progress.started = True
-            if ttft_ms == 0:
-                ttft_ms = max(1, int((time.monotonic() - started) * 1000))
-            if isinstance(event, TextDelta):
-                text_parts.append(event.text)
-                await self._emitter.emit(
-                    ctx.run_id,
-                    AssistantDelta(run_id=ctx.run_id, step=step, text=event.text),
-                )
-            elif isinstance(event, ReasoningDelta):
-                # 用于让用户看到长时间推理，也用于线协议重放（ADR 0014）；但特意
-                # 不放进 `text`：推理不是答案，绝不能作为 assistant 内容重新进入
-                # transcript（对话记录）。
-                reasoning_parts.append(event.text)
-                await self._emitter.emit(
-                    ctx.run_id,
-                    AssistantReasoning(run_id=ctx.run_id, step=step, text=event.text),
-                )
-            elif isinstance(event, ToolCallReady):
-                tool_calls.append(event.call)
-            elif isinstance(event, UsageReport):
-                usage = event.usage
-            elif isinstance(event, StreamFinished):
-                finish = event.finish_reason
-
-        return ModelResult(
-            text="".join(text_parts),
-            tool_calls=tuple(tool_calls),
-            usage=usage,
-            finish_reason="tool_calls" if tool_calls else finish,
-            ttft_ms=ttft_ms,
-            duration_ms=int((time.monotonic() - started) * 1000),
-            provider_reasoning="".join(reasoning_parts),
-        )
-
-    def _charge_usage(self, ctx: RunContext, request: ModelRequest, result: ModelResult) -> None:
-        usage = result.usage
-        estimated = False
-        input_tokens = usage.input_tokens
-        output_tokens = usage.output_tokens
-        if input_tokens == 0 and output_tokens == 0:
-            # 提供商没有返回用量：采用保守估算，并明确说明这一点。
-            estimated = True
-            input_tokens = sum(len(m.content) for m in request.messages) // 4
-            output_tokens = max(1, len(result.text) // 4)
-        cost = self._pricing.cost(input_tokens, output_tokens, usage.cached_input_tokens)
-        ctx.usage = ctx.usage.charge_tokens(
-            input_tokens,
-            output_tokens,
-            cost,
-            estimated=estimated,
-            cached_input_tokens=usage.cached_input_tokens,
-        )
+        return await self._streamer.stream(self._model, ctx, step, request)
 
     # -- 持久化 ------------------------------------------------------------------
 
     async def _checkpoint(self, ctx: RunContext) -> None:
-        ctx.last_seq = self._emitter.last_seq(ctx.run_id)
-        original_artifacts: dict[str, str] = {}
-        for path, content in self._workspace.original_contents().items():
-            original_artifacts[path] = await self._store.put_artifact(content.encode("utf-8"))
-        checkpoint = CheckpointV1(
-            run_id=ctx.run_id,
-            workspace_digest=self._workspace.workspace_digest,
-            goal=ctx.goal,
-            mode=ctx.mode.value,
-            status=ctx.status.value,
-            last_seq=ctx.last_seq,
-            budget=BudgetSnapshot.from_domain(ctx.budget),
-            usage=UsageSnapshot.from_domain(ctx.usage),
-            messages=tuple(ctx.transcript),
-            evidence=EvidenceSnapshot.from_domain(ctx.ledger),
-            files_read=dict(ctx.files_read),
-            plan=ctx.plan,
-            original_artifacts=original_artifacts,
-        )
-        await self._store.save_checkpoint(checkpoint)
+        await self._checkpoints.save(ctx)
 
     async def _finish(
         self,
@@ -932,49 +560,8 @@ class RunService:
         final_text: str,
         gate_reason: str = "",
     ) -> RunOutcome:
-        """唯一出口：每次运行都恰好在这里结束一次。
-
-        持久化最终状态和检查点，并发出 `run.finished`。声称 SUCCEEDED 的调用方已经
-        通过证据门禁（见 `_drive` 的最终答案分支）；此方法不会提升状态，只记录决定
-        及其停止原因。
-        """
-        if ctx.status is not status:
-            ctx.status = status  # 直接设置：_finish 的目标始终接近终态
-        await self._store.update_run_status(ctx.run_id, status, stop_reason.value)
-        await self._checkpoint(ctx)
-        await self._emitter.emit(
-            ctx.run_id,
-            RunFinished(
-                run_id=ctx.run_id,
-                status=status.value,
-                stop_reason=stop_reason.value,
-                gate_reason=gate_reason,
-                steps=ctx.usage.steps,
-                tool_calls=ctx.usage.tool_calls,
-                input_tokens=ctx.usage.input_tokens,
-                output_tokens=ctx.usage.output_tokens,
-                cached_input_tokens=ctx.usage.cached_input_tokens,
-                cost_usd=round(ctx.usage.cost_usd, 6),
-                cost_known=self._pricing.is_known,
-                usage_estimated=ctx.usage.usage_estimated,
-                duration_ms=int(ctx.usage.wall_time_seconds * 1000),
-            ),
-        )
-        return RunOutcome(
-            run_id=ctx.run_id,
-            status=status,
-            stop_reason=stop_reason,
-            gate_reason=gate_reason,
-            steps=ctx.usage.steps,
-            tool_calls=ctx.usage.tool_calls,
-            input_tokens=ctx.usage.input_tokens,
-            output_tokens=ctx.usage.output_tokens,
-            cached_input_tokens=ctx.usage.cached_input_tokens,
-            cost_usd=round(ctx.usage.cost_usd, 6),
-            cost_known=self._pricing.is_known,
-            usage_estimated=ctx.usage.usage_estimated,
-            final_text=final_text,
-        )
+        """唯一出口：持久化终态、检查点并发出 run.finished。"""
+        return await self._finalizer.finish(ctx, status, stop_reason, final_text, gate_reason)
 
 
 def build_run_context_from_checkpoint(
