@@ -75,6 +75,7 @@ def _between(text: str, begin: str, end: str) -> str | None:
 
 
 def collect_problems() -> list[str]:
+    """检查本地链接、命令表、版本和历史文档标记并汇总问题。"""
     problems: list[str] = []
 
     for path in DOC_PATHS:
@@ -124,6 +125,7 @@ def collect_problems() -> list[str]:
 
 
 def main() -> int:
+    """运行文档契约门禁并返回进程退出码。"""
     problems = collect_problems()
     if problems:
         print(f"documentation contracts: {len(problems)} problem(s)")

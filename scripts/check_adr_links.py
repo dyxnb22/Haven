@@ -68,10 +68,12 @@ def _load() -> dict[int, str]:
 
 
 def collect_problems() -> list[str]:
+    """加载仓库中的 ADR 并返回所有反向链接问题。"""
     return backlink_problems(_load())
 
 
 def main() -> int:
+    """运行 ADR 交叉链接门禁并返回进程退出码。"""
     problems = collect_problems()
     if problems:
         print(f"ADR cross-links: {len(problems)} problem(s)")

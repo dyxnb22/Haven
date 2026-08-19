@@ -114,7 +114,11 @@ card warns that the visible argv no longer describes what will happen.
 model never supplies a command string. Every process — exec and recipe alike —
 runs with a fixed argv (never `shell=True`), a scrubbed environment allowlist, a
 hard timeout (terminate → grace → kill), bounded stdout/stderr, cancellation
-propagation, **and an OS sandbox** (see below).
+propagation, a fresh lifecycle-owned scratch directory, **and an OS sandbox**
+(see below). `RunService` creates one unpredictable `repo.exec` directory per
+run; recipe execution creates and reclaims one per invocation. Cleaned paths are
+never reused, and the historical workspace path `.haven-scratch` is ignored, so
+a repository cannot pre-place a symlink that widens the sandbox's writable roots.
 
 Only commands on a small longest-prefix table of obviously read-only programs
 (`ls`, `cat`, `git status`, `find` without `-delete`/`-exec`) skip the approval
@@ -143,14 +147,17 @@ unconfined path. The two process tools are treated differently on purpose
   the workspace fails with a permission error on both platforms, which is also
   what closes the Landlock gap where `.git` could not be carved out of a
   writable workspace.
-- `repo.check` runs a **user-authored recipe id** against a repository the user
-  has already chosen to trust, so the sandbox is defense-in-depth and the
+- `repo.check` runs a **registered recipe id** against a repository the user
+  has chosen to trust, so the sandbox is defense-in-depth and the
   workspace stays **writable** (tests write caches and artifacts). It is applied
   whenever a backend exists, but a platform without one still runs registered
   checks, under the same locally-trusted-repo assumption the whole tool holds.
-  Network is denied by default; a user-authored recipe may explicitly set
+  Network is denied by default; a reviewed recipe may explicitly set
   `allow_network = true`. The model cannot add or change that grant because
-  `.haven.toml` is protected.
+  `.haven.toml` is protected. At approval time Haven repeats the exact command,
+  the workspace-write permission, network setting, and every additional
+  readable root; merely finding config in the repository is not treated as
+  silent consent (ADR 0030).
   Files a check changes are attributed to the evidence ledger from before/after
   snapshots (ADR 0012), and a change to a protected path (`.git`, `.haven`,
   `.haven.toml`) — which Landlock cannot prevent for a writable workspace — is
@@ -304,15 +311,17 @@ pre-run content, but only where the file on disk still matches what that run
 left behind — anything changed since blocks rather than being overwritten, so
 rewind is fail-closed compensation, never a blind replay. A single-writer
 workspace lease makes concurrent Haven processes on one workspace explicit
-(the second runs read-only), closing the cross-process approve-then-execute
-window.
+(the second runs read-only). A native file-lock guard serializes stale takeover
+and a random token binds ownership, closing the former same-machine
+approve-then-execute winner race. It remains advisory with respect to editors
+and other non-Haven processes.
 
 ## Known limitations (stated plainly)
 
 - Model-proposed `repo.exec` is available only with Seatbelt (macOS) or Landlock
   (Linux): its workspace is read-only, `$HOME` is hidden, and network is denied.
   Registered checks use a workspace-writable profile, may opt into network in
-  user-authored config, and still run without a backend on unsupported platforms
+  reviewed config (with the authority repeated on the approval card), and still run without a backend on unsupported platforms
   under the local-trust assumption. This is **not** a container or VM. IPC is
   open, Linux network confinement covers TCP only, and secrets outside `$HOME`
   can remain readable. Haven does **not** claim safety for an untrusted or

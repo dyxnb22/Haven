@@ -58,42 +58,75 @@ def sanitize(text: str, limit: int = 2000) -> str:
 
 @dataclass(frozen=True, slots=True)
 class TimelineEntry:
+    """TUI 时间线中可展示的一条事件摘要。"""
+
+    #: 用于选择图标的展示类别。
     kind: str  # 取值：user | agent | tool | policy | approval | notice | system
+    #: 在时间线中展示的已清理文本。
     text: str
 
 
 @dataclass(frozen=True, slots=True)
 class PresenterState:
+    """由事件折叠出的 TUI 展示状态，不拥有业务事实。"""
+
+    #: 标题栏展示的工作区根路径。
     workspace: str = ""
+    #: 当前运行记录的 Git 分支。
     branch: str = ""
+    #: 配置的模型标识符。
     model_name: str = ""
+    #: 当前运行的权限模式。
     mode: str = ""
+    #: 对话上方展示的用户目标。
     goal: str = ""
+    #: 当前运行或重放运行的稳定标识。
     run_id: str = ""
+    #: 标题栏展示的当前生命周期状态。
     status: str = "idle"
+    #: 运行结束后的终止原因。
     stop_reason: str = ""
+    #: 可用时展示的 Evidence Gate 原因。
     gate_reason: str = ""
+    #: 当前已完成的模型循环轮次。
     step: int = 0
+    #: 从 run.created 复制的硬轮次预算。
     max_steps: int = 0
+    #: 当前已消耗的工具调用次数。
     tool_calls: int = 0
+    #: 当前已消耗的输入 token 总数。
     input_tokens: int = 0
+    #: 当前已消耗的输出 token 总数。
     output_tokens: int = 0
+    #: 累计估算费用，单位为美元。
     cost_usd: float = 0.0
     #: 模型没有费率卡时为 False，此时数值是占位值。
     cost_known: bool = True
+    #: 任意用量值来自估算时为 True。
     usage_estimated: bool = False
+    #: 当前是否有正在运行的模型任务。
     running: bool = False
+    #: 当前正在流式输出的临时助手可见文本。
     streaming_text: str = ""
+    #: 当前正在流式输出的临时提供商推理文本。
     reasoning_text: str = ""
+    #: 清理后的累计对话文本。
     chat_text: str = ""
+    #: 有界的当前差异预览。
     diff_text: str = ""
+    #: 渲染后的结构化计划行。
     plan_lines: tuple[str, ...] = field(default_factory=tuple)
+    #: 最近一次上下文选择摘要。
     context_summary: str = ""
+    #: 按顺序排列的展示时间线。
     timeline: tuple[TimelineEntry, ...] = field(default_factory=tuple)
+    #: Evidence 标签页展示的证据行。
     evidence_rows: tuple[str, ...] = field(default_factory=tuple)
+    #: Trace 标签页展示的追踪行。
     trace_rows: tuple[str, ...] = field(default_factory=tuple)
 
     def header_line(self) -> str:
+        """生成标题栏中的工作区、分支、模型、模式、步数和费用摘要。"""
         parts = [
             "Haven",
             self.workspace.rsplit("/", 1)[-1] if self.workspace else "",
@@ -110,6 +143,7 @@ class PresenterState:
         return " ─ ".join(p for p in [*parts, step, cost] if p)
 
     def status_line(self) -> str:
+        """根据运行状态生成状态栏文案和取消提示。"""
         if self.running:
             return f"status: {self.status} — Ctrl+C cancels the run"
         if self.stop_reason:
@@ -122,6 +156,7 @@ def _push(state: PresenterState, entry: TimelineEntry) -> PresenterState:
 
 
 def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
+    """将一个事件纯归约到新的展示状态，供实时渲染和重放共用。"""
     event = envelope.event
 
     if isinstance(event, RunCreated):
@@ -141,8 +176,15 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
             chat_text="",
             diff_text="",
             streaming_text="",
+            reasoning_text="",
+            context_summary="",
             step=0,
             tool_calls=0,
+            input_tokens=0,
+            output_tokens=0,
+            cost_usd=0.0,
+            cost_known=True,
+            usage_estimated=False,
             plan_lines=(),
             evidence_rows=(),
             trace_rows=(),
@@ -279,11 +321,16 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
             status=event.status,
             stop_reason=event.stop_reason,
             gate_reason=event.gate_reason,
+            step=event.steps,
+            tool_calls=event.tool_calls,
+            input_tokens=event.input_tokens,
+            output_tokens=event.output_tokens,
             cost_usd=event.cost_usd,
             cost_known=event.cost_known,
             usage_estimated=event.usage_estimated,
             running=False,
             streaming_text="",
+            reasoning_text="",
         )
         cost = f"cost=${event.cost_usd:.4f}" if event.cost_known else "cost=unknown"
         return _push(

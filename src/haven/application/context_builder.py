@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from haven.application.compaction import enforce_hard_limit, summarize_dropped
+from haven.application.compaction import enforce_hard_limit, message_chars, summarize_dropped
 from haven.contracts.events import ContextSegment
 from haven.contracts.model import ModelMessage, ModelRequest, ToolSchema
 from haven.contracts.tools import PlanStep
@@ -34,9 +34,13 @@ Trust = Literal["trusted", "untrusted"]
 class _Selected:
     """一条选中的上下文消息，以及我们为其报告的来源信息。"""
 
+    #: 为下一次请求选中的消息。
     message: ModelMessage
+    #: 在上下文追踪中使用的逻辑来源标签。
     source: str
+    #: 来源是应用可信数据，还是仓库/模型文本。
     trust: Trust
+    #: 确定性纳入或省略该片段的原因。
     reason: str
 
 
@@ -89,6 +93,8 @@ summarizing what changed and citing the diff and check evidence.
 
 
 class ContextBuilder:
+    """按固定头部、可压缩 transcript 和动态尾部组装模型请求。"""
+
     def __init__(
         self,
         *,
@@ -212,6 +218,7 @@ class ContextBuilder:
         usage: BudgetUsage,
         plan: tuple[PlanStep, ...] = (),
     ) -> tuple[ModelRequest, tuple[ContextSegment, ...]]:
+        """选择上下文并记录来源；超限时确定性丢弃最旧的工具输出。"""
         selected: list[_Selected] = [
             _Selected(
                 message=ModelMessage(role="system", content=self.system_prompt()),
@@ -292,7 +299,7 @@ class ContextBuilder:
         # （新增始终存在且导致溢出的片段）会变成明显失败，而不是静默发送
         # 超预算请求；这里使用 raise 而不是 assert，因为 `python -O` 会移除
         # 断言，也就会移除这段注释所承诺的保护。
-        assembled = sum(len(item.message.content) for item in fitted)
+        assembled = sum(message_chars(item.message) for item in fitted)
         if assembled > self._max_context_chars:
             raise RuntimeError(
                 f"context builder produced an over-budget request: "
@@ -320,7 +327,7 @@ class ContextBuilder:
 def _head_size(selected: list[_Selected]) -> int:
     """稳定头部已经占用的字符数；这样 transcript 所占的预算会扣除其前面的系统规则
     和指引。"""
-    return sum(len(item.message.content) for item in selected)
+    return sum(message_chars(item.message) for item in selected)
 
 
 def _fit_history(history: list[_Selected], limit: int) -> list[_Selected]:
@@ -334,8 +341,8 @@ def _fit_history(history: list[_Selected], limit: int) -> list[_Selected]:
     fitted = enforce_hard_limit(original, limit)
     if fitted == original:
         return history
-        # 按对象身份将保留下来的消息映射回选择元数据；截断后的尾部消息是
-        # 新对象，因此对它回退使用最后一项的元数据。
+    # 按对象身份将保留下来的消息映射回选择元数据；截断后的消息是新对象，
+    # 因此对它回退使用最后一项的元数据。
     by_id = {id(item.message): item for item in history}
     out: list[_Selected] = []
     for message in fitted:

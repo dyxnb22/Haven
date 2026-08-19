@@ -12,12 +12,13 @@ from haven.domain.enums import PermissionMode
 class ClosableModel:
     """记录自身是否已关闭的模型端口。"""
 
-    def __init__(self) -> None:
+    def __init__(self, name: str = "fake-model") -> None:
         self.closed = False
+        self.name = name
 
     @property
     def model_name(self) -> str:
-        return "fake-model"
+        return self.name
 
     async def _stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
         yield StreamFinished(finish_reason="stop")
@@ -30,7 +31,7 @@ class ClosableModel:
 
 
 async def test_close_closes_the_provider_client(tmp_path: Path) -> None:
-    model = ClosableModel()
+    model = ClosableModel("deepseek-chat")
     services = await build_services(
         tmp_path,
         mode=PermissionMode.READ_ONLY,
@@ -39,8 +40,13 @@ async def test_close_closes_the_provider_client(tmp_path: Path) -> None:
         model=model,
         store_path=tmp_path / "haven.db",
     )
+    scratch = services.run_service._scratch_dir  # noqa: SLF001
+    assert scratch.is_dir()
+    assert services.config.pricing.is_known
+    assert services.config.sources["pricing"] == "model-profile:deepseek-v4-flash"
     await services.close()
     assert model.closed, "the provider client outlived AppServices.close()"
+    assert not scratch.exists(), "an unused RunService leaked its temporary directory"
 
 
 async def test_close_is_safe_for_a_model_without_aclose(tmp_path: Path) -> None:

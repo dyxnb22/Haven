@@ -40,6 +40,7 @@ def _literal(path: Path) -> str:
 
 
 def build_profile(spec: SandboxSpec) -> str:
+    """按 SandboxSpec 生成 macOS Seatbelt 规则文本，不启动进程。"""
     lines = [_PREAMBLE, "(allow file-read*)"]
 
     for root in spec.private_roots:
@@ -68,15 +69,19 @@ class SeatbeltLauncher:
 
     @property
     def backend(self) -> str:
+        """返回 macOS Seatbelt 后端名称。"""
         return "seatbelt"
 
     def available(self) -> bool:
+        """检查系统是否存在 sandbox-exec。"""
         return Path(SANDBOX_EXEC).is_file()
 
     def wrap(self, argv: tuple[str, ...], spec: SandboxSpec) -> tuple[str, ...]:
+        """把规则文本和目标 argv 组合成 sandbox-exec 启动命令。"""
         return (SANDBOX_EXEC, "-p", build_profile(spec), *argv)
 
     def describe(self, spec: SandboxSpec) -> str:
+        """描述 Seatbelt 下的读写和网络边界。"""
         writes = (
             f"writes limited to {spec.workspace_root}"
             if spec.writable

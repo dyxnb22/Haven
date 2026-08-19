@@ -6,6 +6,9 @@ Schema 迁移采用失败即拒绝策略：遇到未知 schema 版本时直接�
 
 from __future__ import annotations
 
+import asyncio
+import os
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -20,9 +23,9 @@ from haven.contracts.events import (
 )
 from haven.domain.digest import sha256_bytes, sha256_text
 from haven.domain.enums import ApprovalDecision, EffectState, RunStatus
-from haven.ports.session import ExecutionRecord, RunRecord
+from haven.ports.session import ArtifactError, ExecutionRecord, RunRecord
 
-DB_SCHEMA_VERSION = 2
+DB_SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -68,8 +71,8 @@ CREATE TABLE IF NOT EXISTS approvals (
     consumed_at TEXT
 );
 CREATE TABLE IF NOT EXISTS executions (
-    call_id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL,
+    call_id TEXT NOT NULL,
     ticket_digest TEXT NOT NULL,
     tool_name TEXT NOT NULL,
     effect_state TEXT NOT NULL,
@@ -78,19 +81,37 @@ CREATE TABLE IF NOT EXISTS executions (
     path TEXT NOT NULL DEFAULT '',
     dest_path TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (run_id, call_id)
 );
 """
 
 #: 原地迁移，按存储版本依次应用。每个条目将 schema 从 `version` 迁移到
-#: `version + 1`。按策略只允许追加：无法用追加式 DDL 表达的迁移会创建新的
-#: 存储，而不是破坏性重写当前存储。
+#: `version + 1`。需要改变主键时，在同一事务内重建目标表并复制已有数据。
 _MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: ("ALTER TABLE executions ADD COLUMN dest_path TEXT NOT NULL DEFAULT ''",),
+    2: (
+        "CREATE TABLE executions_v3 ("
+        "run_id TEXT NOT NULL, call_id TEXT NOT NULL, ticket_digest TEXT NOT NULL, "
+        "tool_name TEXT NOT NULL, effect_state TEXT NOT NULL, "
+        "preimage_digest TEXT NOT NULL DEFAULT '', "
+        "postimage_digest TEXT NOT NULL DEFAULT '', path TEXT NOT NULL DEFAULT '', "
+        "dest_path TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, PRIMARY KEY (run_id, call_id))",
+        "INSERT INTO executions_v3 (run_id, call_id, ticket_digest, tool_name, "
+        "effect_state, preimage_digest, postimage_digest, path, dest_path, created_at, "
+        "updated_at) SELECT run_id, call_id, ticket_digest, tool_name, effect_state, "
+        "preimage_digest, postimage_digest, path, dest_path, created_at, updated_at "
+        "FROM executions",
+        "DROP TABLE executions",
+        "ALTER TABLE executions_v3 RENAME TO executions",
+    ),
 }
 
 
-class StoreError(Exception):
+class StoreError(ArtifactError):
+    """持久化层无法完成事务时抛出的稳定错误。"""
+
     pass
 
 
@@ -99,15 +120,20 @@ def _now() -> str:
 
 
 class SqliteSessionStore:
-    """在 aiosqlite 上实现 SessionStorePort。"""
+    """基于 SQLite 的持久化实现，保存运行索引、事件和恢复记录。
+
+    在 aiosqlite 上实现 SessionStorePort。
+    """
 
     def __init__(self, db: aiosqlite.Connection, artifacts_dir: Path) -> None:
         self._db = db
         self._artifacts_dir = artifacts_dir
         self._next_seq: dict[str, int] = {}
+        self._append_lock = asyncio.Lock()
 
     @classmethod
     async def open(cls, db_path: Path, artifacts_dir: Path) -> SqliteSessionStore:
+        """打开存储并初始化 schema；未知版本或无迁移路径时拒绝启动。"""
         db_path.parent.mkdir(parents=True, exist_ok=True)
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         db = await aiosqlite.connect(db_path)
@@ -142,6 +168,7 @@ class SqliteSessionStore:
         return cls(db, artifacts_dir)
 
     async def close(self) -> None:
+        """关闭 SQLite 连接。"""
         await self._db.close()
 
     # -- 运行 ------------------------------------------------------------------
@@ -149,6 +176,7 @@ class SqliteSessionStore:
     async def create_run(
         self, run_id: str, workspace: str, workspace_digest: str, goal: str, mode: str
     ) -> None:
+        """持久化一条初始状态为 ``CREATED`` 的运行记录。"""
         now = _now()
         await self._db.execute(
             "INSERT INTO runs (id, workspace, workspace_digest, goal, mode, status, "
@@ -158,6 +186,7 @@ class SqliteSessionStore:
         await self._db.commit()
 
     async def update_run_status(self, run_id: str, status: RunStatus, stop_reason: str) -> None:
+        """原子更新运行状态、停止原因和更新时间。"""
         await self._db.execute(
             "UPDATE runs SET status = ?, stop_reason = ?, updated_at = ? WHERE id = ?",
             (status.value, stop_reason, _now(), run_id),
@@ -165,13 +194,18 @@ class SqliteSessionStore:
         await self._db.commit()
 
     async def get_run(self, run_id: str) -> RunRecord | None:
+        """按 ID 读取运行记录；不存在时返回 ``None``。"""
         cursor = await self._db.execute("SELECT * FROM runs WHERE id = ?", (run_id,))
         row = await cursor.fetchone()
         return _row_to_run(row) if row else None
 
     async def list_runs(self, limit: int) -> list[RunRecord]:
+        """按最近更新时间倒序返回最多 ``limit`` 条运行记录。"""
+        if limit < 0:
+            raise ValueError("limit must be non-negative")
         cursor = await self._db.execute(
-            "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)
+            "SELECT * FROM runs ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT ?",
+            (limit,),
         )
         rows = await cursor.fetchall()
         return [_row_to_run(row) for row in rows]
@@ -179,15 +213,17 @@ class SqliteSessionStore:
     # -- 事件 ------------------------------------------------------------------
 
     async def append_event(self, run_id: str, event: ApplicationEvent) -> EventEnvelope:
-        seq = await self._allocate_seq(run_id)
-        payload = event.model_dump_json()
-        at = _now()
-        await self._db.execute(
-            "INSERT INTO events (run_id, seq, kind, schema_version, payload_json, "
-            "payload_digest, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (run_id, seq, event.kind, SCHEMA_VERSION, payload, sha256_text(payload), at),
-        )
-        await self._db.commit()
+        """分配运行内递增序号，写入带摘要的事件并返回其信封。"""
+        async with self._append_lock:
+            seq = await self._allocate_seq(run_id)
+            payload = event.model_dump_json()
+            at = _now()
+            await self._db.execute(
+                "INSERT INTO events (run_id, seq, kind, schema_version, payload_json, "
+                "payload_digest, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (run_id, seq, event.kind, SCHEMA_VERSION, payload, sha256_text(payload), at),
+            )
+            await self._db.commit()
         return EventEnvelope(seq=seq, at=at, event=event)
 
     async def _allocate_seq(self, run_id: str) -> int:
@@ -203,6 +239,7 @@ class SqliteSessionStore:
         return seq
 
     async def load_events(self, run_id: str) -> list[EventEnvelope]:
+        """按序读取并校验事件摘要，再恢复为领域事件对象。"""
         cursor = await self._db.execute(
             "SELECT seq, payload_json, payload_digest, created_at FROM events "
             "WHERE run_id = ? ORDER BY seq",
@@ -223,6 +260,7 @@ class SqliteSessionStore:
     # -- 检查点 --------------------------------------------------------------
 
     async def save_checkpoint(self, checkpoint: CheckpointV1) -> None:
+        """保存检查点并删除同一运行更旧的快照，保留最新恢复点。"""
         state_json = checkpoint.model_dump_json()
         await self._db.execute(
             "INSERT OR REPLACE INTO checkpoints (run_id, seq, state_json, checksum, created_at) "
@@ -243,6 +281,7 @@ class SqliteSessionStore:
         await self._db.commit()
 
     async def load_checkpoint(self, run_id: str) -> CheckpointV1 | None:
+        """读取序号最高的检查点并验证校验和与 schema 版本。"""
         cursor = await self._db.execute(
             "SELECT state_json, checksum FROM checkpoints WHERE run_id = ? "
             "ORDER BY seq DESC LIMIT 1",
@@ -261,6 +300,7 @@ class SqliteSessionStore:
     # -- 审批 --------------------------------------------------------------------
 
     async def record_approval(self, approval_id: str, run_id: str, request_digest: str) -> None:
+        """记录绑定运行和请求摘要的待审批项。"""
         await self._db.execute(
             "INSERT INTO approvals (id, run_id, request_digest, created_at) VALUES (?, ?, ?, ?)",
             (approval_id, run_id, request_digest, _now()),
@@ -268,6 +308,7 @@ class SqliteSessionStore:
         await self._db.commit()
 
     async def decide_approval(self, approval_id: str, decision: ApprovalDecision) -> None:
+        """持久化审批决定及决定时间。"""
         await self._db.execute(
             "UPDATE approvals SET decision = ?, decided_at = ? WHERE id = ?",
             (decision.value, _now(), approval_id),
@@ -287,6 +328,7 @@ class SqliteSessionStore:
     # -- 执行 --------------------------------------------------------------------
 
     async def record_execution(self, record: ExecutionRecord) -> None:
+        """写入工具执行记录及其初始副作用摘要。"""
         now = _now()
         await self._db.execute(
             "INSERT INTO executions (call_id, run_id, ticket_digest, tool_name, effect_state, "
@@ -309,19 +351,25 @@ class SqliteSessionStore:
         await self._db.commit()
 
     async def update_execution_state(
-        self, call_id: str, effect_state: EffectState, postimage_digest: str = ""
+        self,
+        run_id: str,
+        call_id: str,
+        effect_state: EffectState,
+        postimage_digest: str = "",
     ) -> None:
+        """更新执行副作用状态；空后像摘要保留已有值以支持恢复分类。"""
         # 空 postimage 不能擦除 STARTED 时记录的值（恢复逻辑正是依据预期
         # postimage 进行分类），这与内存存储的语义一致。
         await self._db.execute(
             "UPDATE executions SET effect_state = ?, "
             "postimage_digest = CASE WHEN ? = '' THEN postimage_digest ELSE ? END, "
-            "updated_at = ? WHERE call_id = ?",
-            (effect_state.value, postimage_digest, postimage_digest, _now(), call_id),
+            "updated_at = ? WHERE run_id = ? AND call_id = ?",
+            (effect_state.value, postimage_digest, postimage_digest, _now(), run_id, call_id),
         )
         await self._db.commit()
 
     async def load_executions(self, run_id: str) -> list[ExecutionRecord]:
+        """按创建时间读取指定运行的全部执行记录。"""
         cursor = await self._db.execute(
             "SELECT * FROM executions WHERE run_id = ? ORDER BY created_at", (run_id,)
         )
@@ -344,19 +392,36 @@ class SqliteSessionStore:
     # -- 构件 --------------------------------------------------------------------
 
     async def put_artifact(self, content: bytes) -> str:
+        """以 SHA-256 摘要为名写入构件，并返回内容地址。"""
         digest = sha256_bytes(content)
         target = self._artifacts_dir / digest
-        if not target.exists():
-            target.write_bytes(content)
+        if target.is_file() and sha256_bytes(target.read_bytes()) == digest:
+            return digest
+        fd, staged_name = tempfile.mkstemp(prefix=".artifact-", dir=self._artifacts_dir)
+        try:
+            with os.fdopen(fd, "wb") as staged:
+                staged.write(content)
+                staged.flush()
+                os.fsync(staged.fileno())
+            os.replace(staged_name, target)
+        finally:
+            Path(staged_name).unlink(missing_ok=True)
         return digest
 
     async def get_artifact(self, digest: str) -> bytes | None:
-        if not digest or "/" in digest or "." in digest:
+        """读取合法摘要对应的构件；非法或不存在时返回 ``None``。"""
+        if not _valid_digest(digest):
             return None
         target = self._artifacts_dir / digest
-        return target.read_bytes() if target.exists() else None
+        if not target.is_file():
+            return None
+        content = target.read_bytes()
+        if sha256_bytes(content) != digest:
+            raise StoreError(f"artifact {digest} failed digest verification")
+        return content
 
     async def delete_run(self, run_id: str) -> None:
+        """在一个事务中删除运行及其事件、检查点、审批和执行记录。"""
         # 一个隐式事务：运行及其所有行要么全部删除，要么全部保留（连接在
         # 末尾一次性提交）。
         for table in ("events", "checkpoints", "approvals", "executions"):
@@ -366,14 +431,22 @@ class SqliteSessionStore:
         self._next_seq.pop(run_id, None)
 
     async def list_artifacts(self) -> list[str]:
+        """返回构件目录中的文件名摘要，按字典序排列。"""
         if not self._artifacts_dir.is_dir():
             return []
-        return sorted(p.name for p in self._artifacts_dir.iterdir() if p.is_file())
+        return sorted(
+            p.name for p in self._artifacts_dir.iterdir() if p.is_file() and _valid_digest(p.name)
+        )
 
     async def delete_artifact(self, digest: str) -> None:
-        if not digest or "/" in digest or "." in digest:
+        """删除合法摘要对应的构件；不存在时保持幂等。"""
+        if not _valid_digest(digest):
             return
         (self._artifacts_dir / digest).unlink(missing_ok=True)
+
+
+def _valid_digest(value: str) -> bool:
+    return len(value) == 64 and all(char in "0123456789abcdef" for char in value)
 
 
 def _row_to_run(row: aiosqlite.Row) -> RunRecord:

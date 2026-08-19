@@ -2,6 +2,11 @@
 
 Date: 2026-08-13
 
+Superseded on 2026-08-19 by
+[note 0007](../implemented/0007-risk-tiered-coverage-floors.md): the 85% floor
+now applies only to high-risk files, while the remaining core layer keeps a
+70% collapse floor. The original decision is preserved below.
+
 ## Context
 
 DeepSeek Harness enforces per-file 100% line/branch/function coverage on every

@@ -32,6 +32,11 @@ _MIN_SECRET_LENGTH = 8
 #: 特意不使用通用的“高熵字符串”启发式：那会遮蔽摘要和 diff，使无人信任
 #: 的导出内容被读过去。
 _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"-----BEGIN (?P<label>[A-Z0-9 ]*PRIVATE KEY)-----.*?"
+        r"-----END (?P=label)-----",
+        re.DOTALL,
+    ),  # 完整 PEM/OpenSSH 私钥块
     re.compile(r"\bsk-ant-[A-Za-z0-9_-]{16,}"),  # Anthropic 密钥
     re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"),  # OpenAI 及兼容服务密钥
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),  # AWS 访问密钥 ID
@@ -40,7 +45,7 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"),  # Slack 令牌
     re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),  # Google API 密钥
     re.compile(r"\bSG\.[A-Za-z0-9_-]{16,}"),  # SendGrid API 密钥
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),  # PEM/OpenSSH 密钥块
+    re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"),  # 不完整密钥块的头部兜底
 )
 
 
@@ -71,10 +76,19 @@ def _redact(text: str) -> str:
 
 
 def render_jsonl(envelopes: list[EventEnvelope]) -> str:
+    """将事件逐行导出为稳定的 JSONL，便于脚本消费。"""
     return "\n".join(_redact(env.model_dump_json()) for env in envelopes) + "\n"
 
 
+def _fenced_block(text: str, language: str) -> list[str]:
+    """生成不会被内容中的反引号提前闭合的 Markdown 围栏。"""
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return [f"{fence}{language}", text, fence]
+
+
 def render_markdown(run: RunRecord, envelopes: list[EventEnvelope]) -> str:
+    """将运行索引和事件轨迹渲染为面向人的 Markdown 报告。"""
     lines = [
         f"# Haven run report: {run.run_id}",
         "",
@@ -108,9 +122,7 @@ def render_markdown(run: RunRecord, envelopes: list[EventEnvelope]) -> str:
                 [
                     f"- diff: {event.files_changed} file(s) +{event.insertions} -{event.deletions}",
                     "",
-                    "```diff",
-                    event.preview,
-                    "```",
+                    *_fenced_block(event.preview, "diff"),
                     "",
                 ]
             )
@@ -126,7 +138,11 @@ def render_markdown(run: RunRecord, envelopes: list[EventEnvelope]) -> str:
                     f"- steps: {event.steps}, tool calls: {event.tool_calls}",
                     f"- tokens: {event.input_tokens} in / {event.output_tokens} out"
                     + (" (estimated)" if event.usage_estimated else ""),
-                    f"- cost: ${event.cost_usd:.4f}",
+                    (
+                        f"- cost: ${event.cost_usd:.4f}"
+                        if event.cost_known
+                        else "- cost: unknown (pricing unavailable)"
+                    ),
                 ]
             )
     return _redact("\n".join(lines) + "\n")

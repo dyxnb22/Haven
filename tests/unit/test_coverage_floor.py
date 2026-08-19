@@ -5,15 +5,22 @@
 在总体数字保持不变时，几乎未经测试就进入这些层。
 """
 
-from scripts.check_coverage_floor import CORE_FLOOR, floor_for, violations
+from scripts.check_coverage_floor import BASE_FLOOR, CORE_FLOOR, floor_for, violations
 
 
 class TestWhichFilesAreGated:
-    def test_the_decision_making_layers_are_gated(self) -> None:
+    def test_high_risk_paths_keep_the_strict_floor(self) -> None:
         assert floor_for("src/haven/domain/policy.py") == CORE_FLOOR
         assert floor_for("src/haven/application/tool_pipeline.py") == CORE_FLOOR
-        assert floor_for("src/haven/contracts/events.py") == CORE_FLOOR
-        assert floor_for("src/haven/ports/model.py") == CORE_FLOOR
+
+    def test_other_core_files_use_the_collapse_floor(self) -> None:
+        assert floor_for("src/haven/contracts/events.py") == BASE_FLOOR
+        assert floor_for("src/haven/ports/model.py") == BASE_FLOOR
+        assert floor_for("src/haven/application/registry.py") == BASE_FLOOR
+        assert floor_for("src/haven/application/tool_mutations.py") == BASE_FLOOR
+
+    def test_windows_paths_are_normalized_before_risk_classification(self) -> None:
+        assert floor_for(r"src\haven\domain\policy.py") == CORE_FLOOR
 
     def test_platform_and_ui_surfaces_are_not_gated_here(self) -> None:
         """它们由总体数字和平台专用套件覆盖；逐文件下限会编码一个没有任何平台都能
@@ -42,3 +49,15 @@ class TestViolations:
             }
         )
         assert len(found) == 2
+
+    def test_each_violation_reports_its_own_risk_floor(self) -> None:
+        found = violations(
+            {
+                "src/haven/domain/policy.py": 69.0,
+                "src/haven/application/registry.py": 69.0,
+            }
+        )
+        assert found == [
+            ("src/haven/application/registry.py", 69.0, BASE_FLOOR),
+            ("src/haven/domain/policy.py", 69.0, CORE_FLOOR),
+        ]

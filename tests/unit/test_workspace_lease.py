@@ -17,6 +17,8 @@ def test_acquire_and_release(tmp_path: Path) -> None:
     lease = acquire_workspace_lease(tmp_path / "ws", tmp_path / "leases")
     assert lease.pid == os.getpid()
     assert lease.path.is_file()
+    with pytest.raises(LeaseHeld):
+        acquire_workspace_lease(tmp_path / "ws", tmp_path / "leases")
     lease.release()
     assert not lease.path.exists()
 
@@ -82,7 +84,7 @@ def test_refresh_updates_the_heartbeat(tmp_path: Path) -> None:
 def test_release_leaves_someone_elses_lease_alone(tmp_path: Path) -> None:
     lease = acquire_workspace_lease(tmp_path / "ws", tmp_path / "leases")
     payload = json.loads(lease.path.read_text())
-    payload["pid"] = 1
+    payload["token"] = "replacement-owner"
     lease.path.write_text(json.dumps(payload))
     lease.release()
     assert lease.path.exists(), "release must not remove a lease we no longer hold"

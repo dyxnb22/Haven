@@ -193,24 +193,128 @@ def enforce_hard_limit(messages: list[ModelMessage], limit: int) -> list[ModelMe
     通常这是空操作——`summarize_dropped` 已经能处理常见情况；这里只在不可丢弃内容
     本身溢出时触发，必须以安全方式失败（发送截断后的请求），不能超预算发送后收到 400。
     """
-    total = sum(message_chars(m) for m in messages)
+    if limit < 0:
+        raise ValueError("limit must be non-negative")
+    total = sum(message_chars(message) for message in messages)
     if total <= limit or not messages:
         return messages
-    kept = list(messages)
-    # 当仍有多条消息且超出预算时，从最旧的消息开始丢弃。
-    while len(kept) > 1 and total > limit:
-        total -= message_chars(kept[0])
-        kept.pop(0)
-    if total > limit and kept:
-        # 如果只剩一条消息仍超出预算，则就地截断其内容。
-        only = kept[-1]
-        overflow = total - limit
-        content = only.content
-        if len(content) > overflow:
-            marker = "\n...[truncated to fit the context budget]"
-            cut = max(0, len(content) - overflow - len(marker))
-            kept[-1] = only.model_copy(update={"content": content[:cut] + marker})
-    return kept
+    units = _message_units(messages)
+
+    # 保留最新消息单元以及最新用户意图所在单元；其余单元从旧到新淘汰。
+    protected = {len(units) - 1}
+    for index in range(len(units) - 1, -1, -1):
+        if any(message.role == "user" for message in units[index]):
+            protected.add(index)
+            break
+    kept = list(enumerate(units))
+    while sum(message_chars(message) for _, unit in kept for message in unit) > limit:
+        candidate = next(
+            (i for i, (unit_index, _) in enumerate(kept) if unit_index not in protected), None
+        )
+        if candidate is None:
+            break
+        kept.pop(candidate)
+
+    total = sum(message_chars(message) for _, unit in kept for message in unit)
+    if total <= limit:
+        return [message for _, unit in kept for message in unit]
+
+    # 极端压力下按保护单元分配空间。工具调用与结果要么一起保留，要么被一个诚实
+    # 的省略标记替代，绝不会制造孤立的 tool 消息。
+    fitted: list[ModelMessage] = []
+    remaining = limit
+    for position, (_, unit) in enumerate(kept):
+        units_left = len(kept) - position
+        allocation = remaining if units_left == 1 else remaining // units_left
+        compacted = _fit_unit(unit, allocation)
+        fitted.extend(compacted)
+        used = sum(message_chars(message) for message in compacted)
+        remaining = max(0, remaining - used)
+    return fitted
+
+
+def _message_units(messages: list[ModelMessage]) -> list[list[ModelMessage]]:
+    """把消息切成不能被硬限制拆开的 provider 协议单元。"""
+    return [[messages[index] for index in indices] for indices in _all_units(messages)]
+
+
+def _all_units(messages: list[ModelMessage]) -> list[list[int]]:
+    units: list[list[int]] = []
+    index = 0
+    while index < len(messages):
+        message = messages[index]
+        if message.role == "assistant" and message.tool_calls:
+            group = [index]
+            index += 1
+            while index < len(messages) and messages[index].role == "tool":
+                group.append(index)
+                index += 1
+            units.append(group)
+        else:
+            units.append([index])
+            index += 1
+    return units
+
+
+def _fit_unit(unit: list[ModelMessage], limit: int) -> list[ModelMessage]:
+    if sum(message_chars(message) for message in unit) <= limit:
+        return unit
+    if len(unit) == 1:
+        return [_fit_message(unit[0], limit)]
+
+    fitted: list[ModelMessage] = []
+    remaining = limit
+    for position, message in enumerate(unit):
+        messages_left = len(unit) - position
+        allocation = remaining if messages_left == 1 else remaining // messages_left
+        compacted = _fit_message(message, allocation)
+        fitted.append(compacted)
+        remaining = max(0, remaining - message_chars(compacted))
+    protocol_intact = (
+        fitted[0].role == "assistant"
+        and bool(fitted[0].tool_calls)
+        and all(message.role == "tool" for message in fitted[1:])
+    )
+    if protocol_intact and sum(message_chars(message) for message in fitted) <= limit:
+        return fitted
+    return [_omission_message(limit)]
+
+
+def _fit_message(message: ModelMessage, limit: int) -> ModelMessage:
+    if message_chars(message) <= limit:
+        return message
+
+    # 先保留协议元数据，只收缩可见内容。
+    metadata_size = message_chars(message.model_copy(update={"content": ""}))
+    if metadata_size <= limit:
+        return message.model_copy(
+            update={"content": _clip_text(message.content, limit - metadata_size)}
+        )
+
+    # 如果超限来自 reasoning 或工具参数，将参数收缩为仍然有效的 JSON，并移除
+    # 不透明 reasoning；调用 ID 和工具名仍保持配对。
+    calls = tuple(call.model_copy(update={"arguments_json": "{}"}) for call in message.tool_calls)
+    minimized = message.model_copy(
+        update={"content": "", "provider_reasoning": "", "tool_calls": calls}
+    )
+    fixed = message_chars(minimized)
+    if fixed > limit:
+        return _omission_message(limit)
+    return minimized.model_copy(update={"content": _clip_text(message.content, limit - fixed)})
+
+
+def _clip_text(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    marker = "\n...[truncated to fit the context budget]"
+    if limit <= len(marker):
+        return marker[:limit]
+    return value[: limit - len(marker)] + marker
+
+
+def _omission_message(limit: int) -> ModelMessage:
+    marker = "[recent provider turn omitted to fit context]"
+    return ModelMessage(role="user", content=marker[:limit])
 
 
 def _droppable_units(messages: list[ModelMessage]) -> list[list[int]]:
@@ -220,25 +324,12 @@ def _droppable_units(messages: list[ModelMessage]) -> list[list[int]]:
     assistant 轮次的独立工具消息属于自己的可丢弃单元；user 轮次和普通 assistant 轮次
     不可丢弃，也不会构成单元。
     """
-    units: list[list[int]] = []
-    index = 0
-    count = len(messages)
-    while index < count:
-        message = messages[index]
-        if message.role == "assistant" and message.tool_calls:
-            group = [index]
-            follow = index + 1
-            while follow < count and messages[follow].role == "tool":
-                group.append(follow)
-                follow += 1
-            units.append(group)
-            index = follow
-        elif message.role == "tool":
-            units.append([index])
-            index += 1
-        else:
-            index += 1
-    return units
+    return [
+        unit
+        for unit in _all_units(messages)
+        if messages[unit[0]].role == "tool"
+        or (messages[unit[0]].role == "assistant" and messages[unit[0]].tool_calls)
+    ]
 
 
 def _protected_units(messages: list[ModelMessage], units: list[list[int]]) -> set[int]:

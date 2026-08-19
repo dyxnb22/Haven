@@ -48,6 +48,7 @@ class ReadToolExecutor:
         ticket_digest: str,
         preview: ToolPreview,
     ) -> ToolExecution:
+        """列出工作区目录，并将条目元数据转换为工具结果。"""
         assert isinstance(args, RepoListArgs)
         listing = await self._workspace.list_dir(args.path, args.max_entries)
         return ToolExecution(
@@ -72,6 +73,7 @@ class ReadToolExecutor:
         ticket_digest: str,
         preview: ToolPreview,
     ) -> ToolExecution:
+        """搜索工作区文本，返回匹配行和扫描文件数。"""
         assert isinstance(args, RepoSearchArgs)
         found = await self._workspace.search(args.pattern, args.path, args.max_results)
         return ToolExecution(
@@ -96,6 +98,7 @@ class ReadToolExecutor:
         ticket_digest: str,
         preview: ToolPreview,
     ) -> ToolExecution:
+        """读取指定行区间，并登记文件摘要以绑定后续编辑前像。"""
         assert isinstance(args, RepoReadArgs)
         read = await self._workspace.read_file(args.path, args.start_line, args.max_lines)
         ctx.files_read[read.path] = read.digest
@@ -121,6 +124,7 @@ class ReadToolExecutor:
         ticket_digest: str,
         preview: ToolPreview,
     ) -> ToolExecution:
+        """替换运行中的任务计划并广播计划更新事件。"""
         assert isinstance(args, TaskPlanArgs)
         ctx.plan = tuple(args.steps)
         await self._emitter.emit(
@@ -146,6 +150,7 @@ class ReadToolExecutor:
         ticket_digest: str,
         preview: ToolPreview,
     ) -> ToolExecution:
+        """读取运行基线差异，记录 diff 证据并返回有界预览。"""
         run_diff = await self._workspace.run_diff()
         envelope = await self._emitter.emit(
             ctx.run_id,

@@ -81,10 +81,17 @@ _CLASSES = (
 
 @dataclass(frozen=True, slots=True)
 class Row:
+    """生成的工具/策略表中的一行。"""
+
+    #: 工具注册名称。
     tool: str
+    #: 工具所属的副作用类别。
     tool_class: str
+    #: 交互模式下的策略决定。
     interactive: str
+    #: 只读模式下的策略决定。
     read_only: str
+    #: 需要审查者关注的核心约束。
     constraints: str
 
 
@@ -134,6 +141,7 @@ def rows_for_tools(tools: set[str] | None = None) -> list[Row]:
 
 
 def render_table() -> str:
+    """将当前策略计算结果渲染为 Markdown 表格。"""
     header = "| Tool | Class | Interactive | Read-only | Key constraints |\n|---|---|---|---|---|\n"
     body = "".join(
         f"| `{row.tool}` | {row.tool_class} | {row.interactive} | "
@@ -153,6 +161,7 @@ def _block() -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """生成或校验架构文档中的工具策略表，并返回退出码。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="fail if the block is stale")
     args = parser.parse_args(argv)

@@ -24,10 +24,22 @@ SaveCheckpoint = Callable[[RunContext], Awaitable[None]]
 
 @dataclass
 class AnswerAssembly:
+    """模型文本经过续写、空响应和证据门禁处理后的答案候选。"""
+
+    #: 因输出长度限制而续写时累积的可见答案片段。
     parts: list[str] = field(default_factory=list)
+    #: 已为该答案发起的续写请求次数。
     continuations: int = 0
+    #: 解析该答案期间观察到的空模型回复次数。
     empty_replies: int = 0
+    #: 返回给调用方的最终拼接答案文本。
     final_text: str = ""
+
+    def reset_partial(self) -> None:
+        """工具调用开始时丢弃尚未完成的答案候选。"""
+        self.parts.clear()
+        self.continuations = 0
+        self.empty_replies = 0
 
 
 class AnswerResolver:
@@ -53,6 +65,7 @@ class AnswerResolver:
     async def recover_incomplete_reply(
         self, ctx: RunContext, result: ModelResult, answer: AnswerAssembly
     ) -> RunOutcome | bool:
+        """处理截断或空回复；返回 ``True`` 表示已安排下一轮，终态则返回结果。"""
         if result.finish_reason == "length" and answer.continuations < MAX_OUTPUT_CONTINUATIONS:
             answer.continuations += 1
             answer.parts.append(result.text)
@@ -123,8 +136,11 @@ class AnswerResolver:
     async def finish_with_gate(
         self, ctx: RunContext, result: ModelResult, answer: AnswerAssembly
     ) -> RunOutcome | None:
+        """拼接答案并执行证据门禁；未通过且可补证据时返回 ``None``。"""
         answer.final_text = "".join((*answer.parts, result.text))
         answer.parts = []
+        answer.continuations = 0
+        answer.empty_replies = 0
         if result.finish_reason == "length":
             await self._emitter.emit(
                 ctx.run_id,

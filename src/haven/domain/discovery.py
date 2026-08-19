@@ -31,7 +31,11 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class RecipeCandidate:
+    """从项目配置中发现的一条待验证检查配方。"""
+
+    #: 提议写入项目配置的稳定 recipe ID。
     id: str
+    #: 固定的可执行文件和参数；这是建议，不是执行授权。
     argv: tuple[str, ...]
     #: 提出此建议的原因，会展示给用户，以便审计这份提案。
     rationale: str
@@ -41,7 +45,9 @@ class RecipeCandidate:
 class _TreeFacts:
     """从浅层路径列表中提取的结构信息。"""
 
+    #: 检测到的测试目录；找到约定测试文件时才有值。
     tests_dir: str | None
+    #: 是否检测到 src/<package> 布局。
     src_layout: bool
 
 

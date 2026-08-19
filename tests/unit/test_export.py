@@ -95,6 +95,36 @@ def test_markdown_contains_key_sections() -> None:
     assert "## Outcome" in md
     assert "succeeded" in md
 
+    injected = EventEnvelope(
+        seq=5,
+        at="2026-01-01T00:00:00+00:00",
+        event=DiffPreview(
+            run_id="run-1",
+            files_changed=1,
+            insertions=1,
+            deletions=0,
+            preview="+literal Markdown fence: ```\n",
+        ),
+    )
+    fenced = render_markdown(run_record(), [injected])
+    assert "````diff" in fenced
+    assert fenced.rstrip().endswith("````")
+
+    unknown_cost = EventEnvelope(
+        seq=6,
+        at="2026-01-01T00:00:00+00:00",
+        event=RunFinished(
+            run_id="run-1",
+            status="succeeded",
+            stop_reason="final_answer",
+            cost_usd=0.0,
+            cost_known=False,
+        ),
+    )
+    outcome = render_markdown(run_record(), [unknown_cost])
+    assert "cost: unknown" in outcome
+    assert "$0.0000" not in outcome
+
 
 def test_jsonl_is_one_event_per_line() -> None:
     out = render_jsonl(envelopes())
@@ -179,6 +209,25 @@ def test_foreign_credentials_are_masked_by_shape(monkeypatch: pytest.MonkeyPatch
         )
         assert leak not in render_jsonl([env]), leak
         assert leak not in render_markdown(run_record(), [env]), leak
+
+    private_key = (
+        "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+        "THIS-IS-THE-PRIVATE-MATERIAL\n"
+        "-----END OPENSSH PRIVATE KEY-----"
+    )
+    env = EventEnvelope(
+        seq=2,
+        at="2026-01-01T00:00:00+00:00",
+        event=ToolProposed(
+            run_id="run-1",
+            step=1,
+            call_id="c2",
+            tool_name="repo.read",
+            args_summary=private_key,
+        ),
+    )
+    assert "PRIVATE-MATERIAL" not in render_jsonl([env])
+    assert "PRIVATE-MATERIAL" not in render_markdown(run_record(), [env])
 
 
 def test_ordinary_report_content_is_not_mangled(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -283,10 +283,10 @@ always outside any workspace so `repo.*` tools can never reach it.
 |---|---|
 | `runs` | authoritative per-run summary |
 | `events` | append-only trace / replay (`(run_id, seq)` unique, per-event digest) |
-| `checkpoints` | fast-resume snapshots (checksum + schema version, fail-closed) |
+| `checkpoints` | fast-resume snapshots (checksum + schema version; absent paths retain an explicit sentinel) |
 | `approvals` | digest-bound, single-use consumption via conditional UPDATE |
-| `executions` | side-effect journal for crash reconciliation |
-| `schema_meta` | fail-closed schema versioning |
+| `executions` | side-effect journal for crash reconciliation, keyed by `(run_id, call_id)` |
+| `schema_meta` | fail-closed schema versioning (v3 migrates execution identity without data loss) |
 
 Large content (diffs, file originals) is content-addressed in an artifact store;
 events keep only digests and bounded summaries.

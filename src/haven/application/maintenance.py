@@ -20,11 +20,17 @@ _ALL_RUNS = 1_000_000
 
 @dataclass(frozen=True, slots=True)
 class GcReport:
+    #: 按保留数量和时间策略保留的运行 ID。
     kept: tuple[str, ...] = ()
+    #: 符合删除条件的运行 ID（apply=True 时会实际删除）。
     deleted: tuple[str, ...] = ()
+    #: 被明确跳过、完全不触碰的活动运行 ID。
     skipped_active: tuple[str, ...] = ()
+    #: 被选中删除的无引用构件数量。
     artifacts_deleted: int = 0
+    #: 本次是 dry run、没有删除任何记录或构件时为 True。
     dry_run: bool = True
+    #: 关于受保护项目或跳过项目的人类可读说明。
     notes: tuple[str, ...] = field(default=())
 
 
@@ -44,6 +50,8 @@ async def collect_garbage(
     """
     if keep < 0:
         raise ValueError("keep must be >= 0")
+    if older_than_days is not None and older_than_days < 0:
+        raise ValueError("older_than_days must be >= 0")
     runs = await store.list_runs(_ALL_RUNS)  # 按最新在前排列
     cutoff = None
     if older_than_days is not None:
@@ -52,13 +60,16 @@ async def collect_garbage(
     kept: list[str] = []
     deleted: list[str] = []
     skipped_active: list[str] = []
-    for index, run in enumerate(runs):
+    terminal_seen = 0
+    for run in runs:
         if run.status in ACTIVE_STATUSES:
             skipped_active.append(run.run_id)
             continue
-        if index < keep:
+        if terminal_seen < keep:
             kept.append(run.run_id)
+            terminal_seen += 1
             continue
+        terminal_seen += 1
         if cutoff is not None:
             created = _parse_timestamp(run.created_at)
             if created is None or created >= cutoff:
@@ -78,7 +89,7 @@ async def collect_garbage(
     for run_id in survivors:
         checkpoint = await store.load_checkpoint(run_id)
         if checkpoint is not None:
-            referenced.update(checkpoint.original_artifacts.values())
+            referenced.update(digest for digest in checkpoint.original_artifacts.values() if digest)
     orphaned = [digest for digest in await store.list_artifacts() if digest not in referenced]
     if apply:
         for digest in orphaned:

@@ -55,11 +55,11 @@ not edit them by hand.
 
 | Metric | Value |
 |---|---|
-| Automated tests | 820 |
+| Automated tests | 885 |
 | Line coverage (`src/`) | 89% |
-| Source / test size | ~14.0k / ~11.3k lines |
-| Typed modules (`mypy --strict`) | 68 |
-| Architecture decision records | 29 |
+| Source / test size | ~16.6k / ~11.9k lines |
+| Typed modules (`mypy --strict`) | 102 |
+| Architecture decision records | 30 |
 | Offline eval | 39/39 passed, 0 security violations |
 | Eval categories | security 16 · task 10 · robustness 6 · injection 3 · budget 2 · recovery 2 |
 | Live real-repo suite (deepseek-v4-flash) | 75/79 after fixes (31/31 + 9/9 + 5/5 + 20/20 + 9/13 + 1/1); 0 security violations — as-found runs and root causes in docs/EVAL_LIVE.md |
@@ -195,12 +195,12 @@ the gate and the design for adding a summary tier if my product shape moves
 there.
 
 **Follow-up: "what breaks first under pressure?"**
-The hard clamp. Below it, user messages and narrative turns are never
-dropped; at the extreme the clamp drops whole messages oldest-first
-*regardless of role* and truncates the last. So a long multi-steer session
-could silently lose user intent. That is documented in ADR 0024 with the fix
-pre-designed, and deliberately not built because zero measured failures point
-at it.
+Semantic detail, not protocol structure. The final hard clamp treats an
+assistant tool-call plus its results as one indivisible unit, preserves the
+latest user turn and latest protocol unit, and counts visible content,
+reasoning, and tool arguments against the same limit. It may still replace old
+narrative with an omission marker; a semantic summary tier remains behind ADR
+0024's measurement gate.
 
 ### 3.5 Why an OS sandbox, and why is `repo.exec` denied without one?
 

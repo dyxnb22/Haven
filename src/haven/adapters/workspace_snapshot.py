@@ -15,6 +15,7 @@ def capture_workspace_snapshot(
     ignored_dirs: frozenset[str],
     protected_components: frozenset[str],
 ) -> WorkspaceSnapshot:
+    """扫描工作区文件摘要，并为可解码的小文件保留内容快照。"""
     digests: dict[str, str] = {}
     contents: dict[str, str] = {}
     for file_path in iter_workspace_files(root, ignored_dirs, protected_components):

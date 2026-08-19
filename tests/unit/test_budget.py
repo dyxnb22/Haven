@@ -1,4 +1,14 @@
-from haven.domain import Budget, BudgetUsage, StopReason, check_budget
+import math
+
+import pytest
+
+from haven.domain import (
+    Budget,
+    BudgetUsage,
+    StopReason,
+    check_accumulated_budget,
+    check_budget,
+)
 from haven.domain.budget import BUDGET_TIERS, DEFAULT_TIER
 
 
@@ -27,6 +37,15 @@ class TestTiers:
 
 def test_fresh_usage_within_budget() -> None:
     assert check_budget(Budget(), BudgetUsage()) is None
+    for invalid in (
+        lambda: Budget(max_steps=1.5),  # type: ignore[arg-type]
+        lambda: Budget(max_wall_time_seconds=True),
+        lambda: Budget(max_cost_usd=math.nan),
+        lambda: BudgetUsage(steps=1.5),  # type: ignore[arg-type]
+        lambda: BudgetUsage(cost_usd=math.inf),
+    ):
+        with pytest.raises(ValueError):
+            invalid()
 
 
 def test_step_budget_exhausted() -> None:
@@ -51,6 +70,7 @@ def test_defaults_leave_room_for_retries() -> None:
 def test_wall_time_exhausted() -> None:
     usage = BudgetUsage(wall_time_seconds=601)
     assert check_budget(Budget(), usage) is StopReason.WALL_TIME_EXHAUSTED
+    assert check_accumulated_budget(Budget(), usage) is StopReason.WALL_TIME_EXHAUSTED
 
 
 def test_cost_budget_exhausted() -> None:

@@ -83,8 +83,8 @@ from haven.contracts.model import (
     ToolCallProposal,
 )
 from haven.contracts.tools import RecipeSpec, tool_schemas
-from haven.domain.budget import Budget, check_budget
-from haven.domain.enums import PermissionMode, RunStatus, StopReason
+from haven.domain.budget import Budget, check_accumulated_budget, check_budget
+from haven.domain.enums import EffectState, PermissionMode, RunStatus, StopReason
 from haven.domain.ids import RunId, new_run_id
 from haven.domain.pricing import Pricing
 from haven.domain.stuck import StuckLoopDetector, call_fingerprint
@@ -110,6 +110,8 @@ __all__ = ["MODEL_RETRY_MAX_DELAY", "RunOutcome", "RunService", "_retry_delay"]
 
 
 class RunService:
+    """驱动一次有预算、有审计、可恢复的 Model → Tool → Observation 循环。"""
+
     def __init__(
         self,
         *,
@@ -170,9 +172,10 @@ class RunService:
         # 在副作用进行中被打断。到达时写入日志（持久化），由循环取出处理。
         self._steer_queue: deque[str] = deque()
         self._active_run_id: str | None = None
-        # 每个服务一个临时目录，运行结束时删除。它使必须写入某处的沙箱工具
+        # 每个运行一个独占临时目录，运行结束时删除。它使必须写入某处的沙箱工具
         # 不需要获得工作区之外的写权限。
         self._scratch_dir = Path(tempfile.mkdtemp(prefix="haven-scratch-"))
+        self._scratch_ready = True
         self._pipeline = ToolPipeline(
             workspace=workspace,
             executor=executor,
@@ -197,6 +200,7 @@ class RunService:
     # -- 入口 -----------------------------------------------------------------
 
     async def run(self, goal: str) -> RunOutcome:
+        """创建运行并执行主循环，最终结果由证据门禁裁定。"""
         goal = goal.strip()
         if not (3 <= len(goal) <= 4000):
             raise ValueError("goal must be between 3 and 4000 characters")
@@ -294,6 +298,12 @@ class RunService:
         """返回当前正在驱动的运行 ID；没有运行时返回 None。"""
         return self._active_run_id
 
+    async def close(self) -> None:
+        """释放尚未被运行生命周期删除的临时目录；重复调用保持安全。"""
+        if self._active_run_id is None and self._scratch_ready:
+            shutil.rmtree(self._scratch_dir, ignore_errors=True)
+            self._scratch_ready = False
+
     async def steer(self, text: str) -> bool:
         """为活跃运行排队用户输入，并在下一轮边界投递。
 
@@ -304,6 +314,8 @@ class RunService:
         text = text.strip()
         if not text or self._active_run_id is None:
             return False
+        if len(text) > 4000:
+            raise ValueError("steering text must be at most 4000 characters")
         self._steer_queue.append(text)
         await self._emitter.emit(
             self._active_run_id,
@@ -323,6 +335,12 @@ class RunService:
         """轮次循环。编号阶段记录在模块文档字符串中。每个 RunOutcome 都由 `_finish` 生成
         （直接生成，或在 `_handle_tool_calls` 内生成），因此停止原因和证据门禁只有
         一个应用位置。"""
+        if not self._scratch_ready:
+            # 绝不复用已删除目录的名字：本机另一个进程可能在两轮之间抢占旧路径
+            # 或把它换成符号链接。mkdtemp 原子创建一个仅属于本轮的新目录。
+            self._scratch_dir = Path(tempfile.mkdtemp(prefix="haven-scratch-"))
+            self._pipeline.replace_scratch_dir(self._scratch_dir)
+            self._scratch_ready = True
         builder = ContextBuilder(
             goal=ctx.goal,
             tools=tool_schemas(),
@@ -337,8 +355,7 @@ class RunService:
         # 最近一次记录的 request envelope 摘要，因此未变化的 envelope 不会
         # 每一步都重复写日志。
         envelope_digest = ""
-        started = time.monotonic()
-        elapsed_base = ctx.usage.wall_time_seconds
+        ctx.start_timing(time.monotonic())
         # 输出截断和空回复的恢复状态（截断答案绝不能被静默接受为完整答案）。
         answer = AnswerAssembly()
 
@@ -346,7 +363,7 @@ class RunService:
         self._steer_queue.clear()
         try:
             while True:
-                ctx.usage = ctx.usage.with_wall_time(elapsed_base + (time.monotonic() - started))
+                ctx.refresh_wall_time(time.monotonic())
                 if stop := check_budget(ctx.budget, ctx.usage):
                     return await self._finish(ctx, RunStatus.STOPPED, stop, answer.final_text)
 
@@ -391,8 +408,22 @@ class RunService:
                     )
 
                     try:
-                        result = await self._stream_model(ctx, step, request)
+                        ctx.refresh_wall_time(time.monotonic())
+                        remaining = max(
+                            0.0,
+                            ctx.budget.max_wall_time_seconds - ctx.usage.wall_time_seconds,
+                        )
+                        async with asyncio.timeout(remaining):
+                            result = await self._stream_model(ctx, step, request)
                         break
+                    except TimeoutError:
+                        ctx.refresh_wall_time(time.monotonic())
+                        return await self._finish(
+                            ctx,
+                            RunStatus.STOPPED,
+                            StopReason.WALL_TIME_EXHAUSTED,
+                            answer.final_text,
+                        )
                     except ProviderError as exc:
                         if (
                             exc.code == "context_overflow"
@@ -426,6 +457,7 @@ class RunService:
                         )
 
                 self._telemetry.charge_usage(ctx, request, result)
+                ctx.refresh_wall_time(time.monotonic())
                 await self._emitter.emit(
                     ctx.run_id,
                     ModelCompleted(
@@ -452,7 +484,11 @@ class RunService:
                     )
                 )
 
+                if stop := check_accumulated_budget(ctx.budget, ctx.usage):
+                    return await self._finish(ctx, RunStatus.STOPPED, stop, answer.final_text)
+
                 if result.tool_calls:
+                    answer.reset_partial()
                     stopped = await self._handle_tool_calls(ctx, step, result.tool_calls, stuck)
                     await self._checkpoint(ctx)
                     if stopped is not None:
@@ -471,7 +507,31 @@ class RunService:
                 if outcome is not None:
                     return outcome
         except asyncio.CancelledError:
-            await self._finish(ctx, RunStatus.CANCELLED, StopReason.CANCELLED, answer.final_text)
+            executions = await self._store.load_executions(ctx.run_id)
+            started = [
+                record for record in executions if record.effect_state is EffectState.STARTED
+            ]
+            # 取消可以落在 STARTED 持久化之后、具体执行器的异常处理之前（例如
+            # 进程前快照或异步数据库边界）。终态收口负责把所有这类悬空记录显式
+            # 归一为未知影响，不能只让 run 行说 unknown 而明细仍声称“正在执行”。
+            for record in started:
+                await self._store.update_execution_state(
+                    ctx.run_id, record.call_id, EffectState.EFFECT_UNKNOWN
+                )
+            uncertain = bool(started) or any(
+                record.effect_state is EffectState.EFFECT_UNKNOWN for record in executions
+            )
+            if uncertain:
+                await self._finish(
+                    ctx,
+                    RunStatus.EFFECT_UNKNOWN,
+                    StopReason.EFFECT_UNKNOWN,
+                    answer.final_text,
+                )
+            else:
+                await self._finish(
+                    ctx, RunStatus.CANCELLED, StopReason.CANCELLED, answer.final_text
+                )
             raise
         finally:
             self._active_run_id = None
@@ -479,7 +539,9 @@ class RunService:
                 # 未投递的 steering 不能泄漏到后续运行；排队事件会留在日志中
                 # 作为记录。
                 self._steer_queue.clear()
-            shutil.rmtree(self._scratch_dir, ignore_errors=True)
+            if self._scratch_ready:
+                shutil.rmtree(self._scratch_dir, ignore_errors=True)
+                self._scratch_ready = False
 
     async def _handle_tool_calls(
         self,
@@ -503,6 +565,7 @@ class RunService:
             ctx.move_to(RunStatus.VALIDATING_TOOL)
 
             execution = await self._pipeline.execute(ctx, step, call)
+            ctx.refresh_wall_time(time.monotonic())
             result = execution.result
             ctx.transcript.append(
                 ModelMessage(
@@ -519,6 +582,14 @@ class RunService:
                 ctx.move_to(RunStatus.EFFECT_UNKNOWN)
                 return await self._finish(
                     ctx, RunStatus.EFFECT_UNKNOWN, StopReason.EFFECT_UNKNOWN, ""
+                )
+
+            if ctx.usage.wall_time_seconds >= ctx.budget.max_wall_time_seconds:
+                return await self._finish(
+                    ctx,
+                    RunStatus.STOPPED,
+                    StopReason.WALL_TIME_EXHAUSTED,
+                    "",
                 )
 
             if ctx.status is not RunStatus.RUNNING_MODEL:
@@ -550,6 +621,7 @@ class RunService:
     # -- 持久化 ------------------------------------------------------------------
 
     async def _checkpoint(self, ctx: RunContext) -> None:
+        ctx.refresh_wall_time(time.monotonic())
         await self._checkpoints.save(ctx)
 
     async def _finish(
@@ -561,6 +633,7 @@ class RunService:
         gate_reason: str = "",
     ) -> RunOutcome:
         """唯一出口：持久化终态、检查点并发出 run.finished。"""
+        ctx.refresh_wall_time(time.monotonic())
         return await self._finalizer.finish(ctx, status, stop_reason, final_text, gate_reason)
 
 

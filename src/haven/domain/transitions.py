@@ -9,6 +9,8 @@ from haven.domain.enums import ACTIVE_STATUSES, RunStatus
 
 
 class InvalidTransitionError(Exception):
+    """运行状态机拒绝非法状态转换时抛出的异常。"""
+
     def __init__(self, current: RunStatus, target: RunStatus) -> None:
         super().__init__(f"illegal run transition: {current} -> {target}")
         self.current = current

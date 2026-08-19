@@ -20,15 +20,23 @@ MASS_DELETION_MIN_LINES = 50
 
 @dataclass(frozen=True, slots=True)
 class ReviewFinding:
+    """差异审查发现的一个可疑模式及其严重程度。"""
+
+    #: Evidence Gate 和报告使用的稳定发现码。
     code: str
+    #: 对可疑新增内容的人类可读解释。
     detail: str
+    #: 文件级发现对应的工作区相对路径；非文件级发现时为空。
     path: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class _Pattern:
+    #: 此模式匹配时发出的稳定代码。
     code: str
+    #: 应用于差异新增行的已编译表达式。
     regex: re.Pattern[str]
+    #: ReviewFinding 使用的人类可读描述。
     detail: str
 
 
@@ -87,14 +95,19 @@ def review_diff(diff_text: str) -> tuple[ReviewFinding, ...]:
     """
     findings: list[ReviewFinding] = []
     current_path = ""
+    old_path = ""
     added: dict[str, int] = {}
     removed: dict[str, int] = {}
 
     for raw_line in diff_text.splitlines():
-        if raw_line.startswith("+++ "):
-            current_path = _strip_prefix(raw_line[4:].strip())
+        if raw_line.startswith("--- "):
+            old_path = _strip_prefix(raw_line[4:].strip())
             continue
-        if raw_line.startswith("--- ") or raw_line.startswith("@@"):
+        if raw_line.startswith("+++ "):
+            new_path = _strip_prefix(raw_line[4:].strip())
+            current_path = old_path if new_path == "/dev/null" else new_path
+            continue
+        if raw_line.startswith("@@"):
             continue
 
         if raw_line.startswith("+"):
@@ -156,4 +169,5 @@ def _dedupe(findings: list[ReviewFinding]) -> list[ReviewFinding]:
 
 
 def describe(findings: tuple[ReviewFinding, ...]) -> str:
+    """将审查发现拼接为适合门禁和 UI 展示的单行诊断。"""
     return "; ".join(f"{f.detail} in {f.path}" if f.path else f.detail for f in findings)

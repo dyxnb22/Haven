@@ -61,9 +61,15 @@ def finish(reason: str = "stop") -> StreamFinished:
     return StreamFinished(finish_reason=mapped)  # type: ignore[arg-type]
 
 
-def usage(input_tokens: int = 100, output_tokens: int = 20) -> UsageReport:
+def usage(
+    input_tokens: int = 100, output_tokens: int = 20, *, estimated: bool = False
+) -> UsageReport:
     return UsageReport(
-        usage=Usage(input_tokens=input_tokens, output_tokens=output_tokens, estimated=False)
+        usage=Usage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            estimated=estimated,
+        )
     )
 
 

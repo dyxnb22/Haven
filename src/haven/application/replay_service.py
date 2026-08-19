@@ -16,6 +16,7 @@ class ReplayService:
         self._store = store
 
     async def replay(self, run_id: str, sink: EventSinkPort) -> list[EventEnvelope]:
+        """按持久化顺序重放事件到 sink，不调用模型或工具。"""
         envelopes = await self._store.load_events(run_id)
         for envelope in envelopes:
             await sink.emit(envelope)

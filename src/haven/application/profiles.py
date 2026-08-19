@@ -20,8 +20,11 @@ DEFAULT_CONTEXT_CHARS = 96_000
 
 @dataclass(frozen=True, slots=True)
 class ModelProfile:
+    #: 配置中使用的模型名称；也作为 profile 查找的键。
     name: str
+    #: 上下文构建器允许纳入请求的字符预算。
     max_context_chars: int = DEFAULT_CONTEXT_CHARS
+    #: 输入、输出及缓存 token 的计价配置。
     pricing: Pricing = field(default_factory=Pricing)
     #: 仅在设置后传给提供商，因此未设置表示“使用提供商默认值”，而不是
     #: Haven 选择的某个值。

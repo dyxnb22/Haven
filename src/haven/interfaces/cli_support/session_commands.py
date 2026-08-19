@@ -11,7 +11,7 @@ from haven.interfaces.cli_support.common import EXIT_OK, EXIT_USAGE
 from haven.interfaces.cli_support.sinks import ConsoleSink
 
 
-def sessions_list(limit: int = typer.Option(20, help="Max runs to show.")) -> None:
+def sessions_list(limit: int = typer.Option(20, min=0, help="Max runs to show.")) -> None:
     """列出已存储的运行，最新的排在最前。"""
 
     async def _list() -> None:
@@ -58,10 +58,11 @@ def sessions_show(run_id: str) -> None:
 
 
 def gc(
-    keep: int = typer.Option(20, help="Newest runs to keep regardless of age."),
+    keep: int = typer.Option(20, min=0, help="Newest runs to keep regardless of age."),
     older_than_days: int | None = typer.Option(
         None,
         "--older-than-days",
+        min=0,
         help="Additionally keep any run younger than this many days.",
     ),
     yes: bool = typer.Option(False, "--yes", help="Actually delete. Default is a dry run."),

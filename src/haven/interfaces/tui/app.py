@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
 
 from textual import on, work
 from textual.app import App, ComposeResult
@@ -22,6 +22,8 @@ from textual.worker import Worker
 from haven.application.approvals import QueueApprovalBroker
 from haven.application.recovery_service import RecoveryService
 from haven.application.run_service import RunService
+from haven.application.state import RunContext
+from haven.config import ResolvedConfig
 from haven.contracts.events import (
     TRANSIENT_KINDS,
     ApprovalRequested,
@@ -48,24 +50,43 @@ class SessionServices(Protocol):
     """
 
     @property
-    def run_service(self) -> RunService: ...
+    def run_service(self) -> RunService:
+        """返回驱动模型运行、继续和 steering 的应用服务。"""
+        ...
 
     @property
-    def recovery(self) -> RecoveryService: ...
+    def recovery(self) -> RecoveryService:
+        """返回检查点恢复和工作区调和服务。"""
+        ...
 
     @property
-    def store(self) -> SessionStorePort: ...
+    def store(self) -> SessionStorePort:
+        """返回用于会话列表和报告导出的存储端口。"""
+        ...
 
     @property
-    def git_branch(self) -> str: ...
+    def config(self) -> ResolvedConfig:
+        """返回预算等已解析运行配置。"""
+        ...
 
     @property
-    def model_name(self) -> str: ...
+    def git_branch(self) -> str:
+        """返回启动时记录的 Git 分支名。"""
+        ...
 
     @property
-    def lease_warning(self) -> str: ...
+    def model_name(self) -> str:
+        """返回当前运行所配置的模型名。"""
+        ...
 
-    async def close(self) -> None: ...
+    @property
+    def lease_warning(self) -> str:
+        """返回工作区降级为只读时需要展示的警告文本。"""
+        ...
+
+    async def close(self) -> None:
+        """关闭组合根创建的存储、模型和租约资源。"""
+        ...
 
 
 ServicesBuilder = Callable[..., Awaitable[SessionServices]]
@@ -78,6 +99,7 @@ class QueueSink:
         self.queue: asyncio.Queue[EventEnvelope] = asyncio.Queue(maxsize=maxsize)
 
     async def emit(self, envelope: EventEnvelope) -> None:
+        """将事件放入 UI 队列；队列满时仅丢弃临时增量事件。"""
         if envelope.event.kind in TRANSIENT_KINDS and self.queue.full():
             return
         await self.queue.put(envelope)
@@ -97,6 +119,7 @@ class ApprovalScreen(ModalScreen[bool]):
         self._request = request
 
     def compose(self) -> ComposeResult:
+        """声明审批摘要、预览、摘要指纹和批准/拒绝按钮布局。"""
         req = self._request
         with Vertical(id="approval-box"):
             yield Static(f"[b]Approval required[/b] — risk: {req.risk}", id="approval-title")
@@ -121,9 +144,11 @@ class ApprovalScreen(ModalScreen[bool]):
         self.dismiss(False)
 
     def action_approve(self) -> None:
+        """以批准结果关闭审批模态框。"""
         self.dismiss(True)
 
     def action_reject(self) -> None:
+        """以拒绝结果关闭审批模态框。"""
         self.dismiss(False)
 
 
@@ -187,6 +212,7 @@ class HavenApp(App[None]):
     # -- 布局 ------------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
+        """构建标题、时间线、四个内容页签、输入框和状态栏。"""
         yield Static("Haven — starting…", id="header")
         yield RichLog(id="timeline", wrap=True, markup=False, highlight=False)
         with TabbedContent(id="tabs"):
@@ -202,6 +228,7 @@ class HavenApp(App[None]):
         yield Static("", id="status")
 
     async def on_mount(self) -> None:
+        """挂载后启动事件消费和服务组合两个后台任务。"""
         self._consume_events()
         self._bootstrap()
 
@@ -266,7 +293,7 @@ class HavenApp(App[None]):
         await self._svc.run_service.continue_run(previous_run_id, follow_up)
 
     @work(exclusive=True, group="run")
-    async def _execute_resume(self, ctx: Any) -> None:
+    async def _execute_resume(self, ctx: RunContext) -> None:
         await self._svc.run_service.resume(ctx)
 
     def _start_resume(self, run_id: str) -> None:
@@ -355,7 +382,7 @@ class HavenApp(App[None]):
             self._queue_steering(text)
             return
         # 明确指定的 /fork 目标会从该运行分支出新会话，而不是继续当前会话
-        # （ROADMAP3 phase 4）。
+        # （ROADMAP3 第 4 阶段）。
         fork_target = self._fork_run_id
         self._fork_run_id = ""
         if fork_target:
@@ -386,7 +413,7 @@ class HavenApp(App[None]):
         self.run_worker(_do(), exclusive=False)
 
     def _handle_command(self, command: str) -> None:
-        budget = getattr(getattr(self._services, "config", None), "budget", None)
+        budget = self._services.config.budget if self._services is not None else None
         action = route_command(command, self._state, budget)
         if action.kind == "log":
             self._log_line("system", action.value)
@@ -459,6 +486,7 @@ class HavenApp(App[None]):
     # -- 动作 -------------------------------------------------------------------
 
     def action_cancel_or_quit(self) -> None:
+        """运行中取消当前 worker，否则退出应用。"""
         if self._state.running and self._run_worker is not None:
             self._log_line("system", "cancelling the current run…")
             self._run_worker.cancel()
@@ -466,8 +494,10 @@ class HavenApp(App[None]):
         self.exit()
 
     def action_show_tab(self, tab_id: str) -> None:
+        """切换到指定的内容页签。"""
         self.query_one("#tabs", TabbedContent).active = tab_id
 
     async def on_unmount(self) -> None:
+        """卸载时关闭已创建的组合服务和外部资源。"""
         if self._services is not None:
             await self._services.close()

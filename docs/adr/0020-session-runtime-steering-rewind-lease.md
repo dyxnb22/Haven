@@ -3,6 +3,11 @@
 Date: 2026-08-12
 Status: Accepted (builds on ADR 0015)
 
+> **Forward annotation (2026-08-20):** ADR 0030 keeps the local advisory scope
+> but replaces read-back-only contention with a native file-lock guard and a
+> random ownership token. Its exact-effect rule also makes cancellation during
+> an in-flight process finish as `EFFECT_UNKNOWN`.
+
 ## Context
 
 ADR 0015 made a session a chain of runs: follow-ups inherit the transcript,

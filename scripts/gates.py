@@ -26,7 +26,9 @@ ROOT = Path(__file__).resolve().parent.parent
 class Gate:
     """一项质量检查：包含 id、命令、运行时机和依赖。"""
 
+    #: 门禁在图中的稳定标识。
     id: str
+    #: 要执行的 shell 风格命令文本。
     command: str
     #: 此门禁所属的模式。只作为依赖被触达的门禁不需要单独的模式。
     modes: tuple[str, ...] = ()
@@ -34,6 +36,7 @@ class Gate:
     #: 运行，因此门禁不会在缺少前置条件的情况下执行（覆盖率报告需要测试套件
     #: 先产出数据）。
     needs: tuple[str, ...] = ()
+    #: 面向人类的门禁用途说明。
     description: str = ""
 
 
@@ -90,28 +93,29 @@ GATES: list[Gate] = [
     ),
     Gate(
         "tests",
-        "uv run coverage run -m pytest",
+        "uv run coverage run -m pytest --ignore=tests/eval/test_eval_suite.py",
         modes=("full",),
-        description="the suite, under coverage so the gates below have data",
+        description="tests under coverage; the aggregate offline eval runs in its own gate",
     ),
     Gate(
         "coverage-floor",
         "uv run python scripts/check_coverage_floor.py",
         modes=("full",),
-        needs=("tests",),
+        needs=("eval",),
         description="no gated file collapsed below its per-file floor",
     ),
     Gate(
         "eval",
-        "uv run haven eval --offline",
+        "uv run coverage run --append -m haven.interfaces.cli eval --offline",
         modes=("full",),
-        description="offline eval suite and its security gate",
+        needs=("tests",),
+        description="offline eval once, appending its paths to coverage and writing the report",
     ),
     Gate(
         "metrics",
         "uv run python scripts/refresh_metrics.py --check",
         modes=("full",),
-        needs=("tests", "eval"),
+        needs=("coverage-floor",),
         description="published numbers still match reality",
     ),
 ]
@@ -138,6 +142,7 @@ def cycle_in(gates: list[Gate]) -> bool:
     state: dict[str, int] = {}  # 0 = 正在访问，1 = 已完成
 
     def visit(node: str) -> bool:
+        """深度优先访问节点，并报告当前路径是否形成环。"""
         if state.get(node) == 1:
             return False
         if node in state:
@@ -160,6 +165,7 @@ def order_for(gates: list[Gate], ids: list[str]) -> list[str]:
     placed: set[str] = set()
 
     def place(node: str) -> None:
+        """递归放置依赖，并保证每个门禁只加入一次。"""
         if node in placed or node not in by_id:
             return
         placed.add(node)
@@ -194,6 +200,7 @@ def _run(gate: Gate) -> tuple[bool, float]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """解析门禁模式、按依赖顺序执行检查并返回汇总退出码。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", default="full", help="which gate set to run (fast|full)")
     parser.add_argument("--list", action="store_true", help="print the graph and exit")

@@ -58,7 +58,12 @@ class ProcessToolExecutor:
             "repo.check": self.execute_check,
         }
 
+    def replace_scratch_dir(self, scratch_dir: Path) -> None:
+        """切换到新运行独占的临时目录；旧目录由 RunService 负责回收。"""
+        self._scratch_dir = scratch_dir
+
     def sandbox_spec(self) -> SandboxSpec:
+        """构造只读工作区、可写 scratch、禁网的命令沙箱规格。"""
         return SandboxSpec(
             workspace_root=self._workspace.root,
             scratch_dir=self._scratch_dir,
@@ -69,6 +74,7 @@ class ProcessToolExecutor:
         )
 
     def describe_sandbox(self) -> str:
+        """返回命令执行沙箱的可读描述，后端不可用时明确标记不可用。"""
         if self._launcher is None:
             return "sandbox: unavailable"
         return self._launcher.describe(self.sandbox_spec())
@@ -85,9 +91,11 @@ class ProcessToolExecutor:
         ticket_digest: str,
         preview: ToolPreview,
     ) -> ToolExecution:
+        """在沙箱中执行任意命令，并将前后工作区变化归入证据账本。"""
         assert isinstance(args, RepoExecArgs)
         if self._launcher is None:
             raise RuntimeError("refusing to exec without a sandbox backend")
+        before = await self.capture_snapshot()
         await self._store.record_execution(
             ExecutionRecord(
                 call_id=call.call_id,
@@ -106,17 +114,17 @@ class ProcessToolExecutor:
             timeout_seconds=args.timeout_seconds,
             sandbox=self.sandbox_spec(),
         )
-        before = await self.capture_snapshot()
         try:
             outcome = await self._executor.run_exec(spec)
+            after = await self.capture_snapshot()
+            tampered = await self.record_process_writes(ctx, call.tool_name, before, after)
         except BaseException:
-            await self._store.update_execution_state(call.call_id, EffectState.EFFECT_UNKNOWN)
+            await self._store.update_execution_state(
+                ctx.run_id, call.call_id, EffectState.EFFECT_UNKNOWN
+            )
             raise
 
-        await self._store.update_execution_state(call.call_id, EffectState.CONFIRMED)
-        tampered = await self.record_process_writes(
-            ctx, call.tool_name, before, await self.capture_snapshot()
-        )
+        await self._store.update_execution_state(ctx.run_id, call.call_id, EffectState.CONFIRMED)
         if tampered:
             return ToolExecution(
                 error_result(
@@ -154,8 +162,10 @@ class ProcessToolExecutor:
         ticket_digest: str,
         preview: ToolPreview,
     ) -> ToolExecution:
+        """执行已注册检查配方，拒绝保护路径被改写的结果并记录检查证据。"""
         assert isinstance(args, RepoCheckArgs)
         recipe = self._recipes[args.recipe_id]
+        before = await self.capture_snapshot()
         await self._store.record_execution(
             ExecutionRecord(
                 call_id=call.call_id,
@@ -168,17 +178,17 @@ class ProcessToolExecutor:
                 path="",
             )
         )
-        before = await self.capture_snapshot()
         try:
             outcome = await self._executor.run_recipe(recipe, self._workspace.root)
+            after = await self.capture_snapshot()
+            tampered = await self.record_process_writes(ctx, call.tool_name, before, after)
         except BaseException:
-            await self._store.update_execution_state(call.call_id, EffectState.EFFECT_UNKNOWN)
+            await self._store.update_execution_state(
+                ctx.run_id, call.call_id, EffectState.EFFECT_UNKNOWN
+            )
             raise
 
-        await self._store.update_execution_state(call.call_id, EffectState.CONFIRMED)
-        tampered = await self.record_process_writes(
-            ctx, call.tool_name, before, await self.capture_snapshot()
-        )
+        await self._store.update_execution_state(ctx.run_id, call.call_id, EffectState.CONFIRMED)
         if tampered:
             return ToolExecution(
                 error_result(
@@ -237,6 +247,7 @@ class ProcessToolExecutor:
         before: WorkspaceSnapshot,
         after: WorkspaceSnapshot,
     ) -> list[str]:
+        """比较进程前后快照，记录外部编辑并返回被篡改的保护路径。"""
         tampered = sorted(
             name
             for name in before.protected_digests.keys() | after.protected_digests.keys()
@@ -277,13 +288,20 @@ class ProcessToolExecutor:
 
 @dataclass(frozen=True, slots=True)
 class ExternalChange:
+    """进程执行前后工作区快照之间的一项外部文件变化。"""
+
+    #: 进程执行期间摘要发生变化的规范化路径。
     path: str
+    #: 进程运行前观察到的摘要。
     preimage_digest: str
+    #: 进程返回后观察到的摘要。
     postimage_digest: str
-    before_content: str
+    #: 进程运行前保留的文本，用于生成可读差异。
+    before_content: str | None
 
 
 def detect_changes(before: WorkspaceSnapshot, after: WorkspaceSnapshot) -> list[ExternalChange]:
+    """从两次工作区快照中提取摘要变化及可用的变更前文本。"""
     changed = sorted(
         path
         for path in before.digests.keys() | after.digests.keys()
@@ -294,7 +312,7 @@ def detect_changes(before: WorkspaceSnapshot, after: WorkspaceSnapshot) -> list[
             path=path,
             preimage_digest=before.digests.get(path, ""),
             postimage_digest=after.digests.get(path, ""),
-            before_content=before.contents.get(path, ""),
+            before_content=(before.contents.get(path, "") if path in before.digests else None),
         )
         for path in changed
     ]

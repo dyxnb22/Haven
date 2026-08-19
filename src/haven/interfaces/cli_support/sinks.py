@@ -38,6 +38,7 @@ class ConsoleSink:
         self._verbose = verbose
 
     async def emit(self, envelope: EventEnvelope) -> None:
+        """将可展示事件格式化为一行安全的终端文本；静默模式不输出。"""
         event = envelope.event
         line: str | None = None
         if isinstance(event, RunCreated):
@@ -77,7 +78,10 @@ class ConsoleSink:
 
 
 class NullSink:
+    """丢弃事件的 sink，用于不需要展示轨迹的调用方。"""
+
     async def emit(self, envelope: EventEnvelope) -> None:
+        """丢弃事件，不产生任何输出。"""
         return None
 
 
@@ -88,10 +92,12 @@ class JsonlEventSink:
         self._fh = path.open("w", encoding="utf-8")
 
     async def emit(self, envelope: EventEnvelope) -> None:
+        """跳过临时事件，将持久化事件追加为一行 JSON 并立即刷新。"""
         if envelope.event.kind in TRANSIENT_KINDS:
             return
         self._fh.write(envelope.model_dump_json() + "\n")
         self._fh.flush()
 
     def close(self) -> None:
+        """关闭 JSONL 输出文件。"""
         self._fh.close()

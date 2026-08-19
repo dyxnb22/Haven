@@ -49,6 +49,45 @@ async def test_timeout_terminates_process(tmp_path: Path) -> None:
     assert outcome.timed_out
     assert outcome.exit_code == 124
 
+    marker = tmp_path / "grandchild-survived"
+    child = f"import time; time.sleep(0.5); open({str(marker)!r}, 'w').write('bad')"
+    parent = (
+        "import subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-c', {child!r}]); "
+        "time.sleep(60)"
+    )
+    outcome = await ProcessExecutor().run_recipe(recipe(parent, timeout=0.2), tmp_path)
+    assert outcome.timed_out
+    await asyncio.sleep(0.6)
+    assert not marker.exists(), "a timed-out command left a live grandchild"
+
+    background_marker = tmp_path / "background-survived"
+    background_child = (
+        f"import time; time.sleep(0.5); open({str(background_marker)!r}, chr(119)).write(chr(98))"
+    )
+    background = (
+        "import subprocess, sys; "
+        f"subprocess.Popen([sys.executable, '-c', "
+        f"{background_child!r}], "
+        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)"
+    )
+    outcome = await ProcessExecutor().run_recipe(recipe(background), tmp_path)
+    assert outcome.exit_code == 0
+    await asyncio.sleep(0.6)
+    assert not background_marker.exists(), "a completed command left a live background child"
+
+    inherited_marker = tmp_path / "inherited-pipe-child-survived"
+    inherited_child = (
+        f"import time; time.sleep(0.5); open({str(inherited_marker)!r}, 'w').write('bad')"
+    )
+    inherited = (
+        f"import subprocess, sys; subprocess.Popen([sys.executable, '-c', {inherited_child!r}])"
+    )
+    outcome = await ProcessExecutor().run_recipe(recipe(inherited), tmp_path)
+    assert outcome.exit_code == 0
+    await asyncio.sleep(0.6)
+    assert not inherited_marker.exists(), "an inherited pipe delayed descendant cleanup"
+
 
 async def test_output_bomb_is_bounded(tmp_path: Path) -> None:
     outcome = await ProcessExecutor().run_recipe(recipe("print('x' * 100_000_000)"), tmp_path)
@@ -119,6 +158,29 @@ class TestRunExec:
         launcher = RecordingLauncher()
         await ProcessExecutor(launcher=launcher).run_recipe(recipe("pass"), tmp_path)
         assert launcher.calls[0][1].allow_network is False
+
+    async def test_recipe_ignores_workspace_scratch_symlink(self, tmp_path: Path) -> None:
+        """仓库不能用旧固定路径的符号链接扩大 recipe 的可写边界。"""
+        outside = tmp_path.parent / f"{tmp_path.name}-outside"
+        outside.mkdir()
+        legacy_scratch = tmp_path / ".haven-scratch"
+        legacy_scratch.symlink_to(outside, target_is_directory=True)
+        launcher = RecordingLauncher()
+
+        outcome = await ProcessExecutor(launcher=launcher).run_recipe(
+            recipe(
+                "import os; from pathlib import Path; "
+                "p = Path(os.environ['TMPDIR']); (p / 'marker').write_text('x'); print(p)"
+            ),
+            tmp_path,
+        )
+
+        used_scratch = launcher.calls[0][1].scratch_dir
+        assert outcome.exit_code == 0
+        assert used_scratch != legacy_scratch
+        assert not used_scratch.exists(), "standalone recipe scratch must be reclaimed"
+        assert legacy_scratch.is_symlink()
+        assert not (outside / "marker").exists()
 
     async def test_a_missing_program_is_a_result_not_an_exception(self, tmp_path: Path) -> None:
         """在 Linux 上发现：系统没有 `make` 时，create_subprocess_exec 会抛出

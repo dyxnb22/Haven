@@ -37,20 +37,33 @@ class ToolFacts:
     这些事实由流水线根据规范化参数和工作区收集；模型无法直接影响它们。
     """
 
+    #: 模型提议的工具名称；策略只接受 ``KNOWN_TOOLS`` 中的值。
     tool_name: str
+    #: 规范化后的目标是否位于当前工作区内；未知或越界必须失败关闭。
     within_workspace: bool = True
+    #: 目标是否触及 .git、.haven 等受保护路径。
     touches_protected_path: bool = False
+    #: 检查配方是否已在最终配置中注册；None 表示事实尚未收集。
     recipe_registered: bool | None = None
+    #: ``repo.exec`` 的确定性执行分类，例如 safe_read 或 shell_passthrough。
     exec_class: str | None = None
+    #: 运行时是否有可用的操作系统沙箱；None 与 False 一样采取失败关闭。
     sandbox_available: bool | None = None
+    #: 写入前目标内容的摘要，用于绑定审批与执行之间的 preimage。
     preimage_digest: str | None = None
+    #: 规范化后的目标路径（如工具适用）；仅用于审计和策略诊断。
     path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class PolicyOutcome:
+    """确定性策略对工具提议给出的决定、原因和风险等级。"""
+
+    #: 确定性的 allow/ask/deny 决定。
     decision: PolicyDecision
+    #: 该决定对应的稳定机器可读原因。
     reason_code: str
+    #: 审批 UI 和审计输出使用的风险等级。
     risk: RiskLevel
 
 

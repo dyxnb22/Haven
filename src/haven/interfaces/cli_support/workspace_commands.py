@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import typer
@@ -24,6 +25,9 @@ def discover(
     from haven.domain.discovery import discover_recipes
 
     ws = workspace.resolve()
+    if not ws.is_dir():
+        typer.echo(f"error: workspace does not exist: {ws}")
+        raise typer.Exit(EXIT_USAGE)
     files, paths = _discovery_inputs(ws)
     recipes = discover_recipes(files, paths)
     if not recipes:
@@ -45,7 +49,7 @@ def discover(
 
     typer.echo("# Suggested recipes for .haven.toml — review, then paste what you trust:\n")
     for recipe in recipes:
-        argv = ", ".join(f'"{item}"' for item in recipe.argv)
+        argv = _toml_argv(recipe.argv)
         typer.echo(f"[recipes.{recipe.id}]  # {recipe.rationale}")
         typer.echo(f"argv = [{argv}]\n")
     typer.echo("re-run with --accept to write these into .haven.toml")
@@ -134,7 +138,7 @@ def init(
 
     typer.echo("suggested recipes (review, then re-run with --accept to write them):\n")
     for recipe in fresh:
-        argv = ", ".join(f'"{item}"' for item in recipe.argv)
+        argv = _toml_argv(recipe.argv)
         typer.echo(f"[recipes.{recipe.id}]  # {recipe.rationale}")
         typer.echo(f"argv = [{argv}]\n")
     raise typer.Exit(EXIT_OK)
@@ -152,7 +156,7 @@ def _persist_recipes(
         if f"[recipes.{recipe.id}]" in existing:
             skipped.append(recipe.id)
             continue
-        argv = ", ".join(f'"{item}"' for item in recipe.argv)
+        argv = _toml_argv(recipe.argv)
         blocks.append(f"[recipes.{recipe.id}]  # {recipe.rationale}\nargv = [{argv}]\n")
         added.append(recipe.id)
     if blocks:
@@ -160,6 +164,11 @@ def _persist_recipes(
         header = "" if existing else "# Written by `haven discover --accept`.\n"
         config_path.write_text(existing + prefix + header + "\n".join(blocks), encoding="utf-8")
     return added, skipped
+
+
+def _toml_argv(argv: tuple[str, ...]) -> str:
+    """将 argv 编码为兼容 TOML basic string 的内容，避免引号/反斜杠破坏配置。"""
+    return ", ".join(json.dumps(item, ensure_ascii=False) for item in argv)
 
 
 def config_explain(

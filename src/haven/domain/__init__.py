@@ -17,7 +17,7 @@
 """
 
 from haven.domain.approval import ApprovalRecord, ApprovalRequest, compute_approval_digest
-from haven.domain.budget import Budget, BudgetUsage, check_budget
+from haven.domain.budget import Budget, BudgetUsage, check_accumulated_budget, check_budget
 from haven.domain.digest import canonical_json, digest_of, sha256_bytes, sha256_text
 from haven.domain.enums import (
     ACTIVE_STATUSES,
@@ -104,6 +104,7 @@ __all__ = [
     "call_fingerprint",
     "canonical_json",
     "check_budget",
+    "check_accumulated_budget",
     "classify_argv",
     "compute_approval_digest",
     "digest_of",

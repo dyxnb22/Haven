@@ -139,6 +139,7 @@ def _add_path_rule(libc: ctypes.CDLL, ruleset_fd: int, path: str, rights: int, a
 
 
 def apply_sandbox(payload: dict[str, object]) -> None:
+    """在当前进程中安装不可逆的 Landlock 文件和网络访问规则。"""
     abi = abi_version()
     if abi < MIN_ABI:
         raise OSError(f"landlock ABI {abi} is too old; {MIN_ABI} or newer is required")
@@ -176,6 +177,7 @@ def apply_sandbox(payload: dict[str, object]) -> None:
 
 
 def main(argv: list[str]) -> int:
+    """解析启动器参数、应用沙箱并用目标命令替换当前进程。"""
     if "--spec" not in argv or "--" not in argv:
         print("usage: landlock_launcher --spec JSON -- PROGRAM [ARGS...]", file=sys.stderr)
         return SETUP_FAILURE_EXIT

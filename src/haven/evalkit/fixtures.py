@@ -14,14 +14,17 @@ from haven.evalkit.models import RecipeDef
 
 
 def is_protected(path: str) -> bool:
+    """判断相对路径是否包含受保护目录组件。"""
     return any(part in PROTECTED_COMPONENTS for part in PurePosixPath(path).parts)
 
 
 def is_allowed(path: str, patterns: tuple[str, ...]) -> bool:
+    """判断路径是否精确匹配或 glob 匹配案例允许的变更范围。"""
     return any(path == pattern or fnmatch(path, pattern) for pattern in patterns)
 
 
 def snapshot(root: Path) -> dict[str, str]:
+    """扫描夹具目录并返回排除缓存、构件和 scratch 后的文件摘要。"""
     digests: dict[str, str] = {}
     for path in sorted(root.rglob("*")):
         if "__pycache__" in path.parts or ".pytest_cache" in path.parts or path.suffix == ".pyc":
@@ -36,6 +39,7 @@ def snapshot(root: Path) -> dict[str, str]:
 
 
 def materialize_recipes(defs: dict[str, RecipeDef]) -> dict[str, RecipeSpec]:
+    """将评估案例配方定义展开为可执行的领域配方。"""
     recipes = {}
     for recipe_id, definition in defs.items():
         argv = tuple(sys.executable if item == "{python}" else item for item in definition.argv)
@@ -49,6 +53,7 @@ def materialize_recipes(defs: dict[str, RecipeDef]) -> dict[str, RecipeSpec]:
 
 
 def discovered_recipes(repo: Path) -> dict[str, RecipeSpec]:
+    """从仓库常见配置和测试入口推断可执行检查配方。"""
     from haven.domain.discovery import KNOWN_FILES, discover_recipes
 
     files: dict[str, str] = {}

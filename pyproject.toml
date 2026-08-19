@@ -76,6 +76,9 @@ mypy_path = "src"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# 单项测试若超过 30 秒，通常意味着子进程、事件队列或异步任务没有被回收。
+# 这是每测试上限，不限制完整套件的总运行时间。
+timeout = 30
 
 [tool.importlinter]
 root_package = "haven"

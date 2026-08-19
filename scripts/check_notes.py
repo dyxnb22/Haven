@@ -63,6 +63,7 @@ def collect_problems() -> list[str]:
 
 
 def main() -> int:
+    """运行决策笔记格式门禁并返回进程退出码。"""
     problems = collect_problems()
     if problems:
         print(f"decision notes: {len(problems)} problem(s)")

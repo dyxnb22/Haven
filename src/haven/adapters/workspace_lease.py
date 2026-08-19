@@ -11,19 +11,26 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
+import secrets
 import socket
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from haven.domain.digest import sha256_text
 
+_fcntl = importlib.import_module("fcntl") if os.name == "posix" else None
+
 #: 持有者在这么长时间内没有心跳时，即使无法探测其 pid（例如它属于另一位
 #: 用户），也视为已死亡。
 STALE_AFTER_SECONDS = 15 * 60.0
+_HELD_TOKENS: set[str] = set()
 
 
 class LeaseHeld(Exception):
@@ -40,28 +47,49 @@ class LeaseHeld(Exception):
 
 @dataclass
 class WorkspaceLease:
-    """已持有的租约。活动时调用 `refresh()`，退出时调用 `release()`。"""
+    """运行期间持有的工作区锁，防止并发运行互相覆盖文件。
 
+    活动时调用 ``refresh()``，退出时调用 ``release()``；租约对象只代表已经
+    成功取得的本地单写者租约。
+    """
+
+    #: 进程共享租约目录中的租约文件路径。
     path: Path
+    #: 写入租约内容的规范化工作区路径。
     workspace: str
+    #: 记录为租约持有者的本地进程 ID。
     pid: int
+    #: 区分同一 pid 中不同租约实例及 PID 复用的随机所有权令牌。
+    token: str
 
     def refresh(self) -> None:
-        payload = _read(self.path)
-        if payload is None or not self._is_mine():
-            return
-        payload["heartbeat_at"] = _now()
-        _write_atomic(self.path, payload)
+        """刷新当前租约心跳；租约已被替换或删除时不再写回。"""
+        with _acquire_guard(self.path):
+            payload = _read(self.path)
+            if payload is None or not self._is_mine():
+                return
+            payload["heartbeat_at"] = _now()
+            _write_atomic(self.path, payload)
 
     def release(self) -> None:
-        if self._is_mine():
-            self.path.unlink(missing_ok=True)
+        """释放仍由当前进程持有的租约，重复调用保持幂等。"""
+        try:
+            with _acquire_guard(self.path):
+                if self._is_mine():
+                    self.path.unlink(missing_ok=True)
+        finally:
+            _HELD_TOKENS.discard(self.token)
 
     def _is_mine(self) -> bool:
         payload = _read(self.path)
         if payload is None:
             return False
-        return _pid_of(payload) == self.pid and payload.get("host", "") == socket.gethostname()
+        return (
+            _pid_of(payload) == self.pid
+            and payload.get("host", "") == socket.gethostname()
+            and payload.get("token", "") == self.token
+            and payload.get("workspace", "") == self.workspace
+        )
 
 
 def acquire_workspace_lease(workspace_root: Path, leases_dir: Path) -> WorkspaceLease:
@@ -74,33 +102,48 @@ def acquire_workspace_lease(workspace_root: Path, leases_dir: Path) -> Workspace
     key = sha256_text(str(workspace_root.resolve()))[:24]
     path = leases_dir / f"{key}.json"
 
-    existing = _read(path)
-    if existing is not None and _is_live(existing):
-        raise LeaseHeld(
-            _pid_of(existing),
-            str(existing.get("host", "?")),
-            str(existing.get("acquired_at", "?")),
-        )
-
     workspace = str(workspace_root.resolve())
+    token = secrets.token_hex(16)
     payload: dict[str, object] = {
         "workspace": workspace,
         "pid": os.getpid(),
         "host": socket.gethostname(),
+        "token": token,
         "acquired_at": _now(),
         "heartbeat_at": _now(),
     }
-    _write_atomic(path, payload)
-    # 重新读取并确认我们确实获胜：两个进程同时打破同一个过期租约时都会
-    # 执行重命名，但最终只会有一个写入落后完成，失败者不能误以为自己持有租约。
-    final = _read(path)
-    if final is None or _pid_of(final) != os.getpid():
-        raise LeaseHeld(
-            _pid_of(final or {}),
-            str((final or {}).get("host", "?")),
-            str((final or {}).get("acquired_at", "?")),
-        )
-    return WorkspaceLease(path=path, workspace=workspace, pid=os.getpid())
+    with _acquire_guard(path):
+        existing = _read(path)
+        if existing is not None and _is_live(existing):
+            raise LeaseHeld(
+                _pid_of(existing),
+                str(existing.get("host", "?")),
+                str(existing.get("acquired_at", "?")),
+            )
+        _write_atomic(path, payload)
+        final = _read(path)
+        if final is None or final.get("token") != token:
+            raise LeaseHeld(
+                _pid_of(final or {}),
+                str((final or {}).get("host", "?")),
+                str((final or {}).get("acquired_at", "?")),
+            )
+    _HELD_TOKENS.add(token)
+    return WorkspaceLease(path=path, workspace=workspace, pid=os.getpid(), token=token)
+
+
+@contextmanager
+def _acquire_guard(path: Path) -> Iterator[None]:
+    """串行化同一工作区的检查/接管，消除两个 stale breaker 都获胜的窗口。"""
+    guard = path.with_suffix(".lock")
+    with guard.open("a+", encoding="utf-8") as handle:
+        if _fcntl is not None:
+            _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if _fcntl is not None:
+                _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
 
 
 def _read(path: Path) -> dict[str, object] | None:
@@ -113,7 +156,7 @@ def _read(path: Path) -> dict[str, object] | None:
 
 def _pid_of(payload: dict[str, object]) -> int:
     raw = payload.get("pid", -1)
-    return raw if isinstance(raw, int) else -1
+    return raw if isinstance(raw, int) and not isinstance(raw, bool) else -1
 
 
 def _is_live(payload: dict[str, object]) -> bool:
@@ -121,8 +164,11 @@ def _is_live(payload: dict[str, object]) -> bool:
         # 无法探测另一台机器上的持有者；信任心跳。
         return _heartbeat_age(payload) < STALE_AFTER_SECONDS
     pid = _pid_of(payload)
-    if pid <= 0 or pid == os.getpid():
+    if pid <= 0:
         return False
+    if pid == os.getpid():
+        token = str(payload.get("token", ""))
+        return token in _HELD_TOKENS or _heartbeat_age(payload) < STALE_AFTER_SECONDS
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -140,15 +186,20 @@ def _heartbeat_age(payload: dict[str, object]) -> float:
     raw = str(payload.get("heartbeat_at", ""))
     try:
         beat = datetime.fromisoformat(raw)
-    except ValueError:
+    except (TypeError, ValueError):
         return float("inf")
+    if beat.tzinfo is None:
+        beat = beat.replace(tzinfo=UTC)
     return max(0.0, (datetime.now(UTC) - beat).total_seconds())
 
 
 def _write_atomic(path: Path, payload: dict[str, object]) -> None:
     tmp = path.with_suffix(f".tmp-{os.getpid()}-{time.monotonic_ns()}")
-    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    try:
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _now() -> str:

@@ -16,7 +16,11 @@ from haven.contracts.tools import ARGS_MODELS, TOOL_VERSION, ToolArgs
 
 @dataclass(frozen=True, slots=True)
 class ValidationFailure:
-    code: str  # 取值："unknown_tool" | "invalid_arguments"
+    """工具不存在或参数不符合已注册 Schema 时的校验错误信息。"""
+
+    #: 稳定的校验错误码：``unknown_tool`` 或 ``invalid_arguments``。
+    code: str
+    #: 有界的校验失败诊断信息。
     message: str
 
 
@@ -25,13 +29,16 @@ class ToolRegistry:
 
     @property
     def tool_names(self) -> tuple[str, ...]:
+        """返回静态注册表中的工具名称，顺序与注册表一致。"""
         return tuple(ARGS_MODELS)
 
     @property
     def version(self) -> str:
+        """返回绑定审批摘要使用的工具注册表版本。"""
         return TOOL_VERSION
 
     def validate(self, tool_name: str, arguments_json: str) -> ToolArgs | ValidationFailure:
+        """校验工具名称和原始 JSON 参数，失败时返回稳定错误信息。"""
         model = ARGS_MODELS.get(tool_name)
         if model is None:
             return ValidationFailure("unknown_tool", f"tool {tool_name!r} is not registered")

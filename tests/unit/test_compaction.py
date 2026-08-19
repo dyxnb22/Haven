@@ -265,12 +265,42 @@ class TestHardLimit:
         assert fitted[-1].content.startswith("m4:")
         assert not any(m.content.startswith("m0:") for m in fitted)
 
+        # 即使它后面还有 assistant prose，最新用户意图也应保留并被有界截断。
+        intent = ModelMessage(role="user", content="LATEST-INTENT " + "u" * 2000)
+        narrative = ModelMessage(role="assistant", content="answer " + "a" * 2000)
+        fitted = enforce_hard_limit([intent, narrative], 500)
+        assert any("LATEST-INTENT" in message.content for message in fitted)
+        assert sum(message_chars(message) for message in fitted) <= 500
+
     def test_a_single_oversized_message_is_truncated_in_place(self) -> None:
         messages = [ModelMessage(role="user", content="z" * 5000)]
         fitted = enforce_hard_limit(messages, 1000)
         assert len(fitted) == 1
         assert len(fitted[0].content) <= 1000
         assert "truncated to fit" in fitted[0].content
+
+        reasoning_only = ModelMessage(
+            role="assistant", content="done", provider_reasoning="r" * 5000
+        )
+        fitted = enforce_hard_limit([reasoning_only], 1000)
+        assert sum(message_chars(message) for message in fitted) <= 1000
+
+        call = assistant_tool_call("paired").model_copy(
+            update={
+                "tool_calls": (
+                    ToolCallProposal(
+                        call_id="paired",
+                        tool_name="repo.read",
+                        arguments_json='{"path":"' + "x" * 2000 + '"}',
+                    ),
+                )
+            }
+        )
+        result = paired_tool("paired", "latest.py")
+        fitted = enforce_hard_limit([call, result], 600)
+        assert [message.role for message in fitted] == ["assistant", "tool"]
+        assert fitted[0].tool_calls[0].call_id == fitted[1].tool_call_id
+        assert sum(message_chars(message) for message in fitted) <= 600
 
     def test_never_returns_empty(self) -> None:
         messages = [ModelMessage(role="user", content="z" * 5000)]

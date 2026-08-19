@@ -1,14 +1,13 @@
-"""对决定行为的各层强制执行逐文件覆盖率下限。
+"""按风险对核心代码强制执行逐文件覆盖率下限。
 
 README.md 中的主要百分比是平均值，而平均值会掩盖最差成员：一个覆盖良好的大型
 模块可以补贴一个几乎没有覆盖的模块，因此新文件基本未测试时，总数仍可能保持不变。
 这对拥有权限、证据、预算和边界类型的层尤其重要——这些地方的缺口正好意味着本
 项目所宣称的保证存在缺口。
 
-下限有意低于当前最差的受门禁文件，而不是贴着它设置：目标是捕获覆盖率崩塌，而
-不是冻结当前数字，让每次重构都变成覆盖率谈判。覆盖率依赖平台或 UI 的表面
-（仅 Linux 的沙箱启动器、CLI 和 TUI）不在此处设门禁；它们由总覆盖率和自身套件
-负责。
+权限、执行、证据和恢复路径保持较高下限；核心层的其余文件只保留防崩塌下限。
+这样一个简单契约或端口不会为了达到和策略引擎相同的数字而制造测试，同时新的
+核心文件也不能在几乎未测试的状态下进入。平台或 UI 表面由自身套件负责。
 
 用法：
     uv run coverage run -m pytest        # 生成数据
@@ -26,10 +25,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-#: 门禁层中每个文件的最低行覆盖率。
+#: 直接承载安全、成功判定或恢复保证的文件下限。
 CORE_FLOOR = 85
 
-#: 其中每个文件都必须达到 `CORE_FLOOR` 的层。
+#: 核心层其余文件的防崩塌下限。
+BASE_FLOOR = 70
+
+#: 至少需要防崩塌覆盖率的核心层。
 GATED_PREFIXES = (
     "src/haven/domain/",
     "src/haven/application/",
@@ -37,12 +39,36 @@ GATED_PREFIXES = (
     "src/haven/ports/",
 )
 
+#: 这些文件的缺口会直接削弱权限、执行、成功判定或恢复保证。
+HIGH_RISK_FILES = frozenset(
+    {
+        "src/haven/application/answer_resolution.py",
+        "src/haven/application/approval_coordinator.py",
+        "src/haven/application/compaction.py",
+        "src/haven/application/recovery_service.py",
+        "src/haven/application/tool_execution.py",
+        "src/haven/application/tool_pipeline.py",
+        "src/haven/application/tool_processes.py",
+        "src/haven/contracts/checkpoint.py",
+        "src/haven/contracts/tools.py",
+        "src/haven/domain/approval.py",
+        "src/haven/domain/budget.py",
+        "src/haven/domain/evidence.py",
+        "src/haven/domain/exec_policy.py",
+        "src/haven/domain/policy.py",
+        "src/haven/domain/review.py",
+        "src/haven/domain/transitions.py",
+    }
+)
+
 
 def floor_for(path: str) -> int | None:
     """该文件必须达到的下限；不受门禁时返回 None。"""
     normalized = path.replace("\\", "/")
-    if any(normalized.startswith(prefix) for prefix in GATED_PREFIXES):
+    if normalized in HIGH_RISK_FILES:
         return CORE_FLOOR
+    if any(normalized.startswith(prefix) for prefix in GATED_PREFIXES):
+        return BASE_FLOOR
     return None
 
 
@@ -76,11 +102,15 @@ def _measured() -> dict[str, float]:
 
 
 def main() -> int:
+    """读取覆盖率数据、检查逐文件下限并返回进程退出码。"""
     failures = violations(_measured())
     if not failures:
-        print(f"coverage floor: every gated file is at or above {CORE_FLOOR}%")
+        print(
+            "coverage floor: every gated file meets its risk tier "
+            f"({CORE_FLOOR}% high-risk / {BASE_FLOOR}% core)"
+        )
         return 0
-    print(f"coverage floor: {len(failures)} gated file(s) below {CORE_FLOOR}%")
+    print(f"coverage floor: {len(failures)} gated file(s) below their risk-tier floor")
     for path, percent, floor in failures:
         print(f"  {path}: {percent:.0f}% < {floor}%")
     return 1

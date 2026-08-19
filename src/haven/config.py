@@ -11,10 +11,13 @@
 
 from __future__ import annotations
 
+import math
 import os
+import shlex
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import platformdirs
 
@@ -30,30 +33,45 @@ DEFAULT_API_KEY_ENV = "HAVEN_API_KEY"
 
 
 class ConfigError(Exception):
+    """用户配置无效或无法读取时的错误。"""
+
     pass
 
 
 @dataclass(frozen=True, slots=True)
 class ProviderConfig:
+    """单个模型提供商的连接和模型参数。"""
+
+    #: OpenAI 兼容 API 的服务根地址。
     base_url: str = DEFAULT_BASE_URL
+    #: 要请求的模型标识符。
     model: str = DEFAULT_MODEL
+    #: 存放 API 密钥的环境变量名称；密钥本身不会进入配置对象。
     api_key_env: str = DEFAULT_API_KEY_ENV
 
     def api_key(self) -> str | None:
+        """从配置指定的环境变量读取密钥；未设置或为空时返回 ``None``。"""
         return os.environ.get(self.api_key_env) or None
 
 
 @dataclass(frozen=True, slots=True)
 class ResolvedConfig:
+    """合并用户配置、项目配置和环境变量后的最终配置。"""
+
+    #: 最终的模型提供商连接设置。
     provider: ProviderConfig
+    #: 所有只收紧合并完成后的最终硬资源预算。
     budget: Budget
+    #: 用于估算该模型费用的费率卡。
     pricing: Pricing
+    #: 按 recipe id 索引的、允许项目检查阶段执行的命令定义。
     recipes: dict[str, RecipeSpec] = field(default_factory=dict)
-    #: config key -> 最终值的来源
+    #: config key -> 最终值的来源，用于诊断和可审计的配置报告。
     sources: dict[str, str] = field(default_factory=dict)
 
 
 def user_config_path() -> Path:
+    """返回当前用户级 Haven 配置文件路径。"""
     return Path(platformdirs.user_config_dir(APP_NAME)) / "config.toml"
 
 
@@ -70,14 +88,17 @@ def data_dir() -> Path:
 
 
 def db_path() -> Path:
+    """返回运行数据库路径。"""
     return data_dir() / "haven.db"
 
 
 def artifacts_dir() -> Path:
+    """返回内容寻址构件目录路径。"""
     return data_dir() / "artifacts"
 
 
 def project_config_path(workspace: Path) -> Path:
+    """返回工作区内项目配置文件 ``.haven.toml`` 的路径。"""
     return workspace / ".haven.toml"
 
 
@@ -87,6 +108,44 @@ def _read_toml(path: Path) -> dict[str, object]:
             return tomllib.load(handle)
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"invalid TOML in {path}: {exc}") from exc
+    except OSError as exc:
+        raise ConfigError(f"could not read config {path}: {exc}") from exc
+
+
+def _validate_provider(provider: ProviderConfig) -> None:
+    """验证用户文件和环境变量合并后的提供商连接参数。"""
+    if (
+        not provider.model.strip()
+        or provider.model != provider.model.strip()
+        or len(provider.model) > 200
+        or any(ord(char) < 32 for char in provider.model)
+    ):
+        raise ConfigError("provider model must be a non-empty string of at most 200 characters")
+    if provider.base_url != provider.base_url.strip() or len(provider.base_url) > 2048:
+        raise ConfigError("provider base_url is too long")
+    try:
+        parsed = urlsplit(provider.base_url)
+        hostname = parsed.hostname
+    except ValueError as exc:
+        raise ConfigError("provider base_url must be a valid absolute http(s) URL") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ConfigError("provider base_url must be an absolute http(s) URL")
+    name = provider.api_key_env
+    if (
+        not name
+        or len(name) > 200
+        or not (name[0].isalpha() or name[0] == "_")
+        or not all(char.isalnum() or char == "_" for char in name)
+    ):
+        raise ConfigError("provider api_key_env must be a valid environment variable name")
 
 
 def _parse_budget(raw: object, origin: str) -> Budget:
@@ -109,13 +168,20 @@ def _parse_budget(raw: object, origin: str) -> Budget:
         value = raw.get(key, default)
         if not isinstance(value, int) or isinstance(value, bool):
             raise ConfigError(f"budget key {key!r} in {origin} must be an integer")
+        if value <= 0:
+            raise ConfigError(f"budget key {key!r} in {origin} must be greater than zero")
         return value
 
     def _float(key: str, default: float) -> float:
         value = raw.get(key, default)
         if isinstance(value, bool) or not isinstance(value, int | float):
             raise ConfigError(f"budget key {key!r} in {origin} must be a number")
-        return float(value)
+        parsed = float(value)
+        if not math.isfinite(parsed) or parsed <= 0:
+            raise ConfigError(
+                f"budget key {key!r} in {origin} must be finite and greater than zero"
+            )
+        return parsed
 
     return Budget(
         max_steps=_int("max_steps", base.max_steps),
@@ -134,25 +200,58 @@ def _parse_recipes(raw: object, origin: str) -> dict[str, RecipeSpec]:
     for recipe_id, spec in raw.items():
         if not isinstance(spec, dict) or "argv" not in spec:
             raise ConfigError(f"recipe {recipe_id!r} in {origin} needs an 'argv' list")
+        if not recipe_id or len(str(recipe_id)) > 100:
+            raise ConfigError(f"recipe id {recipe_id!r} in {origin} must be 1-100 characters")
+        unknown = set(spec) - {
+            "argv",
+            "timeout_seconds",
+            "allow_network",
+            "readable_roots",
+        }
+        if unknown:
+            raise ConfigError(
+                f"unknown keys for recipe {recipe_id!r} in {origin}: {sorted(unknown)}"
+            )
         argv = spec["argv"]
         if (
             not isinstance(argv, list)
             or not argv
-            or not all(isinstance(item, str) for item in argv)
+            or len(argv) > 64
+            or not all(isinstance(item, str) and item and len(item) <= 4096 for item in argv)
         ):
-            raise ConfigError(f"recipe {recipe_id!r} argv must be a non-empty list of strings")
-        timeout = float(spec.get("timeout_seconds", 120.0))
+            raise ConfigError(
+                f"recipe {recipe_id!r} argv must contain 1-64 non-empty bounded strings"
+            )
+        raw_timeout = spec.get("timeout_seconds", 120.0)
+        if isinstance(raw_timeout, bool) or not isinstance(raw_timeout, int | float):
+            raise ConfigError(f"recipe {recipe_id!r} timeout_seconds must be a number")
+        timeout = float(raw_timeout)
+        if not math.isfinite(timeout) or not 0.1 <= timeout <= 3600.0:
+            raise ConfigError(f"recipe {recipe_id!r} timeout_seconds must be between 0.1 and 3600")
+        allow_network = spec.get("allow_network", False)
+        if not isinstance(allow_network, bool):
+            raise ConfigError(f"recipe {recipe_id!r} allow_network must be a boolean")
+        roots = spec.get("readable_roots", [])
+        if (
+            not isinstance(roots, list)
+            or len(roots) > 16
+            or not all(isinstance(root, str) and root and len(root) <= 4096 for root in roots)
+        ):
+            raise ConfigError(
+                f"recipe {recipe_id!r} readable_roots must be a list of at most 16 paths"
+            )
         recipes[str(recipe_id)] = RecipeSpec(
             id=str(recipe_id),
             argv=tuple(argv),
             timeout_seconds=timeout,
-            allow_network=bool(spec.get("allow_network", False)),
-            readable_roots=tuple(str(root) for root in spec.get("readable_roots", ())),
+            allow_network=allow_network,
+            readable_roots=tuple(roots),
         )
     return recipes
 
 
 def load_config(workspace: Path | None = None, tier: str | None = None) -> ResolvedConfig:
+    """按默认值、用户配置、环境变量、预算档位和项目收紧规则合并配置。"""
     provider = ProviderConfig()
     budget = Budget()
     pricing = Pricing()
@@ -169,13 +268,29 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
     user_path = user_config_path()
     if user_path.is_file():
         raw = _read_toml(user_path)
-        if provider_raw := raw.get("provider"):
+        unknown_top_level = set(raw) - {"provider", "budget", "pricing", "recipes"}
+        if unknown_top_level:
+            raise ConfigError(f"unknown top-level keys in {user_path}: {sorted(unknown_top_level)}")
+        if (provider_raw := raw.get("provider")) is not None:
             if not isinstance(provider_raw, dict):
                 raise ConfigError(f"[provider] in {user_path} must be a table")
+            unknown_provider = set(provider_raw) - {"base_url", "model", "api_key_env"}
+            if unknown_provider:
+                raise ConfigError(
+                    f"unknown provider keys in {user_path}: {sorted(unknown_provider)}"
+                )
+            provider_values = {
+                key: provider_raw.get(key, getattr(provider, key))
+                for key in ("base_url", "model", "api_key_env")
+            }
+            if not all(
+                isinstance(value, str) and value.strip() for value in provider_values.values()
+            ):
+                raise ConfigError(f"[provider] values in {user_path} must be non-empty strings")
             provider = ProviderConfig(
-                base_url=str(provider_raw.get("base_url", provider.base_url)),
-                model=str(provider_raw.get("model", provider.model)),
-                api_key_env=str(provider_raw.get("api_key_env", provider.api_key_env)),
+                base_url=provider_values["base_url"],
+                model=provider_values["model"],
+                api_key_env=provider_values["api_key_env"],
             )
             for key in ("base_url", "model", "api_key_env"):
                 if key in provider_raw:
@@ -183,23 +298,36 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
         if budget_raw := raw.get("budget"):
             budget = _parse_budget(budget_raw, str(user_path))
             sources["budget"] = "user"
-        if pricing_raw := raw.get("pricing"):
+        if (pricing_raw := raw.get("pricing")) is not None:
             if not isinstance(pricing_raw, dict):
                 raise ConfigError(f"[pricing] in {user_path} must be a table")
+            unknown_pricing = set(pricing_raw) - {
+                "input_per_1m_usd",
+                "output_per_1m_usd",
+                "cached_input_per_1m_usd",
+            }
+            if unknown_pricing:
+                raise ConfigError(f"unknown pricing keys in {user_path}: {sorted(unknown_pricing)}")
             input_price = pricing_raw.get("input_per_1m_usd", 0.0)
             output_price = pricing_raw.get("output_per_1m_usd", 0.0)
             cached_price = pricing_raw.get("cached_input_per_1m_usd")
-            if not isinstance(input_price, int | float) or not isinstance(
-                output_price, int | float
+            pricing_values = (input_price, output_price, cached_price)
+            if any(
+                isinstance(value, bool)
+                or (value is not None and not isinstance(value, int | float))
+                for value in pricing_values
             ):
                 raise ConfigError(f"[pricing] values in {user_path} must be numbers")
-            if cached_price is not None and not isinstance(cached_price, int | float):
-                raise ConfigError(f"[pricing] values in {user_path} must be numbers")
-            pricing = Pricing(
-                input_per_1m_usd=float(input_price),
-                output_per_1m_usd=float(output_price),
-                cached_input_per_1m_usd=(float(cached_price) if cached_price is not None else None),
-            )
+            try:
+                pricing = Pricing(
+                    input_per_1m_usd=float(input_price),
+                    output_per_1m_usd=float(output_price),
+                    cached_input_per_1m_usd=(
+                        float(cached_price) if cached_price is not None else None
+                    ),
+                )
+            except ValueError as exc:
+                raise ConfigError(f"invalid [pricing] in {user_path}: {exc}") from exc
             sources["pricing"] = "user"
         if recipes_raw := raw.get("recipes"):
             recipes.update(_parse_recipes(recipes_raw, str(user_path)))
@@ -252,6 +380,7 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
                 recipes.update(_parse_recipes(recipes_raw, str(project_path)))
                 sources["recipes(project)"] = "project"
 
+    _validate_provider(provider)
     return ResolvedConfig(
         provider=provider,
         budget=budget,
@@ -290,7 +419,7 @@ def explain(config: ResolvedConfig, sandbox_backend: str = "unknown") -> list[tu
     rows.append(("sandbox.backend", sandbox_backend, "platform"))
     for recipe_id, spec in sorted(config.recipes.items()):
         network = " [network allowed]" if spec.allow_network else ""
-        rows.append((f"recipes.{recipe_id}", " ".join(spec.argv) + network, "config"))
+        rows.append((f"recipes.{recipe_id}", shlex.join(spec.argv) + network, "config"))
     rows.append(("storage.db", str(db_path()), "platformdirs"))
     rows.append(("storage.artifacts", str(artifacts_dir()), "platformdirs"))
     return rows

@@ -38,6 +38,8 @@ FactsHandler = Callable[
 
 
 class ToolFactsCollector:
+    """从规范化参数和工作区状态收集策略所需事实，隔离模型输入。"""
+
     def __init__(
         self,
         workspace: WorkspacePort,
@@ -65,6 +67,7 @@ class ToolFactsCollector:
     async def collect(
         self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
     ) -> tuple[ToolFacts, ToolPreview]:
+        """按工具类型收集路径、摘要、沙箱和预览事实，供策略与审批使用。"""
         handler = self.handlers.get(call.tool_name)
         if handler is None:  # pragma: no cover - 接线测试保证不可达
             return ToolFacts(tool_name=call.tool_name), None

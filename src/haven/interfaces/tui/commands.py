@@ -1,8 +1,9 @@
 """TUI slash 命令的纯路由规则。"""
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
+from haven.domain.budget import Budget
 from haven.interfaces.tui.presenter import PresenterState
 
 HELP_TEXT = """\
@@ -31,11 +32,18 @@ CommandKind = Literal["log", "sessions", "fork", "diff", "rewind", "export", "qu
 
 @dataclass(frozen=True, slots=True)
 class CommandAction:
+    """解析后的用户命令及其参数。"""
+
+    #: 路由给 TUI 控制器的动作。
     kind: CommandKind
+    #: 可选载荷，例如日志消息或运行 ID。
     value: str = ""
 
 
-def route_command(command: str, state: PresenterState, budget: Any = None) -> CommandAction:
+def route_command(
+    command: str, state: PresenterState, budget: Budget | None = None
+) -> CommandAction:
+    """将 slash 命令解析为纯数据动作，不执行任何外部副作用。"""
     name = command.split()[0].lower()
     if name == "/help":
         return CommandAction("log", HELP_TEXT)
@@ -45,7 +53,8 @@ def route_command(command: str, state: PresenterState, budget: Any = None) -> Co
         message = (
             f"budget: step {state.step}/{budget.max_steps}, "
             f"tools {state.tool_calls}/{budget.max_tool_calls}, "
-            f"tokens {state.input_tokens}/{state.output_tokens}, "
+            f"tokens in {state.input_tokens}/{budget.max_input_tokens}, "
+            f"out {state.output_tokens}/{budget.max_output_tokens}, "
             f"cost ${state.cost_usd:.4f}/{budget.max_cost_usd:.2f}"
             + (" (estimated)" if state.usage_estimated else "")
         )

@@ -14,6 +14,8 @@ MAX_SEARCH_FILE_BYTES = 1024 * 1024
 MAX_SEARCH_TOTAL_BYTES = 64 * 1024
 MAX_SEARCH_LINE_CHARS = 240
 _DEADLINE_CHECK_LINES = 256
+_RG_RAW_OUTPUT_CAP_BYTES = MAX_SEARCH_TOTAL_BYTES * 2
+_FILES_SEARCHED = re.compile(rb"(?m)^(\d+) files? searched$")
 
 
 async def search_workspace(
@@ -47,7 +49,8 @@ async def search_workspace(
             ignored_dirs=ignored_dirs,
             protected_components=protected_components,
         )
-    return _search_walk(
+    return await asyncio.to_thread(
+        _search_walk,
         root=root,
         pattern=pattern,
         target=target,
@@ -76,6 +79,9 @@ async def _search_ripgrep(
         "--with-filename",
         "--color=never",
         "--sort=path",
+        "--stats",
+        "--max-columns=512",
+        "--max-columns-preview",
         "--no-require-git",
         f"--max-filesize={MAX_SEARCH_FILE_BYTES}",
         *(f"--glob=!{name}" for name in sorted(ignored_dirs | protected_components)),
@@ -91,9 +97,9 @@ async def _search_ripgrep(
             stderr=asyncio.subprocess.PIPE,
             stdin=asyncio.subprocess.DEVNULL,
         )
-        raw, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
-    except (OSError, TimeoutError):
-        return _search_walk(
+    except OSError:
+        return await asyncio.to_thread(
+            _search_walk,
             root=root,
             pattern=pattern,
             target=target,
@@ -102,8 +108,17 @@ async def _search_ripgrep(
             ignored_dirs=ignored_dirs,
             protected_components=protected_components,
         )
-    if proc.returncode not in (0, 1, 2) or (proc.returncode == 2 and not raw.strip()):
-        return _search_walk(
+
+    try:
+        raw, stderr, output_truncated = await _read_ripgrep(
+            proc, timeout_seconds=timeout_seconds, max_results=max_results
+        )
+    except asyncio.CancelledError:
+        await _terminate(proc)
+        raise
+    if proc.returncode not in (0, 1, 2) and not raw.strip():
+        return await asyncio.to_thread(
+            _search_walk,
             root=root,
             pattern=pattern,
             target=target,
@@ -116,7 +131,7 @@ async def _search_ripgrep(
     matches: list[SearchMatch] = []
     seen_files: set[str] = set()
     total_bytes = 0
-    truncated = False
+    truncated = output_truncated or proc.returncode == 2
     for line in raw.decode("utf-8", errors="replace").splitlines():
         parsed = _parse_ripgrep_line(root, line)
         if parsed is None:
@@ -129,7 +144,63 @@ async def _search_ripgrep(
         if len(matches) >= max_results or total_bytes >= MAX_SEARCH_TOTAL_BYTES:
             truncated = True
             break
-    return SearchResult(matches=tuple(matches), files_scanned=len(seen_files), truncated=truncated)
+    files_scanned = _ripgrep_files_searched(stderr)
+    return SearchResult(
+        matches=tuple(matches),
+        files_scanned=files_scanned if files_scanned is not None else len(seen_files),
+        truncated=truncated,
+    )
+
+
+async def _read_ripgrep(
+    proc: asyncio.subprocess.Process, *, timeout_seconds: float, max_results: int
+) -> tuple[bytes, bytes, bool]:
+    """流式读取 rg，达到边界或超时时终止进程，不让输出先撑满内存。"""
+    assert proc.stdout is not None and proc.stderr is not None
+    stderr_task = asyncio.create_task(_read_bounded_stderr(proc.stderr))
+    chunks: list[bytes] = []
+    total = 0
+    lines = 0
+    truncated = False
+    try:
+        async with asyncio.timeout(timeout_seconds):
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                chunks.append(line)
+                total += len(line)
+                lines += 1
+                if lines >= max_results or total >= _RG_RAW_OUTPUT_CAP_BYTES:
+                    truncated = True
+                    await _terminate(proc)
+                    break
+            if proc.returncode is None:
+                await proc.wait()
+    except TimeoutError:
+        truncated = True
+        await _terminate(proc)
+    stderr = await stderr_task
+    return b"".join(chunks), stderr, truncated
+
+
+async def _read_bounded_stderr(stream: asyncio.StreamReader) -> bytes:
+    kept = b""
+    while chunk := await stream.read(65536):
+        kept = (kept + chunk)[-_RG_RAW_OUTPUT_CAP_BYTES:]
+    return kept
+
+
+async def _terminate(proc: asyncio.subprocess.Process) -> None:
+    if proc.returncode is not None:
+        return
+    proc.kill()
+    await proc.wait()
+
+
+def _ripgrep_files_searched(stderr: bytes) -> int | None:
+    match = _FILES_SEARCHED.search(stderr)
+    return int(match.group(1)) if match else None
 
 
 def _parse_ripgrep_line(root: Path, line: str) -> tuple[str, int, str] | None:
@@ -158,7 +229,7 @@ def _search_walk(
 ) -> SearchResult:
     compiled = re.compile(pattern)
     matches: list[SearchMatch] = []
-    seen_files: set[str] = set()
+    files_scanned = 0
     total_bytes = 0
     truncated = False
     deadline = time.monotonic() + timeout_seconds
@@ -169,6 +240,7 @@ def _search_walk(
         if time.monotonic() > deadline:
             truncated = True
             break
+        files_scanned += 1
         try:
             if file_path.stat().st_size > MAX_SEARCH_FILE_BYTES:
                 continue
@@ -187,11 +259,10 @@ def _search_walk(
                 clipped = line.strip()[:MAX_SEARCH_LINE_CHARS]
                 total_bytes += len(clipped.encode("utf-8"))
                 matches.append(SearchMatch(path=rel, line_number=line_number, line=clipped))
-                seen_files.add(rel)
                 if len(matches) >= max_results or total_bytes >= MAX_SEARCH_TOTAL_BYTES:
                     truncated = True
                     break
-    return SearchResult(matches=tuple(matches), files_scanned=len(seen_files), truncated=truncated)
+    return SearchResult(matches=tuple(matches), files_scanned=files_scanned, truncated=truncated)
 
 
 def iter_workspace_files(

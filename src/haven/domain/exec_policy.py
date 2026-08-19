@@ -20,6 +20,8 @@ from pathlib import PurePosixPath
 
 
 class ExecClass(StrEnum):
+    """对外部命令影响范围的分类，决定策略是否允许或要求审批。"""
+
     SAFE_READ = "safe_read"
     SHELL_PASSTHROUGH = "shell_passthrough"
     OTHER = "other"

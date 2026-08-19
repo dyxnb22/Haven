@@ -37,21 +37,37 @@ def compute_approval_digest(
 
 @dataclass(frozen=True, slots=True)
 class ApprovalRequest:
+    """发送给用户确认的工具调用摘要，绑定精确请求摘要。"""
+
+    #: 这次一次性审批请求的持久标识。
     approval_id: ApprovalId
+    #: 拥有该请求的运行。
     run_id: RunId
+    #: 提议的工具调用标识。
     call_id: ToolCallId
+    #: 正在审批的工具形态。
     tool_name: str
+    #: 人类可读的意图摘要。
     summary: str
+    #: 确定性策略计算出的风险等级。
     risk: RiskLevel
+    #: 将参数、工作区和预览绑定到请求上的摘要。
     request_digest: str
+    #: 展示给用户的有界预览。
     preview: str
 
 
 @dataclass(frozen=True, slots=True)
 class ApprovalRecord:
+    """审批请求及其当前决定的持久化记录。"""
+
+    #: 与 ApprovalRequest 共享的持久标识。
     approval_id: ApprovalId
+    #: 必须与执行请求匹配的摘要。
     request_digest: str
+    #: 用户或自动审批决定。
     decision: ApprovalDecision
+    #: 这次一次性审批是否已经铸造执行票据。
     consumed: bool = False
 
     def is_valid_for(self, digest: str) -> bool:

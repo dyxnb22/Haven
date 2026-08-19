@@ -66,6 +66,10 @@ class TestMassDeletion:
         text = diff(added=["pass"], removed=[f"line {i}" for i in range(80)])
         assert "mass_deletion" in codes(text)
 
+        deleted = text.replace("+++ b/src/app.py", "+++ /dev/null")
+        findings = review_diff(deleted)
+        assert findings[0].path == "src/app.py"
+
     def test_small_deletion_is_not_flagged(self) -> None:
         text = diff(added=["new"], removed=[f"line {i}" for i in range(10)])
         assert codes(text) == set()

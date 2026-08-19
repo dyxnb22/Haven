@@ -34,8 +34,11 @@ def call_fingerprint(tool_name: str, arguments_json: str, result_text: str) -> s
 class StuckLoopDetector:
     """统计连续相同的（工具、参数、结果）观测。"""
 
+    #: 判定循环卡死所需的连续相同观测次数。
     threshold: int = 3
+    #: 上一次调用观察到的指纹。
     _last_fingerprint: str | None = field(default=None, repr=False)
+    #: 与 _last_fingerprint 连续匹配的观测次数。
     _repeat_count: int = field(default=0, repr=False)
 
     def observe(self, fingerprint: str) -> bool:

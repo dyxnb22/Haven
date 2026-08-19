@@ -22,7 +22,15 @@ def wrap(event, seq: int = 1) -> EventEnvelope:  # type: ignore[no-untyped-def]
 
 def test_run_created_initializes_header() -> None:
     state = reduce(
-        PresenterState(),
+        PresenterState(
+            input_tokens=99,
+            output_tokens=88,
+            cost_usd=1.25,
+            cost_known=False,
+            usage_estimated=True,
+            reasoning_text="stale reasoning",
+            context_summary="stale context",
+        ),
         wrap(
             RunCreated(
                 run_id="run-1",
@@ -41,6 +49,9 @@ def test_run_created_initializes_header() -> None:
     assert "Haven" in state.header_line()
     assert "proj" in state.header_line()
     assert state.timeline[-1].kind == "user"
+    assert (state.input_tokens, state.output_tokens, state.cost_usd) == (0, 0, 0.0)
+    assert state.cost_known and not state.usage_estimated
+    assert not state.reasoning_text and not state.context_summary
 
 
 def test_streaming_then_completion() -> None:
@@ -118,12 +129,16 @@ def test_run_finished_stops_running() -> None:
                 stop_reason="evidence_satisfied",
                 steps=4,
                 tool_calls=3,
+                input_tokens=120,
+                output_tokens=30,
                 cost_usd=0.01,
             )
         ),
     )
     assert not state.running
     assert state.status == "succeeded"
+    assert (state.step, state.tool_calls) == (4, 3)
+    assert (state.input_tokens, state.output_tokens) == (120, 30)
     assert "finished" in state.status_line()
 
 

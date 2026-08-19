@@ -5,6 +5,10 @@
 成本按实测数字报告，因此必须考虑两种费率的拆分。
 """
 
+import math
+
+import pytest
+
 from haven.domain.pricing import Pricing
 
 
@@ -19,6 +23,9 @@ class TestUnknownIsNotFree:
 
     def test_an_unconfigured_rate_card_is_not_known(self) -> None:
         assert Pricing().is_known is False
+        for rate in (-0.01, math.nan, math.inf, True):
+            with pytest.raises(ValueError):
+                Pricing(input_per_1m_usd=rate)
 
     def test_a_configured_rate_card_is_known(self) -> None:
         assert Pricing(input_per_1m_usd=0.14, output_per_1m_usd=0.28).is_known is True

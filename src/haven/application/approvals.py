@@ -10,9 +10,14 @@ from haven.domain.enums import ApprovalDecision
 
 
 class ApprovalResponder(Protocol):
-    """回答一次审批请求。由 TUI 桥接、无头 CLI（始终拒绝）和脚本化评估策略实现。"""
+    """交互层审批响应的最小协议。
 
-    async def respond(self, request: ApprovalRequest) -> ApprovalDecision: ...
+    回答一次审批请求。由 TUI 桥接、无头 CLI（始终拒绝）和脚本化评估策略实现。
+    """
+
+    async def respond(self, request: ApprovalRequest) -> ApprovalDecision:
+        """对一个审批请求返回批准或拒绝决定。"""
+        ...
 
 
 class AutoApprover:
@@ -23,6 +28,7 @@ class AutoApprover:
         self.seen: list[ApprovalRequest] = []
 
     async def respond(self, request: ApprovalRequest) -> ApprovalDecision:
+        """记录请求并按固定策略返回批准或拒绝。"""
         self.seen.append(request)
         if self._policy == "approve_all":
             return ApprovalDecision.APPROVED
@@ -48,6 +54,7 @@ class HeadlessApprover:
         self.seen: list[ApprovalRequest] = []
 
     async def respond(self, request: ApprovalRequest) -> ApprovalDecision:
+        """记录请求并按无头运行策略决定是否批准。"""
         self.seen.append(request)
         if self._policy == "all":
             return ApprovalDecision.APPROVED
@@ -67,6 +74,7 @@ class QueueApprovalBroker:
         self._pending: dict[str, asyncio.Future[ApprovalDecision]] = {}
 
     async def respond(self, request: ApprovalRequest) -> ApprovalDecision:
+        """挂起当前协程，直到 UI 通过相同审批 ID 调用 ``resolve``。"""
         loop = asyncio.get_running_loop()
         future: asyncio.Future[ApprovalDecision] = loop.create_future()
         self._pending[request.approval_id] = future
@@ -76,6 +84,7 @@ class QueueApprovalBroker:
             self._pending.pop(request.approval_id, None)
 
     def resolve(self, approval_id: str, decision: ApprovalDecision) -> bool:
+        """完成一个待处理审批；找不到或已完成时返回 ``False``。"""
         future = self._pending.get(approval_id)
         if future is None or future.done():
             return False
@@ -84,4 +93,5 @@ class QueueApprovalBroker:
 
     @property
     def pending_ids(self) -> tuple[str, ...]:
+        """返回当前等待 UI 决定的审批 ID。"""
         return tuple(self._pending)

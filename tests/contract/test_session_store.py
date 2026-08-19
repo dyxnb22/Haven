@@ -1,5 +1,6 @@
 """针对两个存储实现运行的契约测试，以保持二者行为一致。"""
 
+import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -57,8 +58,13 @@ async def test_run_lifecycle(store: SessionStorePort) -> None:
     assert record.status is RunStatus.SUCCEEDED
     assert record.stop_reason == "evidence_satisfied"
 
+    await store.create_run("run-2", "/tmp/ws", "wsdigest", "other", "interactive")
+    await store.update_run_status("run-1", RunStatus.SUCCEEDED, "evidence_satisfied")
     runs = await store.list_runs(10)
-    assert [r.run_id for r in runs] == ["run-1"]
+    assert [r.run_id for r in runs] == ["run-1", "run-2"]
+    assert await store.list_runs(0) == []
+    with pytest.raises(ValueError, match="non-negative"):
+        await store.list_runs(-1)
 
 
 async def test_event_journal_is_ordered_and_typed(store: SessionStorePort) -> None:
@@ -81,6 +87,15 @@ async def test_event_journal_is_ordered_and_typed(store: SessionStorePort) -> No
     assert [env.seq for env in loaded] == [1, 2]
     assert isinstance(loaded[0].event, RunCreated)
     assert isinstance(loaded[1].event, StepStarted)
+
+    concurrent = await asyncio.gather(
+        *(
+            store.append_event("run-1", StepStarted(run_id="run-1", step=step))
+            for step in range(3, 13)
+        )
+    )
+    assert sorted(envelope.seq for envelope in concurrent) == list(range(3, 13))
+    assert [envelope.seq for envelope in await store.load_events("run-1")] == list(range(1, 13))
 
 
 async def test_checkpoint_roundtrip(store: SessionStorePort) -> None:
@@ -124,12 +139,27 @@ async def test_execution_journal(store: SessionStorePort) -> None:
         path="src/a.py",
     )
     await store.record_execution(record)
-    await store.update_execution_state("c1", EffectState.CONFIRMED, "post")
+    await store.record_execution(
+        ExecutionRecord(
+            call_id="c1",
+            run_id="run-2",
+            ticket_digest="t2",
+            tool_name="repo.check",
+            effect_state=EffectState.STARTED,
+            preimage_digest="",
+            postimage_digest="",
+            path="",
+        )
+    )
+    await store.update_execution_state("run-1", "c1", EffectState.CONFIRMED, "post")
 
     loaded = await store.load_executions("run-1")
     assert len(loaded) == 1
     assert loaded[0].effect_state is EffectState.CONFIRMED
     assert loaded[0].postimage_digest == "post"
+    other = await store.load_executions("run-2")
+    assert len(other) == 1
+    assert other[0].effect_state is EffectState.STARTED
 
 
 async def test_successive_checkpoints_resolve_to_the_newest(store: SessionStorePort) -> None:
@@ -173,13 +203,13 @@ async def test_update_with_empty_postimage_preserves_the_recorded_one(
             path="src/a.py",
         )
     )
-    await store.update_execution_state("c-keep", EffectState.CONFIRMED, "")
+    await store.update_execution_state("run-1", "c-keep", EffectState.CONFIRMED, "")
     loaded = {r.call_id: r for r in await store.load_executions("run-1")}
     assert loaded["c-keep"].effect_state is EffectState.CONFIRMED
     assert loaded["c-keep"].postimage_digest == "expected-post"
 
     # update 时非空 postimage 仍然会覆盖原值。
-    await store.update_execution_state("c-keep", EffectState.CONFIRMED, "actual-post")
+    await store.update_execution_state("run-1", "c-keep", EffectState.CONFIRMED, "actual-post")
     loaded = {r.call_id: r for r in await store.load_executions("run-1")}
     assert loaded["c-keep"].postimage_digest == "actual-post"
 
@@ -203,7 +233,7 @@ async def test_dest_path_roundtrips_for_move_records(store: SessionStorePort) ->
     loaded = {r.call_id: r for r in await store.load_executions("run-1")}
     assert loaded["c-move"].dest_path == "src/new.py"
     # 状态更新不能丢失目标路径。
-    await store.update_execution_state("c-move", EffectState.EFFECT_UNKNOWN)
+    await store.update_execution_state("run-1", "c-move", EffectState.EFFECT_UNKNOWN)
     loaded = {r.call_id: r for r in await store.load_executions("run-1")}
     assert loaded["c-move"].dest_path == "src/new.py"
 
@@ -212,6 +242,13 @@ async def test_artifact_roundtrip(store: SessionStorePort) -> None:
     digest = await store.put_artifact(b"large diff content")
     assert await store.get_artifact(digest) == b"large diff content"
     assert await store.get_artifact("missing" * 8) is None
+    if isinstance(store, SqliteSessionStore):
+        (store._artifacts_dir / digest).write_bytes(b"corrupt")  # type: ignore[attr-defined]  # noqa: SLF001
+        with pytest.raises(StoreError, match="digest verification"):
+            await store.get_artifact(digest)
+        # put is self-healing for a corrupted content-addressed object.
+        assert await store.put_artifact(b"large diff content") == digest
+        assert await store.get_artifact(digest) == b"large diff content"
 
 
 async def test_delete_run_removes_every_trace(store: SessionStorePort) -> None:

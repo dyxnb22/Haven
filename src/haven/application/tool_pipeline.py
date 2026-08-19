@@ -140,7 +140,13 @@ class ToolPipeline:
         # 兼容现有接线测试；映射的所有权在 executor。
         self._execute_handlers: dict[str, ExecuteHandler] = self._tool_executor.handlers
 
+    def replace_scratch_dir(self, scratch_dir: Path) -> None:
+        """在连续运行之间替换进程工具使用的独占临时目录。"""
+        self._scratch_dir = scratch_dir
+        self._tool_executor.replace_scratch_dir(scratch_dir)
+
     async def execute(self, ctx: RunContext, step: int, call: ToolCallProposal) -> ToolExecution:
+        """沿唯一安全流水线处理一个模型工具提议并返回观察结果。"""
         started = time.monotonic()
         await self._emitter.emit(
             ctx.run_id,

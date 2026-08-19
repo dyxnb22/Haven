@@ -3,6 +3,11 @@
 Date: 2026-08-14
 Status: Accepted (extends ADR 0009 and ADR 0013)
 
+> **Forward annotation (2026-08-20):** ADR 0030 supersedes the “silent at run
+> time” choice below. Every check approval now repeats the command, writable
+> workspace, network setting, and additional readable roots. Config provenance
+> alone is not treated as sufficient runtime consent.
+
 ## Context
 
 Haven's sandbox hides `$HOME` (`default_private_roots()`), because that is

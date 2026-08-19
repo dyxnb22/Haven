@@ -6,10 +6,13 @@
 
 from pathlib import Path
 
+import pytest
+
 from haven.application.approvals import ApprovalResponder
 from haven.contracts.events import ApprovalRequested, ToolCompleted
 from haven.domain.approval import ApprovalRequest
-from haven.domain.enums import ApprovalDecision, PermissionMode, RunStatus
+from haven.domain.enums import ApprovalDecision, EffectState, PermissionMode, RunStatus, StopReason
+from haven.ports.workspace import PatchRollbackError
 from tests.integration.harness import Harness, finish, make_repo, text, tool
 
 
@@ -240,3 +243,44 @@ class TestPatchToctou:
         ]
         assert completed and completed[0].error_code == "stale_preimage"
         assert not (repo / "src" / "util.py").exists(), "nothing may land from a stale patch"
+
+
+class TestPatchEffectUnknown:
+    async def test_failed_compensation_stops_the_run_and_marks_every_effect_unknown(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = make_repo(tmp_path)
+        original = (repo / "src" / "calc.py").read_text()
+        turns = [
+            [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
+            [
+                tool(
+                    "c2",
+                    "repo.apply_patch",
+                    operations=patch_ops(
+                        {
+                            "kind": "edit",
+                            "path": "src/calc.py",
+                            "old_string": "return a - b  # BUG: should be +",
+                            "new_string": "return a + b",
+                        },
+                    ),
+                ),
+                finish("tool_calls"),
+            ],
+        ]
+        h = Harness(repo, turns)
+
+        async def fail_after_partial_commit(_preview: object) -> None:
+            raise PatchRollbackError("commit and compensation both failed")
+
+        monkeypatch.setattr(h.workspace, "apply_patch", fail_after_partial_commit)
+        outcome = await h.service.run("Fix add with one atomic patch")
+
+        assert outcome.status is RunStatus.EFFECT_UNKNOWN
+        assert outcome.stop_reason is StopReason.EFFECT_UNKNOWN
+        executions = await h.store.load_executions(outcome.run_id)
+        assert executions and all(
+            record.effect_state is EffectState.EFFECT_UNKNOWN for record in executions
+        )
+        assert (repo / "src" / "calc.py").read_text() == original

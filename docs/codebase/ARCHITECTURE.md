@@ -65,6 +65,11 @@ user goal (TUI/CLI)
   but a provider/tokenizer change requires recalibration
   (`evals/calibrate_context.py`).
 
+ADR 0030 is the cross-layer rule for the boundaries above: effect attribution
+must preserve run identity, path existence, actual process lifetime, displayed
+authority, and uncertainty. It is the first document to reopen when a new tool,
+storage schema, or recovery outcome changes any of those facts.
+
 ### 6) Evidence
 
 - `src/haven/bootstrap.py`

@@ -20,7 +20,7 @@ deliberate local-only scope (README non-goals).
 |-------|------|--------------|----------|----------|
 | SQLite (WAL) at `<data_dir>/haven.db` | Runs, append-only event journal, checkpoints, approvals, execution journal | `adapters/sqlite_session.py` (aiosqlite) | Unbounded growth (mitigated by `haven gc`, ADR-less, dry-run default); single-writer semantics | `src/haven/adapters/sqlite_session.py`, `application/maintenance.py` |
 | Content-addressed artifact files at `<data_dir>/artifacts/` | Archived originals for diff/rewind | same adapter | Orphans (swept by gc against surviving checkpoint refs) | `sqlite_session.py::put_artifact` |
-| Lease files at `<data_dir>/leases/` | Advisory single-writer workspace lease | `adapters/workspace_lease.py` | Advisory only; documented races (ADR 0020) | `src/haven/adapters/workspace_lease.py` |
+| Lease files at `<data_dir>/leases/` | Advisory single-writer workspace lease | `adapters/workspace_lease.py` | Local/advisory only; stale takeover is file-lock serialized (ADR 0020/0030) | `src/haven/adapters/workspace_lease.py` |
 
 ### 3) Secrets and Credentials Handling
 
@@ -39,8 +39,9 @@ deliberate local-only scope (README non-goals).
   guarded by `yielded_any`). Tool calls are never retried (by design —
   side effects).
 - Timeout policy: httpx connect/read/write/pool timeouts + first-event and
-  total stream deadlines in the adapter; recipe/exec timeouts per spec with
-  terminate-then-kill (`adapters/process_executor.py`).
+  between-event idle deadlines in the adapter; the run budget supplies the
+  total wall deadline. Recipe/exec timeouts terminate then kill the complete
+  process group (`adapters/process_executor.py`).
 - Circuit breaker/fallback: none — a run fails with a stop reason instead.
 
 ### 5) Observability for Integrations

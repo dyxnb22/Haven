@@ -57,6 +57,19 @@ from haven.ports.model import ProviderError
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 
+async def _read_bounded_body(response: httpx.Response, limit: int) -> bytes:
+    """读取有界错误体，避免提供商用非 200 响应迫使客户端无界分配内存。"""
+    body = bytearray()
+    async for chunk in response.aiter_bytes():
+        remaining = limit - len(body)
+        if remaining <= 0:
+            break
+        body.extend(chunk[:remaining])
+        if len(body) >= limit:
+            break
+    return bytes(body)
+
+
 class OpenAICompatibleModel:
     """通过 OpenAI 兼容的 /chat/completions API 实现 ModelPort。
 
@@ -103,12 +116,15 @@ class OpenAICompatibleModel:
 
     @property
     def model_name(self) -> str:
+        """返回配置的提供商模型名称。"""
         return self._model
 
     async def aclose(self) -> None:
+        """关闭底层 HTTP 客户端，释放连接池。"""
         await self._client.aclose()
 
     def generate_stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+        """启动一次流式请求；具体网络 I/O 在异步迭代时执行。"""
         return self._stream_with_reasoning_retry(request)
 
     async def _stream_with_reasoning_retry(
@@ -153,7 +169,7 @@ class OpenAICompatibleModel:
         try:
             async with self._client.stream("POST", "/chat/completions", json=payload) as response:
                 if response.status_code != 200:
-                    body = await response.aread()
+                    body = await _read_bounded_body(response, 4096)
                     raise self._map_status(response.status_code, body, response.headers)
 
                 collector = _ToolCallCollector()
@@ -178,7 +194,9 @@ class OpenAICompatibleModel:
                         ) from None
                     first = False
 
-                    received_bytes += len(line)
+                    # aiter_lines 已移除换行符；按 UTF-8 字节而非 Python 字符计数，
+                    # 并保守计入行分隔符，使非 ASCII 响应不能绕过线协议上限。
+                    received_bytes += len(line.encode("utf-8")) + 2
                     if received_bytes > MAX_RESPONSE_BYTES:
                         raise ProviderError("protocol", "response exceeded size limit")
 
@@ -189,36 +207,60 @@ class OpenAICompatibleModel:
                         break
 
                     try:
-                        chunk: dict[str, Any] = json.loads(data)
+                        decoded: object = json.loads(data)
                     except json.JSONDecodeError as exc:
                         raise ProviderError("protocol", f"malformed stream chunk: {exc}") from exc
-
-                    if raw_usage := chunk.get("usage"):
-                        details = raw_usage.get("completion_tokens_details") or {}
-                        prompt_details = raw_usage.get("prompt_tokens_details") or {}
-                        # OpenAI 在 prompt_tokens_details 下报告缓存命中；DeepSeek 使用顶层的
-                        # 字段名：prompt_cache_hit_tokens。
-                        cached = int(prompt_details.get("cached_tokens", 0)) or int(
-                            raw_usage.get("prompt_cache_hit_tokens", 0)
-                        )
-                        usage = Usage(
-                            input_tokens=int(raw_usage.get("prompt_tokens", 0)),
-                            output_tokens=int(raw_usage.get("completion_tokens", 0)),
-                            reasoning_tokens=int(details.get("reasoning_tokens", 0)),
-                            cached_input_tokens=cached,
-                            estimated=False,
-                        )
-                    for choice in chunk.get("choices", []):
-                        if reason := choice.get("finish_reason"):
-                            finish_reason = str(reason)
-                        delta = choice.get("delta") or {}
-                        if content := delta.get("content"):
-                            yield TextDelta(text=str(content))
-                        # 推理模型会在任何答案内容出现前，将思考过程放在单独字段中流式传出。
-                        if reasoning := delta.get("reasoning_content"):
-                            yield ReasoningDelta(text=str(reasoning))
-                        for tc in delta.get("tool_calls") or []:
-                            collector.feed(tc)
+                    try:
+                        if not isinstance(decoded, dict):
+                            raise TypeError("chunk is not an object")
+                        chunk: dict[str, Any] = decoded
+                        raw_usage = chunk.get("usage")
+                        if raw_usage is not None:
+                            if not isinstance(raw_usage, dict):
+                                raise TypeError("usage is not an object")
+                            details = raw_usage.get("completion_tokens_details") or {}
+                            prompt_details = raw_usage.get("prompt_tokens_details") or {}
+                            if not isinstance(details, dict) or not isinstance(
+                                prompt_details, dict
+                            ):
+                                raise TypeError("usage details are not objects")
+                            # OpenAI 在 prompt_tokens_details 下报告缓存命中；DeepSeek
+                            # 使用顶层字段 prompt_cache_hit_tokens。
+                            cached = int(prompt_details.get("cached_tokens", 0)) or int(
+                                raw_usage.get("prompt_cache_hit_tokens", 0)
+                            )
+                            usage = Usage(
+                                input_tokens=int(raw_usage.get("prompt_tokens", 0)),
+                                output_tokens=int(raw_usage.get("completion_tokens", 0)),
+                                reasoning_tokens=int(details.get("reasoning_tokens", 0)),
+                                cached_input_tokens=cached,
+                                estimated=False,
+                            )
+                        choices = chunk.get("choices", [])
+                        if not isinstance(choices, list):
+                            raise TypeError("choices is not a list")
+                        for choice in choices:
+                            if not isinstance(choice, dict):
+                                raise TypeError("choice is not an object")
+                            if reason := choice.get("finish_reason"):
+                                finish_reason = str(reason)
+                            delta = choice.get("delta") or {}
+                            if not isinstance(delta, dict):
+                                raise TypeError("delta is not an object")
+                            if content := delta.get("content"):
+                                yield TextDelta(text=str(content))
+                            # 推理模型会在答案前将思考过程放在单独字段中流式传出。
+                            if reasoning := delta.get("reasoning_content"):
+                                yield ReasoningDelta(text=str(reasoning))
+                            tool_calls = delta.get("tool_calls") or []
+                            if not isinstance(tool_calls, list):
+                                raise TypeError("tool_calls is not a list")
+                            for tool_call in tool_calls:
+                                if not isinstance(tool_call, dict):
+                                    raise TypeError("tool call is not an object")
+                                collector.feed(tool_call)
+                    except (TypeError, ValueError) as exc:
+                        raise ProviderError("protocol", "malformed stream fields") from exc
 
                 for call in collector.completed(from_wire):
                     yield ToolCallReady(call=call)

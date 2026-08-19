@@ -8,6 +8,7 @@ repo.check 在用户已经信任的仓库上运行用户编写的配方 id，因
 
 from pathlib import Path
 
+from haven.contracts.events import ApprovalRequested
 from haven.contracts.tools import RecipeSpec
 from haven.domain import PermissionMode, PolicyDecision, ToolFacts, evaluate_policy
 from haven.ports.sandbox import SandboxSpec, default_readable_roots
@@ -48,6 +49,29 @@ class TestDeclaredToolchainRoots:
         spec = await _spec_for(tmp_path, recipe)
 
         assert cache.resolve() in spec.extra_readable_roots
+
+    async def test_approval_discloses_recipe_permissions(self, tmp_path: Path) -> None:
+        cache = tmp_path / "m2 cache"
+        cache.mkdir()
+        recipe = RecipeSpec(
+            id="mvn",
+            argv=("tool with spaces", "test"),
+            allow_network=True,
+            readable_roots=(str(cache),),
+        )
+        turns = [
+            [tool("c1", "repo.check", recipe_id=recipe.id), finish("tool_calls")],
+            [text("Checked."), finish()],
+        ]
+        h = Harness(make_repo(tmp_path / "case"), turns, recipes={recipe.id: recipe})
+        await h.service.run("Run the configured check")
+
+        request = h.sink.events_of("approval.requested")[0]
+        assert isinstance(request, ApprovalRequested)
+        assert "$ 'tool with spaces' test" in request.preview
+        assert "workspace writable" in request.preview
+        assert "network: allowed" in request.preview
+        assert str(cache) in request.preview
 
     async def test_the_interpreter_prefixes_are_still_granted(self, tmp_path: Path) -> None:
         """声明会追加到现有例外范围，而不是替换它；否则声明 `~/.m2` 会破坏此前运行

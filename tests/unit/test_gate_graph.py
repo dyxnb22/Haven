@@ -58,3 +58,15 @@ class TestValidation:
 
         validate(GATES)
         assert any(g.modes for g in GATES)
+
+    def test_the_aggregate_eval_is_not_run_twice(self) -> None:
+        """完整门禁由 `eval` 生成正式报告；覆盖率阶段只运行 evalkit 行为测试。"""
+        from scripts.gates import GATES
+
+        by_id = {gate.id: gate for gate in GATES}
+        assert "--ignore=tests/eval/test_eval_suite.py" in by_id["tests"].command
+        assert by_id["eval"].command == (
+            "uv run coverage run --append -m haven.interfaces.cli eval --offline"
+        )
+        assert by_id["eval"].needs == ("tests",)
+        assert by_id["coverage-floor"].needs == ("eval",)

@@ -107,6 +107,22 @@ def test_invalid_recipe_rejected(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="non-empty"):
         load_config(tmp_path)
 
+    (tmp_path / ".haven.toml").write_text(
+        '[recipes.bad]\nargv = ["pytest"]\nallow_network = "yes"\n'
+    )
+    with pytest.raises(ConfigError, match="boolean"):
+        load_config(tmp_path)
+
+    (tmp_path / ".haven.toml").write_text(
+        '[recipes.bad]\nargv = ["pytest"]\nreadable_roots = "~/.cache"\n'
+    )
+    with pytest.raises(ConfigError, match="list"):
+        load_config(tmp_path)
+
+    (tmp_path / ".haven.toml").write_text('[recipes.bad]\nargv = ["pytest"]\nunexpected = true\n')
+    with pytest.raises(ConfigError, match="unknown keys"):
+        load_config(tmp_path)
+
 
 def test_bad_budget_type_rejected(tmp_path: Path) -> None:
     (tmp_path / ".haven.toml").write_text('[budget]\nmax_steps = "lots"\n')
@@ -130,3 +146,20 @@ def test_env_overrides_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     config = load_config(tmp_path)
     assert config.provider.model == "custom-model"
     assert config.sources["provider.model"] == "env"
+
+    monkeypatch.setenv("HAVEN_MODEL", "   ")
+    with pytest.raises(ConfigError, match="provider model"):
+        load_config(tmp_path)
+
+
+def test_invalid_provider_environment_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HAVEN_BASE_URL", "file:///etc/passwd")
+    with pytest.raises(ConfigError, match=r"http\(s\)"):
+        load_config(tmp_path)
+
+    monkeypatch.setenv("HAVEN_BASE_URL", "https://api.example.com/v1")
+    monkeypatch.setenv("HAVEN_API_KEY_ENV", "NOT=A=NAME")
+    with pytest.raises(ConfigError, match="environment variable"):
+        load_config(tmp_path)

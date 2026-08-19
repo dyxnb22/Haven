@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Any
+from typing import Literal
 
 import typer
 
@@ -15,6 +15,7 @@ from haven.domain.budget import BUDGET_TIERS, DEFAULT_TIER
 from haven.domain.enums import PermissionMode
 from haven.interfaces.cli_support.common import EXIT_POLICY, EXIT_USAGE, exit_code_for
 from haven.interfaces.cli_support.sinks import ConsoleSink, JsonlEventSink, NullSink
+from haven.ports.event_sink import EventSinkPort
 
 
 def run(
@@ -55,7 +56,11 @@ def run(
     相当于人类决定的策略：`reject`（只查看它会做什么）、`trusted-recipe`（执行
     验证但不修改）或 `all`（完全无人值守的自动修复）。配合 --jsonl 适合 CI。
     """
-    policy_map = {"reject": "reject", "trusted-recipe": "trusted_recipe", "all": "all"}
+    policy_map: dict[str, Literal["reject", "trusted_recipe", "all"]] = {
+        "reject": "reject",
+        "trusted-recipe": "trusted_recipe",
+        "all": "all",
+    }
     if approval_policy not in policy_map:
         typer.echo("error: --approval-policy must be reject, trusted-recipe, or all")
         raise typer.Exit(EXIT_USAGE)
@@ -65,13 +70,13 @@ def run(
         from haven.bootstrap import BootstrapError, build_services
 
         primary_sink = NullSink() if json_output else ConsoleSink()
-        sinks: list[Any] = [primary_sink]
+        sinks: list[EventSinkPort] = [primary_sink]
         events_sink = JsonlEventSink(events_path) if events_path is not None else None
         if events_sink is not None:
             sinks.append(events_sink)
         if write:
             mode = PermissionMode.INTERACTIVE
-            approver: ApprovalResponder = HeadlessApprover(policy_map[approval_policy])  # type: ignore[arg-type]
+            approver: ApprovalResponder = HeadlessApprover(policy_map[approval_policy])
         else:
             mode = PermissionMode.READ_ONLY
             approver = HeadlessApprover("reject")

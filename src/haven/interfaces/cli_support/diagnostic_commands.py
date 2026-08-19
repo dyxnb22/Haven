@@ -24,6 +24,7 @@ def doctor(
     failures = 0
 
     def check(name: str, ok: bool, detail: str) -> None:
+        """输出一项诊断结果，并在失败时累加退出状态。"""
         nonlocal failures
         mark = "ok " if ok else "FAIL"
         typer.echo(f"[{mark}] {name}: {detail}")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Literal, cast
 
 import typer
 
@@ -99,7 +100,8 @@ def reconcile(
         store = await open_store()
         try:
             recovery = RecoveryService(store, make_workspace(Path.cwd()))
-            await recovery.reconcile(run_id, call_id, resolution)  # type: ignore[arg-type]
+            resolved = cast(Literal["confirmed", "not_run", "abandon"], resolution)
+            await recovery.reconcile(run_id, call_id, resolved)
             typer.echo(f"execution {call_id} marked {resolution}")
         finally:
             await store.close()

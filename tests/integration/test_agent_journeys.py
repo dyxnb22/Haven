@@ -1,15 +1,22 @@
 """由 ScriptedModel 驱动的端到端代理流程（完全离线）。"""
 
 import asyncio
+import sys
 from pathlib import Path
 
 import pytest
 
-from haven.contracts.events import PolicyDecided, RunFinished, ToolCompleted
+from haven.contracts.events import (
+    EventEnvelope,
+    EvidenceRecorded,
+    PolicyDecided,
+    RunFinished,
+    ToolCompleted,
+)
 from haven.contracts.model import ModelEvent
 from haven.domain.approval import ApprovalRequest
 from haven.domain.budget import Budget
-from haven.domain.enums import ApprovalDecision, PermissionMode, RunStatus, StopReason
+from haven.domain.enums import ApprovalDecision, EffectState, PermissionMode, RunStatus, StopReason
 
 from .harness import BUGGY_CALC, Harness, finish, make_repo, text, tool, usage
 
@@ -731,6 +738,16 @@ class TestBudgetsAndStops:
         assert outcome.status is RunStatus.STOPPED
         assert outcome.stop_reason is StopReason.STEP_BUDGET_EXHAUSTED
 
+        token_limited = Harness(
+            make_repo(tmp_path / "tokens"),
+            [[text("would otherwise succeed"), usage(100, 20, estimated=True), finish()]],
+            budget=Budget(max_input_tokens=50),
+        )
+        token_outcome = await token_limited.service.run("Use too many tokens")
+        assert token_outcome.status is RunStatus.STOPPED
+        assert token_outcome.stop_reason is StopReason.TOKEN_BUDGET_EXHAUSTED
+        assert token_outcome.usage_estimated is True
+
     async def test_stuck_loop_detected(self, tmp_path: Path) -> None:
         turns: list[list[ModelEvent]] = [
             [tool("c1", "repo.search", pattern="nothing_here", path="."), finish("tool_calls")],
@@ -800,6 +817,96 @@ class TestCancellation:
         assert len(finished) == 1
         assert isinstance(finished[0], RunFinished)
         assert finished[0].status == "cancelled"
+        assert finished[0].duration_ms >= 250
         run = await h.store.get_run(finished[0].run_id)
         assert run is not None
         assert run.status is RunStatus.CANCELLED
+
+        timed = Harness(
+            make_repo(tmp_path / "timed"), [], budget=Budget(max_wall_time_seconds=0.05)
+        )
+        timed.service._model = SlowModel()  # type: ignore[attr-defined]  # noqa: SLF001
+        timed_outcome = await timed.service.run("Respect wall time")
+        assert timed_outcome.status is RunStatus.STOPPED
+        assert timed_outcome.stop_reason is StopReason.WALL_TIME_EXHAUSTED
+
+    async def test_cancel_during_a_process_reports_an_unknown_effect(self, tmp_path: Path) -> None:
+        h = Harness(
+            make_repo(tmp_path),
+            [
+                [
+                    tool(
+                        "c1",
+                        "repo.exec",
+                        argv=[sys.executable, "-c", "import time; time.sleep(60)"],
+                    ),
+                    finish("tool_calls"),
+                ]
+            ],
+        )
+        task = asyncio.create_task(h.service.run("Cancel an executing process"))
+
+        records = []
+        for _ in range(200):
+            active = h.service.active_run_id
+            if active is not None:
+                records = await h.store.load_executions(active)
+                if records:
+                    break
+            await asyncio.sleep(0.01)
+        assert records and records[0].effect_state is EffectState.STARTED
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        finished = h.sink.events_of("run.finished")
+        assert len(finished) == 1
+        assert isinstance(finished[0], RunFinished)
+        assert finished[0].status == "effect_unknown"
+        executions = await h.store.load_executions(finished[0].run_id)
+        assert executions[0].effect_state is EffectState.EFFECT_UNKNOWN
+
+    async def test_cancel_while_publishing_edit_evidence_is_effect_unknown(
+        self, tmp_path: Path
+    ) -> None:
+        """落盘完成不等于整条执行已确认；证据广播期间取消必须保守收口。"""
+        repo = make_repo(tmp_path)
+        h = Harness(
+            repo,
+            [
+                [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
+                [
+                    tool(
+                        "c2",
+                        "repo.edit",
+                        path="src/calc.py",
+                        old_string="return a - b  # BUG: should be +",
+                        new_string="return a + b",
+                    ),
+                    finish("tool_calls"),
+                ],
+            ],
+        )
+        evidence_started = asyncio.Event()
+
+        class PauseEditEvidence:
+            async def emit(self, envelope: EventEnvelope) -> None:
+                if isinstance(envelope.event, EvidenceRecorded):
+                    evidence_started.set()
+                    await asyncio.Event().wait()
+
+        h.emitter.add_sink(PauseEditEvidence())
+        task = asyncio.create_task(h.service.run("Cancel while recording an edit"))
+        await asyncio.wait_for(evidence_started.wait(), timeout=2)
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert "return a + b" in (repo / "src" / "calc.py").read_text()
+        finished = h.sink.events_of("run.finished")
+        assert len(finished) == 1 and isinstance(finished[0], RunFinished)
+        assert finished[0].status == "effect_unknown"
+        executions = await h.store.load_executions(finished[0].run_id)
+        assert executions[0].effect_state is EffectState.EFFECT_UNKNOWN

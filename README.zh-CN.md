@@ -160,15 +160,15 @@ uv run python scripts/gates.py --list        # 检查图及其依赖
 
 | 指标 | 数值 |
 |---|---|
-| 自动化测试 | 820 |
+| 自动化测试 | 885 |
 | 行覆盖率（`src/`） | 89% |
-| 源码 / 测试规模 | 约 14.0k / 约 11.3k 行 |
-| 类型检查模块（`mypy --strict`） | 68 |
-| 架构决策记录 | 29 |
+| 源码 / 测试规模 | 约 16.6k / 约 11.9k 行 |
+| 类型检查模块（`mypy --strict`） | 102 |
+| 架构决策记录 | 30 |
 | 离线评估 | 39/39 通过，0 个安全违规 |
 | 评估类别 | security 16 · task 10 · robustness 6 · injection 3 · budget 2 · recovery 2 |
-| 实时真实仓库套件（deepseek-v4-flash） | 75/79 after fixes（31/31 + 9/9 + 5/5 + 20/20 + 9/13 + 1/1）；0 个安全违规——原始运行和根因见 `docs/EVAL_LIVE.md` |
-| 同版本完整重跑 | 一次不间断运行中 61/65（失败归因见 `docs/EVAL_LIVE.md`） |
+| 实时真实仓库套件（deepseek-v4-flash） | 修复后 75/79（31/31 + 9/9 + 5/5 + 20/20 + 9/13 + 1/1）；0 个安全违规——原始运行和根因见 docs/EVAL_LIVE.md |
+| 同版本完整重跑 | 一次不间断运行中 61/65（失败归因见 docs/EVAL_LIVE.md） |
 
 <!-- END GENERATED METRICS -->
 
@@ -187,13 +187,15 @@ uv run python scripts/gates.py --list        # 检查图及其依赖
 | [`course/`](course/README.md) | 一个推导模块加十个分层模块，教你从这个仓库学习代理工程 |
 | [`docs/DEMO.md`](docs/DEMO.md) | 2–3 分钟演示脚本 |
 | [`docs/PROJECT_CARD.md`](docs/PROJECT_CARD.md) | 一页式摘要、测量结果和权衡 |
+| [`docs/RESUME.zh-CN.md`](docs/RESUME.zh-CN.md) | 可直接拼接进简历的中文项目条目和面试讲述提纲 |
 | [`docs/DESIGN_QA.md`](docs/DESIGN_QA.md) | 每个关键设计决策的质询记录 |
 | [`docs/POSTMORTEM.md`](docs/POSTMORTEM.md) | 真实失败、根因和回归防护 |
 | [`docs/DEFENSIVE_PATTERNS.md`](docs/DEFENSIVE_PATTERNS.md) | 编写策略、边界、门禁或 Provider 代码前应阅读的防御规则 |
 | [`docs/LEARNING.md`](docs/LEARNING.md) | 阅读顺序、事实层级，以及当前文档与历史计划的边界 |
 | [`docs/PROJECT_DIAGRAMS.md`](docs/PROJECT_DIAGRAMS.md) | 架构、业务流程、安全和恢复的学习图谱 |
+| [`docs/ADR_INDEX.md`](docs/ADR_INDEX.md) | 生效中的决策导航、历史裁决和新增 ADR 准入规则 |
 | [`docs/notes/`](docs/notes/) | 轻量级决策笔记 |
-| [`docs/adr/`](docs/adr/) | 架构决策记录 |
+| [`docs/adr/`](docs/adr/) | 不就地改写的架构决策历史记录 |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md)（及 ROADMAP2/3） | 已执行的改进计划和构建顺序记录 |
 
 ## 从这个仓库学习
@@ -206,7 +208,7 @@ Haven 是独立实现的 Python 项目。[Morrow](https://github.com/dyxnb22/Mor
 
 ## 已知限制
 
-- 模型提议的 `repo.exec` 需要 Seatbelt（macOS）或 Landlock（Linux），在工作区只读、不能读取 `$HOME`、不能访问网络（Landlock 覆盖 TCP；UDP/DNS 仍是 Linux 的已知缺口）。注册的 `repo.check` 使用可写工作区配置，并可通过用户编写的配置选择网络；没有沙箱后端的平台仍会在本地信任仓库假设下运行检查，但会拒绝 `repo.exec`。这不是容器或虚拟机：IPC 是开放的，`$HOME` 之外的密钥可能仍可读取。见 [ADR 0009](docs/adr/0009-os-sandbox-and-general-exec.md) 和 [ADR 0013](docs/adr/0013-sandbox-scope-exec-vs-check.md)。
+- 模型提议的 `repo.exec` 需要 Seatbelt（macOS）或 Landlock（Linux），在工作区只读、不能读取 `$HOME`、不能访问网络（Landlock 覆盖 TCP；UDP/DNS 仍是 Linux 的已知缺口）。注册的 `repo.check` 使用可写工作区配置，并可通过已审阅配方选择网络；审批卡会再次展示实际命令、工作区写权限、网络权限和额外可读目录。没有沙箱后端的平台仍会在本地信任仓库假设下运行检查，但会拒绝 `repo.exec`。这不是容器或虚拟机：IPC 是开放的，`$HOME` 之外的密钥可能仍可读取。见 [ADR 0009](docs/adr/0009-os-sandbox-and-general-exec.md)、[ADR 0013](docs/adr/0013-sandbox-scope-exec-vs-check.md) 和 [ADR 0030](docs/adr/0030-exact-effect-attribution.md)。
 - Provider 返回 usage 时 token / 成本统计是精确的，否则会清楚标记为 `estimated`。
 - 单仓库、单 Provider、固定验证配方，不自动修改 Git 历史。
 

@@ -35,6 +35,7 @@ _discovered_recipes = discovered_recipes
 
 
 def load_cases(cases_dir: Path) -> list[EvalCase]:
+    """读取目录下按文件名排序的 JSON 案例；目录为空时抛出错误。"""
     case_files = sorted(cases_dir.glob("*.json"))
     if not case_files:
         raise FileNotFoundError(f"no eval cases found in {cases_dir}")
@@ -77,7 +78,7 @@ async def run_suite(
                 model_factory,
                 events_path=events_dir / f"{case.id}.jsonl",
             )
-        except Exception as exc:  # noqa: BLE001 — a single case must not abort the suite
+        except Exception as exc:  # noqa: BLE001 — 单个案例失败不能中止整个套件
             result = CaseResult(
                 case_id=case.id,
                 category=case.category,

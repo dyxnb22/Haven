@@ -34,6 +34,8 @@ MODEL_RETRY_MAX_DELAY = 60.0
 
 
 def retry_delay(attempt: int, retry_after_s: float | None) -> float:
+    """计算有上限的指数退避，并尊重提供商建议的最短等待时间。"""
+
     backoff: float = MODEL_RETRY_BASE_DELAY * (2**attempt)
     wait = backoff if retry_after_s is None else max(backoff, retry_after_s)
     return min(wait, MODEL_RETRY_MAX_DELAY)
@@ -41,6 +43,7 @@ def retry_delay(attempt: int, retry_after_s: float | None) -> float:
 
 @dataclass(slots=True)
 class _StreamProgress:
+    #: 提供商发出过任意流内容后为 True。
     started: bool = False
 
 
@@ -53,6 +56,7 @@ class ModelStreamer:
     async def stream(
         self, model: ModelPort, ctx: RunContext, step: int, request: ModelRequest
     ) -> ModelResult:
+        """流式调用模型；仅在安全边界上重试，避免重复不可重放的工具调用。"""
         for attempt in range(MODEL_RETRY_ATTEMPTS + 1):
             progress = _StreamProgress()
             try:

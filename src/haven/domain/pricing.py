@@ -2,17 +2,41 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
 class Pricing:
+    """模型输入、输出和缓存 token 的单价表。"""
+
+    #: 每一百万个未命中缓存的输入 token 收取的美元费用。
     input_per_1m_usd: float = 0.0
+    #: 每一百万个生成输出 token 收取的美元费用。
     output_per_1m_usd: float = 0.0
     #: 支持前缀缓存的提供商对命中缓存的计费远低于未命中；DeepSeek v4 flash
     #: 的差距是 50 倍。如果不设置该字段，所有输入都按同一费率计费，从而
     #: 保证现有配置的含义完全不变。
     cached_input_per_1m_usd: float | None = None
+
+    def __post_init__(self) -> None:
+        """拒绝会产生负账单或绕过费用预算的非有限/负费率。"""
+        rates = (
+            self.input_per_1m_usd,
+            self.output_per_1m_usd,
+            self.cached_input_per_1m_usd,
+        )
+        if any(
+            rate is not None
+            and (
+                isinstance(rate, bool)
+                or not isinstance(rate, int | float)
+                or not math.isfinite(rate)
+                or rate < 0
+            )
+            for rate in rates
+        ):
+            raise ValueError("pricing rates must be finite and non-negative")
 
     @property
     def is_known(self) -> bool:
@@ -27,6 +51,7 @@ class Pricing:
         return self.input_per_1m_usd > 0.0 or self.output_per_1m_usd > 0.0
 
     def cost(self, input_tokens: int, output_tokens: int, cached_input_tokens: int = 0) -> float:
+        """按输入、输出及缓存命中 token 数计算美元费用。"""
         output_cost = output_tokens * self.output_per_1m_usd
         if self.cached_input_per_1m_usd is None:
             return (input_tokens * self.input_per_1m_usd + output_cost) / 1_000_000

@@ -119,6 +119,7 @@ async def run_case(
 
 
 async def run_hidden_check(case: EvalCase, repo: Path) -> CheckOutcome | None:
+    """在案例副本上执行隐藏检查配方；未声明配方时返回 ``None``。"""
     definition = case.recipes.get(case.hidden_check)
     if definition is None:
         return None
@@ -133,12 +134,14 @@ async def run_agent_case(
     model_factory: ModelFactory | None = None,
     events_path: Path | None = None,
 ) -> None:
+    """在隔离工作区中运行代理案例并收集事件、轨迹和终态断言数据。"""
     workspace = FsWorkspace(repo)
     store = MemorySessionStore()
     envelopes: list[EventEnvelope] = []
 
     class Sink:
         async def emit(self, envelope: EventEnvelope) -> None:
+            """收集案例事件，供断言和可选 JSONL 轨迹使用。"""
             envelopes.append(envelope)
 
     live = model_factory is not None
@@ -189,6 +192,7 @@ async def run_agent_case(
 
 
 def build_budget(case: EvalCase) -> Budget:
+    """将案例中的可选预算字典转换为领域预算，缺省值沿用生产默认值。"""
     default = Budget()
     if not case.budget:
         return default
@@ -212,6 +216,7 @@ def check_agent_expectations(
     transcript: str,
     live: bool,
 ) -> None:
+    """根据案例期望检查终态、轨迹、门禁、错误码和策略拒绝原因。"""
     expect = case.expect
     status = outcome.status.value
     stop_reason = outcome.stop_reason.value
@@ -272,24 +277,29 @@ class RecordingModel:
 
     @property
     def model_name(self) -> str:
+        """返回被包装模型的名称。"""
         return self._inner.model_name
 
     def generate_stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+        """记录请求后透传被包装模型的流式事件。"""
         self.requests_seen.append(request)
         return self._inner.generate_stream(request)
 
     async def aclose(self) -> None:
+        """尽力关闭被包装模型的异步资源。"""
         closer = getattr(self._inner, "aclose", None)
         if closer is not None:
             await closer()
 
     def transcript(self) -> str:
+        """拼接所有已发送请求中的消息文本，供轨迹断言使用。"""
         return "\n".join(
             message.content for request in self.requests_seen for message in request.messages
         )
 
 
 async def run_recovery_scenario(case: EvalCase, repo: Path, result: CaseResult) -> None:
+    """构造预置执行中断状态并运行恢复检查案例。"""
     workspace = FsWorkspace(repo)
     store = MemorySessionStore()
     run_id = f"run-eval-{case.id}"

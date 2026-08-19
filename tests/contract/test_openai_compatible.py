@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 import pytest
 
+from haven.adapters.providers import openai_compatible
 from haven.adapters.providers.openai_compatible import OpenAICompatibleModel
 from haven.contracts.model import (
     ModelEvent,
@@ -453,6 +454,54 @@ async def test_malformed_json_chunk_is_protocol_error() -> None:
     with pytest.raises(ProviderError) as exc:
         await collect(model)
     assert exc.value.code == "protocol"
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        [],
+        {"choices": "not-a-list"},
+        {"choices": ["not-an-object"]},
+        {"choices": [], "usage": "not-an-object"},
+        {"choices": [], "usage": {"prompt_tokens": "not-a-number"}},
+        {
+            "choices": [],
+            "usage": {"prompt_tokens": 1, "prompt_tokens_details": {"cached_tokens": 2}},
+        },
+    ],
+)
+async def test_malformed_stream_fields_are_protocol_errors(malformed: object) -> None:
+    model = make_model(
+        lambda req: httpx.Response(200, content=sse(malformed) + b"data: [DONE]\n\n")  # type: ignore[arg-type]
+    )
+    with pytest.raises(ProviderError) as exc:
+        await collect(model)
+    assert exc.value.code == "protocol"
+
+
+async def test_response_limit_counts_utf8_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    line = "data: " + json.dumps({"choices": [], "note": "汉汉汉汉"}, ensure_ascii=False)
+    # 字符计数会刚好放行；UTF-8 字节计数必须拒绝。
+    monkeypatch.setattr(openai_compatible, "MAX_RESPONSE_BYTES", len(line) + 2)
+    body = line.encode() + b"\n\n"
+    model = make_model(lambda req: httpx.Response(200, content=body))
+    with pytest.raises(ProviderError, match="size limit"):
+        await collect(model)
+
+
+async def test_error_response_body_is_read_with_a_hard_limit() -> None:
+    class CountingStream(httpx.AsyncByteStream):
+        chunks = 0
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            for _ in range(20):
+                type(self).chunks += 1
+                yield b"x" * 2048
+
+    model = make_model(lambda req: httpx.Response(400, stream=CountingStream()))
+    with pytest.raises(ProviderError):
+        await collect(model)
+    assert CountingStream.chunks <= 2
 
 
 class TestTransportErrorClassification:

@@ -8,4 +8,8 @@ from haven.contracts.events import EventEnvelope
 
 
 class EventSinkPort(Protocol):
-    async def emit(self, envelope: EventEnvelope) -> None: ...
+    """事件输出端口；CLI、TUI 和持久化层都可作为消费者。"""
+
+    async def emit(self, envelope: EventEnvelope) -> None:
+        """接收一个已经封装并分配序号的应用事件。"""
+        ...

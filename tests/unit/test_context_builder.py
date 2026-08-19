@@ -1,6 +1,6 @@
 """上下文选择：来源、信任标记和确定性压缩。"""
 
-from haven.application.compaction import DIGEST_HEADER
+from haven.application.compaction import DIGEST_HEADER, message_chars
 from haven.application.context_builder import (
     MAX_CONTEXT_CHARS,
     ContextBuilder,
@@ -226,6 +226,18 @@ class TestHardBudgetClamp:
         total = sum(len(m.content) for m in request.messages)
         assert total <= MAX_CONTEXT_CHARS
         assert any("truncated to fit the context budget" in m.content for m in request.messages)
+
+        request, _ = builder().build(
+            [
+                ModelMessage(
+                    role="assistant",
+                    content="short",
+                    provider_reasoning="r" * (MAX_CONTEXT_CHARS * 2),
+                )
+            ],
+            BudgetUsage(),
+        )
+        assert sum(message_chars(message) for message in request.messages) <= MAX_CONTEXT_CHARS
 
     def test_the_request_is_never_left_empty(self) -> None:
         request, _ = builder().build(

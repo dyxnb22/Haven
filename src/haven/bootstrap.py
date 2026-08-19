@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from haven.adapters.git_baseline import capture_git_baseline
@@ -41,37 +41,58 @@ MAX_GUIDANCE_CHARS = 4_000
 
 
 class BootstrapError(Exception):
+    """应用启动阶段无法解析配置或创建依赖时的错误。"""
+
     pass
 
 
 @dataclass(slots=True)
 class AppServices:
+    """已组装的应用依赖集合，负责退出时统一关闭资源。"""
+
+    #: 合并后的用户、项目和环境配置。
     config: ResolvedConfig
+    #: 负责执行路径和受保护目录规则的工作区适配器。
     workspace: FsWorkspace
+    #: 提供事务边界的会话持久化实现。
     store: SqliteSessionStore
+    #: 所有应用服务共享的事件发射器。
     emitter: EventEmitter
+    #: 主模型循环应用服务。
     run_service: RunService
+    #: 恢复和副作用调和服务。
     recovery: RecoveryService
+    #: CLI/TUI 使用的事件重放服务。
     replay: ReplayService
+    #: 启动时记录的 Git 分支。
     git_branch: str
+    #: 启动时记录的 Git 提交。
     git_commit: str
+    #: 配置的模型标识符。
     model_name: str
+    #: 模型适配器；离线或仅恢复命令时为空。
     model: ModelPort | None = None
+    #: 选中的操作系统沙箱后端名称。
     sandbox_backend: str = "none"
     #: 当本进程可以修改工作区时使用的单写者租约；只读模式下或另一个存活进程
     #: 持有租约时为 None（此时 `lease_warning` 会说明情况，并且模式已降级）。
     lease: WorkspaceLease | None = None
+    #: 因租约而降级为只读模式时展示的人类可读警告。
     lease_warning: str = ""
 
     async def close(self) -> None:
-        if self.lease is not None:
-            self.lease.release()
-        await self.store.close()
-        # 同时关闭提供商的 HTTP 客户端；ModelPort 不一定定义 aclose
-        # （ScriptedModel 就没有），因此这里只按协议尽力执行。
-        closer = getattr(self.model, "aclose", None)
-        if closer is not None:
-            await closer()
+        """关闭模型与存储后释放租约；任一步失败都不会跳过后续清理。"""
+        try:
+            await self.run_service.close()
+        finally:
+            try:
+                await _close_model(self.model)
+            finally:
+                try:
+                    await self.store.close()
+                finally:
+                    if self.lease is not None:
+                        self.lease.release()
 
 
 def select_launcher(platform: str | None = None) -> SandboxLauncher | None:
@@ -89,10 +110,12 @@ def select_launcher(platform: str | None = None) -> SandboxLauncher | None:
 
 
 def sandbox_backend_name(launcher: SandboxLauncher | None) -> str:
+    """返回已安装且可用的沙箱后端名；不可用时返回 ``none``。"""
     return launcher.backend if launcher is not None and launcher.available() else "none"
 
 
 def resolve_workspace(path: Path | None) -> Path:
+    """解析工作区路径并确认其为目录，否则抛出启动错误。"""
     workspace = (path or Path.cwd()).resolve()
     if not workspace.is_dir():
         raise BootstrapError(f"workspace does not exist: {workspace}")
@@ -119,6 +142,13 @@ async def build_services(
     """
     workspace_root = resolve_workspace(workspace_path)
     config = load_config(workspace_root, tier)
+    api_key = config.provider.api_key() if model is None else None
+    if model is None and api_key is None:
+        # 在获取写者租约或打开数据库之前失败，避免启动错误遗留资源。
+        raise BootstrapError(
+            f"no API key found in ${config.provider.api_key_env}; "
+            "set it or run offline commands only"
+        )
 
     # 单写者租约：同一进程内的每次写入都固定并重新验证 preimage，但同一工作区
     # 中的第二个 Haven 进程可能在另一次运行审批和执行之间修改文件。第一个
@@ -132,68 +162,91 @@ async def build_services(
             mode = PermissionMode.READ_ONLY
             lease_warning = f"{held}; this session is read-only"
 
-    workspace = FsWorkspace(workspace_root)
-    store = await SqliteSessionStore.open(store_path or db_path(), artifacts_dir())
-    emitter = EventEmitter(store, sinks)
+    store: SqliteSessionStore | None = None
+    try:
+        workspace = FsWorkspace(workspace_root)
+        store = await SqliteSessionStore.open(store_path or db_path(), artifacts_dir())
+        emitter = EventEmitter(store, sinks)
 
-    if model is None:
-        api_key = config.provider.api_key()
-        if api_key is None:
-            await store.close()
-            raise BootstrapError(
-                f"no API key found in ${config.provider.api_key_env}; "
-                "set it or run offline commands only"
+        if model is None:
+            assert api_key is not None
+            configured_profile = profile_for(config.provider.model)
+            model = OpenAICompatibleModel(
+                base_url=config.provider.base_url,
+                api_key=api_key,
+                model=config.provider.model,
+                requires_tool_call_reasoning=configured_profile.requires_tool_call_reasoning,
+                idle_timeout=configured_profile.stream_idle_timeout_s,
             )
-        _profile = profile_for(config.provider.model)
-        model = OpenAICompatibleModel(
-            base_url=config.provider.base_url,
-            api_key=api_key,
-            model=config.provider.model,
-            requires_tool_call_reasoning=_profile.requires_tool_call_reasoning,
-            idle_timeout=_profile.stream_idle_timeout_s,
+
+        profile = profile_for(model.model_name)
+        if config.sources.get("pricing") == "default" and profile.pricing.is_known:
+            config = replace(
+                config,
+                pricing=profile.pricing,
+                sources={**config.sources, "pricing": f"model-profile:{profile.name}"},
+            )
+
+        baseline = await capture_git_baseline(workspace_root)
+        guidance = await _read_guidance(workspace)
+        candidate = select_launcher()
+        launcher = candidate if candidate is not None and candidate.available() else None
+
+        run_service = RunService(
+            model=model,
+            workspace=workspace,
+            executor=ProcessExecutor(launcher=launcher),
+            store=store,
+            emitter=emitter,
+            approvals=approvals,
+            recipes=dict(config.recipes),
+            mode=mode,
+            budget=config.budget,
+            pricing=config.pricing,
+            git_branch=baseline.branch,
+            git_commit=baseline.commit,
+            project_guidance=guidance,
+            launcher=launcher,
+            # 前缀续写既需要能力也需要支持该能力的 endpoint；这里是唯一知道已配置
+            # base URL 的位置。
+            supports_prefix_continuation=profile.prefix_continuation_enabled(
+                config.provider.base_url
+            ),
         )
+        return AppServices(
+            config=config,
+            workspace=workspace,
+            store=store,
+            emitter=emitter,
+            run_service=run_service,
+            recovery=RecoveryService(store, workspace),
+            replay=ReplayService(store),
+            git_branch=baseline.branch,
+            git_commit=baseline.commit,
+            model_name=model.model_name,
+            model=model,
+            sandbox_backend=sandbox_backend_name(launcher),
+            lease=lease,
+            lease_warning=lease_warning,
+        )
+    except BaseException:
+        try:
+            await _close_model(model)
+        finally:
+            try:
+                if store is not None:
+                    await store.close()
+            finally:
+                if lease is not None:
+                    lease.release()
+        raise
 
-    baseline = await capture_git_baseline(workspace_root)
-    guidance = await _read_guidance(workspace)
-    launcher = select_launcher()
 
-    run_service = RunService(
-        model=model,
-        workspace=workspace,
-        executor=ProcessExecutor(launcher=launcher),
-        store=store,
-        emitter=emitter,
-        approvals=approvals,
-        recipes=dict(config.recipes),
-        mode=mode,
-        budget=config.budget,
-        pricing=config.pricing,
-        git_branch=baseline.branch,
-        git_commit=baseline.commit,
-        project_guidance=guidance,
-        launcher=launcher,
-        # 前缀续写既需要能力也需要支持该能力的 endpoint；这里是唯一知道已配置
-        # base URL 的位置。
-        supports_prefix_continuation=profile_for(model.model_name).prefix_continuation_enabled(
-            config.provider.base_url
-        ),
-    )
-    return AppServices(
-        config=config,
-        workspace=workspace,
-        store=store,
-        emitter=emitter,
-        run_service=run_service,
-        recovery=RecoveryService(store, workspace),
-        replay=ReplayService(store),
-        git_branch=baseline.branch,
-        git_commit=baseline.commit,
-        model_name=model.model_name,
-        model=model,
-        sandbox_backend=sandbox_backend_name(launcher),
-        lease=lease,
-        lease_warning=lease_warning,
-    )
+async def _close_model(model: ModelPort | None) -> None:
+    """关闭可关闭的模型适配器；测试/离线端口可以没有 ``aclose``。"""
+    closer = getattr(model, "aclose", None)
+    if closer is not None:
+        await closer()
 
 
 #: Haven 认可的指令文件名，按拼接顺序排列。AGENTS.md 是标准文件；读取
@@ -262,14 +315,17 @@ def _scoped_guidance_paths(root: Path) -> list[str]:
 
 
 async def open_store(store_path: Path | None = None) -> SqliteSessionStore:
+    """打开默认或指定数据库，并使用全局构件目录。"""
     return await SqliteSessionStore.open(store_path or db_path(), artifacts_dir())
 
 
 def make_workspace(path: Path) -> FsWorkspace:
+    """将路径解析为文件系统工作区适配器。"""
     return FsWorkspace(path.resolve())
 
 
 def build_provider(config: ResolvedConfig) -> OpenAICompatibleModel:
+    """根据最终配置创建 OpenAI 兼容模型；缺少密钥时拒绝启动。"""
     api_key = config.provider.api_key()
     if api_key is None:
         raise BootstrapError(f"no API key found in ${config.provider.api_key_env}")

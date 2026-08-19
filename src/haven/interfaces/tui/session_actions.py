@@ -10,6 +10,7 @@ from haven.ports.session import SessionStorePort
 
 
 async def list_sessions_text(store: SessionStorePort, limit: int = 10) -> str:
+    """读取最近运行并生成供 ``/sessions`` 展示的摘要文本。"""
     runs = await store.list_runs(limit)
     if not runs:
         return "no recorded runs yet"
@@ -19,6 +20,7 @@ async def list_sessions_text(store: SessionStorePort, limit: int = 10) -> str:
 
 
 async def rewind_text(recovery: RecoveryService, run_id: str) -> str:
+    """执行运行回滚并将阻塞原因或恢复文件数格式化为提示。"""
     report = await recovery.rewind(run_id)
     if report.blockers:
         return "rewind blocked:\n  " + "\n  ".join(report.blockers)
@@ -31,6 +33,7 @@ async def rewind_text(recovery: RecoveryService, run_id: str) -> str:
 
 
 async def export_run_text(store: SessionStorePort, run_id: str, output_dir: Path) -> str:
+    """读取运行事件并写出 Markdown 报告，返回结果提示。"""
     run = await store.get_run(run_id)
     envelopes = await store.load_events(run_id)
     if run is None:

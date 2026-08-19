@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from haven.adapters.workspace_fs import FsWorkspace
 from haven.application.recovery_service import RecoveryService
 from haven.application.replay_service import ReplayService
@@ -142,6 +144,17 @@ class TestCreateDeleteClassification:
         assert report.can_resume
         assert report.findings[0].classification == "not_run"
 
+    async def test_create_with_a_directory_at_the_path_is_unknown(self, tmp_path: Path) -> None:
+        repo = make_repo(tmp_path)
+        (repo / "src" / "new_module.py").mkdir()
+        h = Harness(repo, [])
+        run_id, recovery = await crash_setup_for(
+            repo, h, tool_name="repo.create", path="src/new_module.py", preimage=""
+        )
+        report = await recovery.inspect(run_id)
+        assert not report.can_resume
+        assert report.findings[0].classification == "unknown"
+
     async def test_create_with_a_present_file_and_no_postimage_is_unknown(
         self, tmp_path: Path
     ) -> None:
@@ -206,6 +219,17 @@ class TestCreateDeleteClassification:
         )
         report = await recovery.inspect(run_id)
         assert report.findings[0].classification == "confirmed"
+
+    async def test_delete_with_a_directory_at_the_path_is_unknown(self, tmp_path: Path) -> None:
+        repo = make_repo(tmp_path)
+        (repo / "src" / "was_file.py").mkdir()
+        h = Harness(repo, [])
+        run_id, recovery = await crash_setup_for(
+            repo, h, tool_name="repo.delete", path="src/was_file.py", preimage="old-digest"
+        )
+        report = await recovery.inspect(run_id)
+        assert not report.can_resume
+        assert report.findings[0].classification == "unknown"
 
     async def test_delete_with_the_preimage_intact_is_not_run(self, tmp_path: Path) -> None:
         repo = make_repo(tmp_path)
@@ -304,6 +328,22 @@ class TestCreateDeleteClassification:
 
 
 class TestEffectClassification:
+    async def test_active_run_without_a_checkpoint_cannot_resume(self, tmp_path: Path) -> None:
+        repo = make_repo(tmp_path)
+        h = Harness(repo, [])
+        await h.store.create_run(
+            "run-no-checkpoint",
+            str(repo),
+            h.workspace.workspace_digest,
+            "goal",
+            "interactive",
+        )
+
+        report = await RecoveryService(h.store, h.workspace).inspect("run-no-checkpoint")
+
+        assert not report.can_resume
+        assert report.blockers == ("no checkpoint recorded for this run",)
+
     async def test_edit_never_ran_is_safe_to_resume(self, tmp_path: Path) -> None:
         repo = make_repo(tmp_path)
         h = Harness(repo, [])
@@ -348,6 +388,14 @@ class TestEffectClassification:
         assert run is not None
         assert run.status is RunStatus.FAILED
 
+    async def test_reconcile_rejects_an_execution_from_another_run(self, tmp_path: Path) -> None:
+        repo = make_repo(tmp_path)
+        h = Harness(repo, [])
+        recovery = RecoveryService(h.store, h.workspace)
+
+        with pytest.raises(ValueError, match="does not belong"):
+            await recovery.reconcile("run-missing", "c-missing", "confirmed")
+
     async def test_finished_run_cannot_resume(self, tmp_path: Path) -> None:
         repo = make_repo(tmp_path)
         h = Harness(repo, [[text("hi"), finish()]])
@@ -371,6 +419,17 @@ class TestEffectClassification:
 
 
 class TestResume:
+    async def test_missing_original_artifact_blocks_context_rebuild(self, tmp_path: Path) -> None:
+        repo = make_repo(tmp_path)
+        h = Harness(repo, [])
+        run_id, recovery = await crash_setup(repo, h)
+        checkpoint = await h.store.load_checkpoint(run_id)
+        assert checkpoint is not None
+        checkpoint = checkpoint.model_copy(update={"original_artifacts": {"src/calc.py": "0" * 64}})
+
+        with pytest.raises(ValueError, match="original artifact.*missing"):
+            await recovery.build_context(checkpoint)
+
     async def test_resume_completes_the_task(self, tmp_path: Path) -> None:
         repo = make_repo(tmp_path)
         h = Harness(repo, [])

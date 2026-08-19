@@ -13,58 +13,93 @@ from haven.domain.review import describe, review_diff
 
 @dataclass(frozen=True, slots=True)
 class EditEvidence:
+    """一次文件写入前后的摘要，用于证明实际变更内容。"""
+
+    #: 记录该写入时的事件序号。
     seq: int
+    #: 发生变化的规范化工作区相对路径。
     path: str
+    #: 写入前一刻的文件摘要。
     preimage_digest: str
+    #: 写入后一刻的文件摘要。
     postimage_digest: str
 
 
 @dataclass(frozen=True, slots=True)
 class CheckEvidence:
+    """一次验证配方的结果，包含其发生顺序和输出是否完整。"""
+
+    #: 该检查完成时的事件序号。
     seq: int
+    #: 已注册的 recipe 标识。
     recipe_id: str
+    #: 子进程退出状态。
     exit_code: int
+    #: 检查耗时，单位为毫秒。
     duration_ms: int
+    #: 捕获的输出是否被截断。
     truncated: bool
 
 
 @dataclass(frozen=True, slots=True)
 class DiffEvidence:
+    """一次差异检查的摘要，说明变更规模及其内容指纹。"""
+
+    #: 记录该差异时的事件序号。
     seq: int
+    #: 存在净变化的文件数量。
     files_changed: int
+    #: 新增行数。
     insertions: int
+    #: 删除行数。
     deletions: int
+    #: 完整差异构件的摘要。
     diff_digest: str
 
 
 @dataclass(frozen=True, slots=True)
 class EvidenceLedger:
+    """按事件序号累积的编辑、检查和差异证据。"""
+
+    #: 按事件顺序排列的文件写入证据。
     edits: tuple[EditEvidence, ...] = field(default_factory=tuple)
+    #: 按事件顺序排列的验证证据。
     checks: tuple[CheckEvidence, ...] = field(default_factory=tuple)
+    #: 按事件顺序排列的差异证据。
     diffs: tuple[DiffEvidence, ...] = field(default_factory=tuple)
 
     def with_edit(self, edit: EditEvidence) -> EvidenceLedger:
+        """追加一条文件编辑证据并返回新的不可变账本。"""
         return replace(self, edits=(*self.edits, edit))
 
     def with_check(self, check: CheckEvidence) -> EvidenceLedger:
+        """追加一条检查证据并返回新的不可变账本。"""
         return replace(self, checks=(*self.checks, check))
 
     def with_diff(self, diff: DiffEvidence) -> EvidenceLedger:
+        """追加一条差异证据并返回新的不可变账本。"""
         return replace(self, diffs=(*self.diffs, diff))
 
     @property
     def has_edits(self) -> bool:
+        """是否至少记录过一次文件编辑。"""
         return bool(self.edits)
 
     @property
     def last_edit_seq(self) -> int:
+        """返回最近编辑证据的事件序号；没有编辑时为 ``-1``。"""
         return max((e.seq for e in self.edits), default=-1)
 
 
 @dataclass(frozen=True, slots=True)
 class GateResult:
+    """Evidence Gate 的判定结果；`terminal` 表示继续尝试也不可能成功。"""
+
+    #: 当前是否满足证据要求。
     passed: bool
+    #: 最终运行结果使用的稳定机器可读原因。
     reason_code: str
+    #: 适合 UI 展示的人类可读说明。
     detail: str
     #: 如果代理无论继续做多少工作都无法满足门禁，则为 True。
     #: 循环必须停止，不能继续发送 nudge，否则会在无法取胜的状态下耗尽
@@ -109,6 +144,13 @@ def evaluate_evidence_gate(
             "missing_diff",
             "Files were edited but no diff was recorded after the last write.",
         )
+    latest_diff = max(fresh_diffs, key=lambda evidence: evidence.seq)
+    if latest_diff.files_changed == 0:
+        return GateResult(
+            False,
+            "missing_diff",
+            "Files were edited, but the latest diff has no net workspace changes.",
+        )
 
     fresh_checks = [c for c in ledger.checks if c.seq > last_write]
     if not fresh_checks:
@@ -118,7 +160,10 @@ def evaluate_evidence_gate(
             "Files were edited but no verification ran after the last write.",
         )
 
-    failing = [c for c in fresh_checks if c.exit_code != 0]
+    latest_by_recipe: dict[str, CheckEvidence] = {}
+    for check in sorted(fresh_checks, key=lambda evidence: evidence.seq):
+        latest_by_recipe[check.recipe_id] = check
+    failing = [check for check in latest_by_recipe.values() if check.exit_code != 0]
     if failing:
         return GateResult(
             False,

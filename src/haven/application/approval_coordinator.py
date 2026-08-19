@@ -18,6 +18,8 @@ from haven.ports.workspace import WorkspacePort
 
 
 class ApprovalCoordinator:
+    """创建审批请求、等待用户决定并消费一次性审批凭证。"""
+
     def __init__(
         self,
         *,
@@ -46,6 +48,7 @@ class ApprovalCoordinator:
         preview: ToolPreview,
         facts: ToolFacts,
     ) -> tuple[bool, str | None, str]:
+        """计算绑定摘要、请求审批并消费一次性凭证，返回是否可执行及失败原因。"""
         summary, preview_text = self._renderer.render(call.tool_name, args, preview)
         digest = compute_approval_digest(
             workspace_digest=self._workspace.workspace_digest,

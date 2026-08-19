@@ -304,3 +304,24 @@ class TestRunDiff:
         )
         current = (workspace.root / "src" / "calc.py").read_text()
         assert outcome.postimage_digest == sha256_text(current)
+
+    async def test_edit_preserves_executable_mode(self, workspace: FsWorkspace) -> None:
+        target = workspace.root / "src" / "calc.py"
+        target.chmod(0o755)
+        preview = await workspace.preview_edit("src/calc.py", "# BUG", "# FIXED")
+        await workspace.apply_edit("src/calc.py", "# BUG", "# FIXED", preview.preimage_digest)
+        assert target.stat().st_mode & 0o777 == 0o755
+
+    async def test_diff_does_not_follow_a_replacement_symlink(
+        self, workspace: FsWorkspace, tmp_path: Path
+    ) -> None:
+        preview = await workspace.preview_edit("src/calc.py", "# BUG", "# FIXED")
+        await workspace.apply_edit("src/calc.py", "# BUG", "# FIXED", preview.preimage_digest)
+        secret = tmp_path.parent / "outside-secret.txt"
+        secret.write_text("DO-NOT-EXFILTRATE\n")
+        target = workspace.root / "src" / "calc.py"
+        target.unlink()
+        target.symlink_to(secret)
+
+        run_diff = await workspace.run_diff()
+        assert "DO-NOT-EXFILTRATE" not in run_diff.diff

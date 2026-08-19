@@ -90,6 +90,22 @@ class TestPreviewSimulation:
         )
         assert plan.final_contents["src/new.py"] == "X = 2\n"
 
+    async def test_delete_then_recreate_the_same_path_is_a_single_net_edit(
+        self, tmp_path: Path
+    ) -> None:
+        ws = make_ws(tmp_path)
+        plan = await ws.preview_patch(
+            (
+                PatchOpSpec(kind="delete", path="src/a.py"),
+                PatchOpSpec(kind="create", path="src/a.py", content="REPLACED = True\n"),
+            ),
+            {},
+        )
+        assert len(plan.effects) == 1
+        assert plan.effects[0].tool_shape == "repo.edit"
+        await ws.apply_patch(plan)
+        assert (ws.root / "src" / "a.py").read_text() == "REPLACED = True\n"
+
     async def test_editing_an_unread_existing_file_is_refused(self, tmp_path: Path) -> None:
         ws = make_ws(tmp_path)
         with pytest.raises(WorkspaceError) as err:

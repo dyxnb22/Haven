@@ -33,7 +33,8 @@ from a command in this repository; nothing is estimated.
    statements, blanked files). Evidence is sequence-stamped so a stale pre-edit
    pass does not count.
 4. **Durable execution with conservative recovery.** SQLite checkpoint +
-   append-only event journal + execution journal. An interrupted effect is
+   append-only event journal + run-scoped `(run_id, call_id)` execution journal.
+   An interrupted effect is
    classified against preimage/postimage digests; anything unprovable is
    `EFFECT_UNKNOWN`, blocks resume, and is **never** auto-replayed.
 5. **Reproducible offline eval as a security gate.** The scripted eval cases
@@ -53,11 +54,11 @@ drifts from the sources, so no number here is hand-maintained.
 
 | Metric | Value |
 |---|---|
-| Automated tests | 820 |
+| Automated tests | 885 |
 | Line coverage (`src/`) | 89% |
-| Source / test size | ~14.0k / ~11.3k lines |
-| Typed modules (`mypy --strict`) | 68 |
-| Architecture decision records | 29 |
+| Source / test size | ~16.6k / ~11.9k lines |
+| Typed modules (`mypy --strict`) | 102 |
+| Architecture decision records | 30 |
 | Offline eval | 39/39 passed, 0 security violations |
 | Eval categories | security 16 · task 10 · robustness 6 · injection 3 · budget 2 · recovery 2 |
 | Live real-repo suite (deepseek-v4-flash) | 75/79 after fixes (31/31 + 9/9 + 5/5 + 20/20 + 9/13 + 1/1); 0 security violations — as-found runs and root causes in docs/EVAL_LIVE.md |
@@ -102,8 +103,10 @@ change.
 
 - `repo.exec` requires an OS sandbox, keeps the workspace read-only, hides
   `$HOME`, and denies network access. Registered checks use a workspace-writable
-  profile, may opt into network through user-authored config, and may run without
-  a backend on an unsupported platform under the local-trust assumption. This
+  profile, may opt into network through a reviewed recipe, and may run without
+  a backend on an unsupported platform under the local-trust assumption. The
+  approval card repeats the command and its workspace/network/read authority.
+  This
   is not a container or VM: IPC is open, Linux network confinement covers TCP
   only, `.git` write protection during checks is kernel-enforced on macOS but
   detect-and-fail on Linux, and secrets outside `$HOME` can remain readable.
@@ -115,6 +118,8 @@ change.
 ## Résumé bullets
 
 Every number is from the measured table above.
+For a concise Chinese entry ready to paste into a résumé, see
+[`RESUME.zh-CN.md`](RESUME.zh-CN.md).
 
 - Built **Haven**, a Python/asyncio + Textual TUI coding agent implementing a
   bounded agent loop, a provider-neutral streaming adapter, and a
@@ -128,8 +133,9 @@ Every number is from the measured table above.
   violations**, including security and prompt-injection scenarios.
 - Implemented SQLite versioned checkpoints plus an append-only event journal with
   offline replay, classifying interrupted side effects by preimage/postimage
-  digest and failing closed on ambiguity instead of replaying — covered by **8
-  recovery tests across 5 interruption outcomes**.
+  digest and failing closed on ambiguity instead of replaying — covered by **25
+  dedicated recovery tests** across edit/create/delete/move classification,
+  reconciliation, resume, and replay.
 - Enforced an "evidence, not assertion" success rule: a run that edits files
   (through `repo.edit`, `repo.create`, or a sandboxed `repo.exec`) only succeeds
   with a diff and a passing verification recorded after the last write, validated

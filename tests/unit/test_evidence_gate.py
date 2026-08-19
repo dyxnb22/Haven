@@ -33,6 +33,13 @@ def test_write_without_diff_fails() -> None:
     assert not result.passed
     assert result.reason_code == "missing_diff"
 
+    zero_diff = DiffEvidence(seq=2, files_changed=0, insertions=0, deletions=0, diff_digest="empty")
+    result = evaluate_evidence_gate(
+        EvidenceLedger().with_edit(edit(1)).with_diff(zero_diff).with_check(check(3))
+    )
+    assert not result.passed
+    assert result.reason_code == "missing_diff"
+
 
 def test_write_without_check_fails() -> None:
     ledger = EvidenceLedger().with_edit(edit(1)).with_diff(diff(2))
@@ -59,6 +66,10 @@ def test_failing_check_fails_gate() -> None:
     result = evaluate_evidence_gate(ledger)
     assert not result.passed
     assert result.reason_code == "check_failed"
+
+    # 同一配方修复后重跑成功，应取最新结果；早先失败不能永久污染本次运行。
+    retried = ledger.with_check(check(4, 0))
+    assert evaluate_evidence_gate(retried).passed
 
 
 class TestUnwinnableGate:

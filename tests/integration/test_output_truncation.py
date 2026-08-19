@@ -10,7 +10,7 @@ from pathlib import Path
 
 from haven.contracts.events import Notice
 from haven.domain.enums import RunStatus, StopReason
-from tests.integration.harness import Harness, finish, make_repo, text
+from tests.integration.harness import Harness, finish, make_repo, text, tool
 
 
 def _warnings(h: Harness) -> list[str]:
@@ -33,6 +33,17 @@ class TestTruncatedAnswers:
         assert outcome.status is RunStatus.SUCCEEDED
         assert outcome.final_text == "The answer is: first half and second half."
         assert any("output token limit" in w for w in _warnings(h))
+
+        switched = Harness(
+            make_repo(tmp_path / "switched"),
+            [
+                [text("obsolete partial"), finish("length")],
+                [tool("c1", "repo.list", path="."), finish("tool_calls")],
+                [text("fresh answer"), finish()],
+            ],
+        )
+        switched_outcome = await switched.service.run("Investigate, then answer")
+        assert switched_outcome.final_text == "fresh answer"
 
     async def test_the_continuation_request_tells_the_model_not_to_repeat(
         self, tmp_path: Path

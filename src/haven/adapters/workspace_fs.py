@@ -81,7 +81,7 @@ IGNORED_DIRS = frozenset(
 
 
 class FsWorkspace:
-    """为本地目录实现 WorkspacePort。
+    """真实文件系统工作区实现，统一执行路径检查、摘要和保护路径规则。
 
     每条写入路径都必须遵守以下不变量（下面的分节标题用于归类实现）：
 
@@ -108,10 +108,12 @@ class FsWorkspace:
 
     @property
     def root(self) -> Path:
+        """返回已解析的工作区根目录。"""
         return self._root
 
     @property
     def workspace_digest(self) -> str:
+        """返回用于绑定运行身份的工作区摘要。"""
         return self._workspace_digest
 
     # -- 路径处理 --------------------------------------------------------------
@@ -132,7 +134,11 @@ class FsWorkspace:
         if not raw_path or raw_path.startswith(("/", "~")) or "\x00" in raw_path:
             return outside
 
-        candidate = (self._root / raw_path).resolve()
+        try:
+            candidate = (self._root / raw_path).resolve()
+        except (OSError, RuntimeError):
+            # 损坏或循环的符号链接绝不能绕开路径授权，也不应让工具崩溃。
+            return outside
         if candidate != self._root and self._root not in candidate.parents:
             return outside
 
@@ -141,10 +147,13 @@ class FsWorkspace:
         )
         is_protected = any(part in PROTECTED_COMPONENTS for part in Path(normalized).parts)
 
-        exists = candidate.exists()
-        is_file = candidate.is_file() and not candidate.is_symlink() if exists else False
-        is_dir = candidate.is_dir() if exists else False
-        size = candidate.stat().st_size if is_file else 0
+        try:
+            exists = candidate.exists()
+            is_file = candidate.is_file() and not candidate.is_symlink() if exists else False
+            is_dir = candidate.is_dir() if exists else False
+            size = candidate.stat().st_size if is_file else 0
+        except OSError:
+            return outside
         digest: str | None = None
         if is_file and size <= MAX_EDIT_FILE_BYTES:
             digest = sha256_bytes(candidate.read_bytes())
@@ -172,6 +181,7 @@ class FsWorkspace:
     # -- 只读工具 --------------------------------------------------------------
 
     async def list_dir(self, path: str, max_entries: int) -> ListResult:
+        """列出工作区内目录，跳过保护组件并按名称稳定排序。"""
         target, normalized = self._require_inside(path)
         if not target.is_dir():
             raise WorkspaceError("not_found", f"not a directory: {normalized!r}")
@@ -206,6 +216,7 @@ class FsWorkspace:
         )
 
     async def read_file(self, path: str, start_line: int, max_lines: int) -> ReadResult:
+        """读取 UTF-8 普通文件的有界行窗口，并返回完整文件摘要。"""
         target, normalized = self._require_inside(path)
         if not target.is_file() or target.is_symlink():
             raise WorkspaceError("not_found", f"not a regular file: {normalized!r}")
@@ -236,12 +247,13 @@ class FsWorkspace:
             byte_budget -= encoded
             emitted += 1
 
-        end_line = start_line - 1 + emitted
+        actual_start = min(start_line, total + 1) if total else 1
+        end_line = actual_start - 1 + emitted
         truncated = byte_truncated or end_line < total
         return ReadResult(
             path=normalized,
             content=content,
-            start_line=start_line,
+            start_line=actual_start,
             end_line=end_line,
             total_lines=total,
             truncated=truncated,
@@ -261,6 +273,7 @@ class FsWorkspace:
         occurrence: int | None = None,
         replace_all: bool = False,
     ) -> EditPreview:
+        """将编辑请求转发给带前像校验的 WorkspaceEditor。"""
         return await self._editor.preview_edit(
             path, old, new, occurrence=occurrence, replace_all=replace_all
         )
@@ -275,6 +288,7 @@ class FsWorkspace:
         occurrence: int | None = None,
         replace_all: bool = False,
     ) -> EditOutcome:
+        """将已审批编辑转发给 WorkspaceEditor 执行。"""
         return await self._editor.apply_edit(
             path,
             old,
@@ -285,40 +299,51 @@ class FsWorkspace:
         )
 
     async def preview_create(self, path: str, content: str) -> EditPreview:
+        """转发新文件创建预览。"""
         return await self._editor.preview_create(path, content)
 
     async def apply_create(self, path: str, content: str) -> EditOutcome:
+        """转发新文件创建并保留运行级原始内容。"""
         return await self._editor.apply_create(path, content)
 
     async def preview_delete(self, path: str) -> EditPreview:
+        """转发文件删除预览。"""
         return await self._editor.preview_delete(path)
 
     async def apply_delete(self, path: str, expected_preimage: str) -> EditOutcome:
+        """转发带前像校验的文件删除。"""
         return await self._editor.apply_delete(path, expected_preimage)
 
     async def preview_move(self, src: str, dest: str) -> tuple[EditPreview, EditPreview]:
+        """转发源删除和目标创建组成的移动预览。"""
         return await self._editor.preview_move(src, dest)
 
     async def apply_move(
         self, src: str, dest: str, expected_preimage: str
     ) -> tuple[EditOutcome, EditOutcome]:
+        """转发带前像校验的文件移动。"""
         return await self._editor.apply_move(src, dest, expected_preimage)
 
     async def preview_patch(
         self, ops: tuple[PatchOpSpec, ...], files_read: dict[str, str]
     ) -> PatchPreview:
+        """转发多文件补丁规划，所有路径仍由本门面统一授权。"""
         return await self._editor.preview_patch(ops, files_read)
 
     async def apply_patch(self, plan: PatchPreview) -> tuple[EditOutcome, ...]:
+        """转发原子补丁提交并保留回滚错误语义。"""
         return await self._editor.apply_patch(plan)
 
     async def run_diff(self) -> RunDiff:
+        """返回运行级累计差异。"""
         return await self._editor.run_diff()
 
-    def original_contents(self) -> dict[str, str]:
+    def original_contents(self) -> dict[str, str | None]:
+        """返回工作区编辑器保存的运行前内容。"""
         return self._editor.original_contents()
 
-    def restore_originals(self, originals: dict[str, str]) -> None:
+    def restore_originals(self, originals: dict[str, str | None]) -> None:
+        """恢复运行级原始内容索引，不直接执行文件恢复。"""
         self._editor.restore_originals(originals)
 
     def capture_snapshot(self) -> WorkspaceSnapshot:
@@ -330,5 +355,6 @@ class FsWorkspace:
             protected_components=PROTECTED_COMPONENTS,
         )
 
-    def register_run_original(self, path: str, content: str) -> None:
+    def register_run_original(self, path: str, content: str | None) -> None:
+        """登记进程外部写入路径的运行前内容，供差异和撤销使用。"""
         self._editor.register_run_original(path, content)

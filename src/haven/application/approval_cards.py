@@ -24,6 +24,8 @@ PREVIEW_CHARS = 4_000
 
 
 class ApprovalCardRenderer:
+    """把工具提议渲染成用户可审查的审批卡片。"""
+
     def __init__(
         self, recipes: dict[str, RecipeSpec], sandbox_description: Callable[[], str]
     ) -> None:
@@ -40,6 +42,7 @@ class ApprovalCardRenderer:
         }
 
     def render(self, tool_name: str, args: ToolArgs, preview: ToolPreview) -> tuple[str, str]:
+        """按工具类型生成审批摘要和有界预览；未知工具返回空字符串。"""
         handler = self.handlers.get(tool_name)
         return handler(args, preview) if handler is not None else ("", "")
 
@@ -112,7 +115,15 @@ class ApprovalCardRenderer:
             f"run check recipe {args.recipe_id!r} "
             "(approving also covers identical re-runs for the rest of this run)"
         )
-        return summary, "$ " + " ".join(recipe.argv)
+        network = "allowed" if recipe.allow_network else "denied"
+        roots = ", ".join(recipe.readable_roots) if recipe.readable_roots else "none"
+        preview_lines = [
+            "$ " + shlex.join(recipe.argv),
+            "recipe permissions: workspace writable",
+            f"network: {network}",
+            f"additional readable roots: {roots}",
+        ]
+        return summary, "\n".join(preview_lines)
 
 
 def _clip(text: str, limit: int) -> str:

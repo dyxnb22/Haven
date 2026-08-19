@@ -25,7 +25,12 @@ ROOT = Path(__file__).resolve().parent.parent
 BEGIN = "<!-- BEGIN GENERATED METRICS (scripts/refresh_metrics.py; do not edit by hand) -->"
 END = "<!-- END GENERATED METRICS -->"
 
-TARGETS = ("README.md", "docs/PROJECT_CARD.md", "docs/DESIGN_QA.md")
+TARGETS = {
+    "README.md": "en",
+    "README.zh-CN.md": "zh",
+    "docs/PROJECT_CARD.md": "en",
+    "docs/DESIGN_QA.md": "en",
+}
 
 #: 评估类别的报告顺序，以保证行的顺序稳定。
 _CATEGORY_ORDER = ("security", "task", "robustness", "injection", "budget", "recovery")
@@ -113,7 +118,8 @@ def _thousands(n: int) -> str:
     return f"~{n / 1000:.1f}k"
 
 
-def render_block() -> str:
+def render_block(language: str = "en") -> str:
+    """从测试、覆盖率、评估和文档来源生成指标 Markdown 区块。"""
     tests = _count_tests()
     coverage = _coverage_pct()
     src_files = _src_files()
@@ -122,26 +128,50 @@ def render_block() -> str:
     adrs = len(list((ROOT / "docs" / "adr").glob("*.md")))
     ev = _eval_summary()
 
-    rows = [
-        ("Automated tests", str(tests)),
-        ("Line coverage (`src/`)", f"{coverage}%" if coverage is not None else "n/a"),
-        ("Source / test size", f"{_thousands(src_lines)} / {_thousands(test_lines)} lines"),
-        ("Typed modules (`mypy --strict`)", str(len(src_files))),
-        ("Architecture decision records", str(adrs)),
-    ]
+    if language == "zh":
+        rows = [
+            ("自动化测试", str(tests)),
+            ("行覆盖率（`src/`）", f"{coverage}%" if coverage is not None else "不可用"),
+            (
+                "源码 / 测试规模",
+                f"约 {_thousands(src_lines)[1:]} / 约 {_thousands(test_lines)[1:]} 行",
+            ),
+            ("类型检查模块（`mypy --strict`）", str(len(src_files))),
+            ("架构决策记录", str(adrs)),
+        ]
+    else:
+        rows = [
+            ("Automated tests", str(tests)),
+            ("Line coverage (`src/`)", f"{coverage}%" if coverage is not None else "n/a"),
+            (
+                "Source / test size",
+                f"{_thousands(src_lines)} / {_thousands(test_lines)} lines",
+            ),
+            ("Typed modules (`mypy --strict`)", str(len(src_files))),
+            ("Architecture decision records", str(adrs)),
+        ]
     if ev:
         by_cat = ev.get("by_category", {})
         cats = " · ".join(
             f"{name} {by_cat[name]['total']}" for name in _CATEGORY_ORDER if name in by_cat
         )
-        rows.append(
-            (
-                "Offline eval",
-                f"{ev['passed']}/{ev['total']} passed, "
-                f"{ev['security_violations']} security violations",
+        if language == "zh":
+            rows.append(
+                (
+                    "离线评估",
+                    f"{ev['passed']}/{ev['total']} 通过，{ev['security_violations']} 个安全违规",
+                )
             )
-        )
-        rows.append(("Eval categories", cats))
+            rows.append(("评估类别", cats))
+        else:
+            rows.append(
+                (
+                    "Offline eval",
+                    f"{ev['passed']}/{ev['total']} passed, "
+                    f"{ev['security_violations']} security violations",
+                )
+            )
+            rows.append(("Eval categories", cats))
 
     live = _live_summary()
     if live:
@@ -150,25 +180,45 @@ def render_block() -> str:
         passed = sum(int(t["passed"]) for t in tiers)
         total = sum(int(t["total"]) for t in tiers)
         parts = " + ".join(f"{t['passed']}/{t['total']}" for t in tiers)
-        rows.append(
-            (
-                f"Live real-repo suite ({live['model']})",
-                f"{passed}/{total} after fixes ({parts}); "
-                f"{live['security_violations']} security violations — "
-                "as-found runs and root causes in docs/EVAL_LIVE.md",
-            )
-        )
-        rerun = live.get("single_version_rerun")
-        if isinstance(rerun, dict):
+        if language == "zh":
             rows.append(
                 (
-                    "Same-version full rerun",
-                    f"{rerun['passed']}/{rerun['total']} in one uninterrupted run "
-                    "(failure attribution in docs/EVAL_LIVE.md)",
+                    f"实时真实仓库套件（{live['model']}）",
+                    f"修复后 {passed}/{total}（{parts}）；"
+                    f"{live['security_violations']} 个安全违规——原始运行和根因见 "
+                    "docs/EVAL_LIVE.md",
                 )
             )
+        else:
+            rows.append(
+                (
+                    f"Live real-repo suite ({live['model']})",
+                    f"{passed}/{total} after fixes ({parts}); "
+                    f"{live['security_violations']} security violations — "
+                    "as-found runs and root causes in docs/EVAL_LIVE.md",
+                )
+            )
+        rerun = live.get("single_version_rerun")
+        if isinstance(rerun, dict):
+            if language == "zh":
+                rows.append(
+                    (
+                        "同版本完整重跑",
+                        f"一次不间断运行中 {rerun['passed']}/{rerun['total']}"
+                        "（失败归因见 docs/EVAL_LIVE.md）",
+                    )
+                )
+            else:
+                rows.append(
+                    (
+                        "Same-version full rerun",
+                        f"{rerun['passed']}/{rerun['total']} in one uninterrupted run "
+                        "(failure attribution in docs/EVAL_LIVE.md)",
+                    )
+                )
 
-    lines = [BEGIN, "", "| Metric | Value |", "|---|---|"]
+    header = "| 指标 | 数值 |" if language == "zh" else "| Metric | Value |"
+    lines = [BEGIN, "", header, "|---|---|"]
     lines += [f"| {label} | {value} |" for label, value in rows]
     lines += ["", END]
     return "\n".join(lines)
@@ -185,13 +235,14 @@ def _replace_block(text: str, block: str) -> str:
 
 
 def main() -> int:
+    """生成或校验各摘要文档中的指标区块，并返回退出码。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="fail if any block is stale")
     args = parser.parse_args()
 
-    block = render_block()
     stale: list[str] = []
-    for rel in TARGETS:
+    for rel, language in TARGETS.items():
+        block = render_block(language)
         path = ROOT / rel
         current = path.read_text(encoding="utf-8")
         updated = _replace_block(current, block)

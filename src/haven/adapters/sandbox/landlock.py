@@ -55,15 +55,19 @@ class LandlockLauncher:
 
     @property
     def backend(self) -> str:
+        """返回 Linux Landlock 后端名称。"""
         return "landlock"
 
     def available(self) -> bool:
+        """检查当前内核是否提供满足最低要求的 Landlock ABI。"""
         return sys.platform.startswith("linux") and abi_version() >= MIN_ABI
 
     def wrap(self, argv: tuple[str, ...], spec: SandboxSpec) -> tuple[str, ...]:
+        """通过辅助模块重新执行目标命令并传入序列化沙箱规格。"""
         return (sys.executable, "-m", LAUNCHER_MODULE, "--spec", encode_spec(spec), "--", *argv)
 
     def describe(self, spec: SandboxSpec) -> str:
+        """描述 Landlock 下的读写、网络和保护路径边界。"""
         writes = (
             f"writes limited to {spec.workspace_root}"
             if spec.writable

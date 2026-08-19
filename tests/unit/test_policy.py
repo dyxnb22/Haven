@@ -1,3 +1,5 @@
+import pytest
+
 from haven.domain import (
     EFFECT_TOOLS,
     EXEC_TOOLS,
@@ -39,63 +41,54 @@ class TestStateTools:
 
 
 class TestEffectTools:
-    def test_edit_requires_approval_in_interactive(self) -> None:
-        outcome = evaluate_policy(PermissionMode.INTERACTIVE, facts(tool_name="repo.edit"))
+    @pytest.mark.parametrize(
+        ("tool_name", "reason_code"),
+        [
+            pytest.param("repo.edit", "write_requires_approval", id="edit"),
+            pytest.param("repo.create", "create_requires_approval", id="create"),
+            pytest.param("repo.delete", "delete_requires_approval", id="delete"),
+            pytest.param("repo.move", "move_requires_approval", id="move"),
+        ],
+    )
+    def test_effect_requires_approval_in_interactive(
+        self, tool_name: str, reason_code: str
+    ) -> None:
+        outcome = evaluate_policy(PermissionMode.INTERACTIVE, facts(tool_name=tool_name))
         assert outcome.decision is PolicyDecision.ASK
-        assert outcome.reason_code == "write_requires_approval"
+        assert outcome.reason_code == reason_code
 
-    def test_edit_denied_in_read_only_mode(self) -> None:
-        outcome = evaluate_policy(PermissionMode.READ_ONLY, facts(tool_name="repo.edit"))
+    @pytest.mark.parametrize(
+        "tool_name",
+        ["repo.edit", "repo.create", "repo.delete", "repo.move"],
+    )
+    def test_effect_is_denied_in_read_only_mode(self, tool_name: str) -> None:
+        outcome = evaluate_policy(PermissionMode.READ_ONLY, facts(tool_name=tool_name))
         assert outcome.decision is PolicyDecision.DENY
         assert outcome.reason_code == "read_only_mode"
 
-    def test_create_requires_approval_in_interactive(self) -> None:
-        outcome = evaluate_policy(PermissionMode.INTERACTIVE, facts(tool_name="repo.create"))
-        assert outcome.decision is PolicyDecision.ASK
-        assert outcome.reason_code == "create_requires_approval"
-
-    def test_delete_requires_approval_and_is_denied_read_only(self) -> None:
-        ask = evaluate_policy(PermissionMode.INTERACTIVE, facts(tool_name="repo.delete"))
-        assert ask.decision is PolicyDecision.ASK
-        assert ask.reason_code == "delete_requires_approval"
-        deny = evaluate_policy(PermissionMode.READ_ONLY, facts(tool_name="repo.delete"))
-        assert deny.decision is PolicyDecision.DENY
-        assert deny.reason_code == "read_only_mode"
-
-    def test_move_requires_approval_and_is_denied_read_only(self) -> None:
-        ask = evaluate_policy(PermissionMode.INTERACTIVE, facts(tool_name="repo.move"))
-        assert ask.decision is PolicyDecision.ASK
-        assert ask.reason_code == "move_requires_approval"
-        deny = evaluate_policy(PermissionMode.READ_ONLY, facts(tool_name="repo.move"))
-        assert deny.decision is PolicyDecision.DENY
-
-    def test_delete_on_protected_path_denied(self) -> None:
+    @pytest.mark.parametrize(
+        ("tool_name", "overrides", "reason_code"),
+        [
+            pytest.param(
+                "repo.delete", {"touches_protected_path": True}, "protected_path", id="delete"
+            ),
+            pytest.param(
+                "repo.create", {"touches_protected_path": True}, "protected_path", id="create"
+            ),
+            pytest.param(
+                "repo.create", {"within_workspace": False}, "outside_workspace", id="outside"
+            ),
+        ],
+    )
+    def test_effect_boundary_violation_is_denied(
+        self, tool_name: str, overrides: dict[str, object], reason_code: str
+    ) -> None:
         outcome = evaluate_policy(
             PermissionMode.INTERACTIVE,
-            facts(tool_name="repo.delete", touches_protected_path=True),
+            facts(tool_name=tool_name, **overrides),
         )
         assert outcome.decision is PolicyDecision.DENY
-        assert outcome.reason_code == "protected_path"
-
-    def test_create_denied_in_read_only_mode(self) -> None:
-        outcome = evaluate_policy(PermissionMode.READ_ONLY, facts(tool_name="repo.create"))
-        assert outcome.decision is PolicyDecision.DENY
-        assert outcome.reason_code == "read_only_mode"
-
-    def test_create_outside_workspace_denied(self) -> None:
-        outcome = evaluate_policy(
-            PermissionMode.INTERACTIVE, facts(tool_name="repo.create", within_workspace=False)
-        )
-        assert outcome.decision is PolicyDecision.DENY
-        assert outcome.reason_code == "outside_workspace"
-
-    def test_create_on_protected_path_denied(self) -> None:
-        outcome = evaluate_policy(
-            PermissionMode.INTERACTIVE,
-            facts(tool_name="repo.create", touches_protected_path=True),
-        )
-        assert outcome.decision is PolicyDecision.DENY
-        assert outcome.reason_code == "protected_path"
+        assert outcome.reason_code == reason_code
 
     def test_check_with_registered_recipe_asks(self) -> None:
         outcome = evaluate_policy(
@@ -121,18 +114,14 @@ class TestExecTool:
         base.update(overrides)
         return ToolFacts(**base)  # type: ignore[arg-type]
 
-    def test_denied_when_no_sandbox_backend(self) -> None:
+    @pytest.mark.parametrize("sandbox_available", [False, None], ids=["unavailable", "missing"])
+    def test_denied_without_a_confirmed_sandbox_backend(
+        self, sandbox_available: bool | None
+    ) -> None:
         """失败即关闭：不存在无沙箱的回退路径。"""
         outcome = evaluate_policy(
-            PermissionMode.INTERACTIVE, self.exec_facts(sandbox_available=False)
-        )
-        assert outcome.decision is PolicyDecision.DENY
-        assert outcome.reason_code == "sandbox_unavailable"
-
-    def test_missing_sandbox_fact_fails_closed(self) -> None:
-        """未收集到的事实绝不能被理解为拥有权限。"""
-        outcome = evaluate_policy(
-            PermissionMode.INTERACTIVE, self.exec_facts(sandbox_available=None)
+            PermissionMode.INTERACTIVE,
+            self.exec_facts(sandbox_available=sandbox_available),
         )
         assert outcome.decision is PolicyDecision.DENY
         assert outcome.reason_code == "sandbox_unavailable"

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from haven.adapters import workspace_editor
 from haven.adapters.workspace_fs import MAX_CREATE_BYTES, FsWorkspace
 from haven.domain.digest import sha256_text
 from haven.ports.workspace import WorkspaceError
@@ -63,6 +64,25 @@ class TestCreate:
         assert run_diff.deletions == 0
         assert "+assert add(1, 2) == 3" in run_diff.diff
 
+    async def test_empty_file_creation_and_deletion_are_not_lost(
+        self, workspace: FsWorkspace
+    ) -> None:
+        await workspace.apply_create("empty.txt", "")
+        created = await workspace.run_diff()
+        assert created.files == ("empty.txt",)
+        assert "--- /dev/null" in created.diff
+        assert "+++ b/empty.txt" in created.diff
+
+        # 下一次运行从“存在的空文件”开始；删除仍然是文件系统变化，即使没有
+        # 可计数的文本行。
+        workspace.restore_originals({})
+        preview = await workspace.preview_delete("empty.txt")
+        await workspace.apply_delete("empty.txt", preview.preimage_digest)
+        deleted = await workspace.run_diff()
+        assert deleted.files == ("empty.txt",)
+        assert "--- a/empty.txt" in deleted.diff
+        assert "+++ /dev/null" in deleted.diff
+
     async def test_create_then_edit_is_allowed(self, workspace: FsWorkspace) -> None:
         created = await workspace.apply_create("mod.py", "VALUE = 1\n")
         outcome = await workspace.apply_edit(
@@ -78,6 +98,23 @@ class TestCreate:
 
 
 class TestCreateSecurity:
+    async def test_a_target_appearing_at_commit_is_never_overwritten_or_attributed(
+        self, workspace: FsWorkspace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        target = workspace.root / "raced.txt"
+        real_link = workspace_editor.os.link
+
+        def racing_link(src: str, dest: str | Path) -> None:
+            Path(dest).write_text("concurrent owner\n")
+            real_link(src, dest)
+
+        monkeypatch.setattr(workspace_editor.os, "link", racing_link)
+        with pytest.raises(WorkspaceError) as exc:
+            await workspace.apply_create("raced.txt", "haven content\n")
+        assert exc.value.code == "stale_preimage"
+        assert target.read_text() == "concurrent owner\n"
+        assert (await workspace.run_diff()).files == ()
+
     async def test_escape_is_denied(self, workspace: FsWorkspace) -> None:
         for path in ("../outside.py", "/tmp/evil.py", "~/evil.py"):
             with pytest.raises(WorkspaceError) as exc:

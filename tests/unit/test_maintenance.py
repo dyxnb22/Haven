@@ -81,6 +81,13 @@ async def test_active_runs_are_never_deleted() -> None:
     assert report.deleted == ()
     assert await store.get_run("run-old-active") is not None
 
+    # 活跃运行不消耗“保留 N 个终态运行”的名额。
+    await _seed_run(store, "run-older-terminal")
+    await _seed_run(store, "run-new-active", status=RunStatus.RUNNING_MODEL)
+    report = await collect_garbage(store, keep=1)
+    assert "run-new-active" in report.skipped_active
+    assert "run-older-terminal" in report.kept
+
 
 async def test_older_than_protects_young_runs_beyond_keep() -> None:
     store = MemorySessionStore()
@@ -120,3 +127,5 @@ async def test_artifact_sweep_keeps_shared_references() -> None:
 async def test_negative_keep_is_rejected() -> None:
     with pytest.raises(ValueError, match="keep"):
         await collect_garbage(MemorySessionStore(), keep=-1)
+    with pytest.raises(ValueError, match="older_than_days"):
+        await collect_garbage(MemorySessionStore(), older_than_days=-1)

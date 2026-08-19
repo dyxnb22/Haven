@@ -15,9 +15,15 @@ the code alone does not answer:
 - a convention adopted across a few files,
 - a capability deliberately declared in an unusual shape.
 
-Write an **ADR** instead when the decision changes a guarantee, a layer
-boundary, the tool surface, or the definition of success. Write **nothing** when
-the change is mechanical.
+Write an **ADR** only when the decision changes a load-bearing guarantee, layer
+boundary, persisted-state contract, security boundary, tool surface, or the
+definition of success, and would be costly to reverse. Deferrals, experiment
+verdicts, local conventions, and future design sketches are notes. Write
+**nothing** when the change is mechanical.
+
+The active reading map and ADR admission rules live in
+[`docs/ADR_INDEX.md`](../ADR_INDEX.md). An ADR should normally stay under 80
+lines and link to measurements rather than copying an evaluation narrative.
 
 ## Lifecycle
 
