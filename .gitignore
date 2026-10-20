@@ -26,6 +26,7 @@ venv/
 ENV/
 
 # Tooling
+.import_linter_cache/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
@@ -44,6 +45,9 @@ htmlcov/
 *.swp
 *.swo
 *~
+
+# Claude Code local worktrees — each one is a full checkout, never commit
+.claude/worktrees/
 
 # OS
 .DS_Store
