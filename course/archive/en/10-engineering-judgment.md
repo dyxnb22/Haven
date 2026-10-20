@@ -92,28 +92,6 @@ capability boundary. The lesson is not “narrow is always better.” It is:
 schema, approval, sandbox, or evidence.** Articulating that trade-off is the
 deliverable.
 
-## Exercises
-
-1. **Write a gate.** Pick a feature you'd want in Haven (say, a `repo.symbols`
-   tool via tree-sitter). Write the one-page benefit gate. Be honest about the
-   baseline: is there evidence text search is failing? (ADR 0007's rejection of
-   LSP turned on exactly this.)
-2. **Write an ADR.** For a decision you have already made in your own code, write
-   it up in the `docs/adr/` format, especially the alternatives you discarded.
-3. **Write a postmortem.** Take a bug you fixed recently and write the
-   symptom / root cause / tempting-wrong-fix / fix / regression-test entry.
-4. **Argue the scope.** In a paragraph, defend Haven's “no implicit shell
-   string” decision to a reviewer who wants pipes and redirection. Include what
-   changes when the argv explicitly names `bash -c`, then argue the *other* side.
-
-## Self-check
-
-- What are the five parts of a benefit gate?
-- Why is a written "no" (like ADR 0007) valuable rather than a sign of
-  incompleteness?
-- Give the meta-rule that connects all three postmortems.
-- State the trade-off Haven's narrow scope buys, in one sentence.
-
 ## Further reading
 
 - Every ADR in `docs/adr/`; `docs/PROJECT_CARD.md` for the trade-off table.

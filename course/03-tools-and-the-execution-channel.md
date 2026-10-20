@@ -14,6 +14,18 @@
 - 解释为什么 executor 只能接收程序签发的 **ticket**，不能接收模型原始 JSON；
 - 让工具失败变成结构化结果，而不是抛进代理循环的异常。
 
+## 本课路线
+
+- **前置：** 模块 01；模块 02 只需知道模型输出的是 `ModelResult`。
+- **建议用时：** 60 分钟。
+- **阅读顺序：** 先跑一个工具失败测试，再沿 `ToolPipeline.execute` 从 validation 一直追到
+  `ToolResult`；只在遇到调用时进入 registry、policy 和 executor。
+- **最小验证：**
+
+```bash
+uv run pytest -q tests/integration/test_tool_error_containment.py tests/unit/test_policy.py
+```
+
 ## 唯一通道
 
 从模型提案到副作用，只有一条路：
@@ -31,8 +43,7 @@ ModelResult
   → 下一轮 Context
 ```
 
-从上到下阅读 `ToolPipeline.execute`。每一个箭头都是一个有名字的安全步骤；这不是普通的编排函数，
-而是安全模型正在运行的地方。
+从上到下阅读 `ToolPipeline.execute`，为每个箭头标出输入、输出和失败码。
 
 ## 为什么需要 ExecutionTicket
 
@@ -40,8 +51,7 @@ ModelResult
 `ExecutionTicket`，将工具名和版本、规范化参数、工作区身份、preimage digest 绑定成一个程序生成的值；
 executor 只消费这个值。
 
-这样“模型想做 X、程序却做了 Y”在结构上就很难发生：executor 没有读取模型字段的代码路径。如果你
-发现自己把 `tool_call.arguments` 直接传给会碰磁盘的函数，就等于重新引入这个设计要消除的漏洞。
+executor 没有读取模型字段的路径，因此不能把 `tool_call.arguments` 直接传给磁盘或进程函数。
 
 ## Registry 固定工具词汇
 
@@ -65,24 +75,6 @@ executor 只消费这个值。
 路径让 ripgrep 返回 2，异常冲出通道，整套评估被中止。修复分三层恢复了不变量：先校验路径，降低后端
 故障的影响，再把执行错误包装成结果。自己构建通道时，建议先写这条测试；它能抓住最致命的一类问题：
 一次工具失败拖垮整次运行。
-
-## 练习
-
-1. **讲述通道。** 取 `test_agent_journeys.py` 中的 `repo.edit` 流程，把
-   `tool.proposed`、`policy.decided`、`approval.requested`、`execution.started`、
-   `tool.completed` 分别标到产生它们的管线阶段。
-2. **尝试走私参数。** 设法让 executor 执行模型提供、但 ticket 没有绑定的参数。先在纸上，再写测试，
-   然后解释为什么结构上做不到。
-3. **添加只读工具。** 设计一个 `repo.stat`：参数 model、registry 条目、policy 分类，以及忘记
-   分类时应该失败的测试。
-4. **重现隔离 bug。** 临时让 `repo.search` 在路径不存在时抛异常（不要提交），观察运行中止；再
-   看当前代码怎样把它变成 `not_found` 结果。
-
-## 自测
-
-- `ExecutionTicket` 绑定了哪些东西？每一项为什么必要？
-- 为什么要校验 JSON 文本，而不是解析后的 dict？
-- 用一句话说出工具失败的不变量，并指出保护它的测试。
 
 ## 延伸阅读
 

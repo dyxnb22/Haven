@@ -75,7 +75,7 @@ Read `sqlite_session.py`:
 - **Approval consumption is a conditional `UPDATE`** — this is where Module 04's
   single-use guarantee physically lives: the update matches on id *and* digest
   *and* `consumed_at IS NULL`, so it can win at most once.
-- The in-memory store (`memory_session.py`) implements the same port, and
+- The in-memory store (`adapters/memory_session.py`) implements the same port, and
   `tests/contract/test_session_store.py` runs the *same* contract tests against
   both, so the fast test double cannot drift from the real one.
 
@@ -88,26 +88,6 @@ never raise a limit, change the provider, or widen the agent's policy. A recipe
 can declare fixed process capabilities such as network/readable roots because it
 is user-authored authority, not model input. Secrets come only from environment
 variables and are reported present/missing, never printed.
-
-## Exercises
-
-1. **Simulate a crash.** Follow `tests/recovery/` to build a run whose edit is
-   `started` but not `confirmed`. Run the three cases: file matches preimage
-   (resume), matches postimage (resume), matches neither (blocked).
-2. **Break a checkpoint.** Corrupt a checkpoint checksum in a test and assert the
-   loader fails closed.
-3. **Replay.** Run a scripted journey, then `haven replay RUN_ID`, and confirm no
-   model or tool is invoked (the run is already finished; nothing new happens).
-4. **Tighten-only.** Write a `.haven.toml` that tries to *raise* `max_steps`
-   above the default and confirm via `haven config explain` that it did not take
-   effect.
-
-## Self-check
-
-- What does each of checkpoint and journal solve, and which is authoritative?
-- State the ambiguous-effect rule in one sentence.
-- Where does the single-use approval guarantee physically live, and why is a
-  conditional `UPDATE` the right primitive?
 
 ## Further reading
 

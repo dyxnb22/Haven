@@ -15,13 +15,26 @@
 - 让每条路径都被限制在工作区内，越界时默认失败；
 - 理解安全严谨性为什么要求动作空间保持克制。
 
+## 本课路线
+
+- **前置：** 模块 03 的 registry、facts、ticket 三个门。
+- **建议用时：** 60 分钟。
+- **阅读顺序：** 先看 policy 的表驱动测试，再看 approval digest，最后看工作区逃逸测试；把
+  “程序决定”“人类确认”“内核限制”分开记录。
+- **最小验证：**
+
+```bash
+uv run pytest -q tests/unit/test_policy.py tests/unit/test_approval_and_ticket.py \
+  tests/security/test_workspace_escapes.py
+```
+
 ## policy 只做一件事：决定
 
 打开 `policy.py`。`evaluate_policy(mode, facts)` 接收 `PermissionMode` 和 `ToolFacts`：
 工具名、路径是否在工作区、是否受保护、是否登记 recipe、preimage digest，然后返回 `allow`、`ask`
 或 `deny`，并带有原因码。policy 不读文件、不问模型、不看时间；它只根据输入事实作决定。
 
-它值得信任，是因为有两个性质：
+它能作为权限边界，因为：
 
 - **模型不能修改 facts。** `ToolFacts` 由程序根据规范化参数和真实文件系统组装，模型只能提出请求，
   不能同时宣称“我请求的路径是安全的”。
@@ -53,8 +66,7 @@ digest 哈希成一个值。审批记录只有在“已批准、未消费、dige
 `.haven.toml` 是受保护路径：不可读、不可写、不可列出，因此代理不能修改自己的权限、历史或审计记录。
 会话数据库完全位于工作区之外。
 
-安全测试和 Hypothesis 属性测试会生成大量路径片段交给规范化器，并断言没有一个输入能逃逸。这里适合
-用属性测试，因为要证明的是普遍命题“没有输入能越界”，不是几个手写样例恰好通过。
+安全测试和 Hypothesis 属性测试生成大量路径片段，验证“输入不能越界”这一普遍命题。
 
 ## Prompt injection：让结构守住权限
 
@@ -67,28 +79,13 @@ prompt 里出现了某个词就改变 `outside_workspace` 的判断。
 
 ## 诚实的限制
 
-请读 `docs/SECURITY.md` 的“已知限制”。Haven 有十二个编译进程序的工具和真正的 OS sandbox，但
-它不是容器或 VM。`repo.exec` 接收 argv 数组，不接收 shell 字符串；显式使用 `bash -c` 仍然可能，
+请读 `docs/SECURITY.md` 的“已知限制”。Haven 有十二个编译进程序的工具和 OS sandbox，但不是容器或
+VM。`repo.exec` 接收 argv 数组，不接收 shell 字符串；显式使用 `bash -c` 仍然可能，
 但必须审批，而且会在 sandbox 中运行。审批可以绑定人类看到的解释器和字符串，却不能预测解释器内部
 尝试的每一种效果；能力边界来自 kernel profile，不是 digest。
 
 登记的 check 是用户写入的权威配置。在不支持 sandbox 的平台上，它仍可能运行，这保留了“用户信任自己
-仓库”的假设。安全设计不是假装没有这个假设，而是把它写出来。
-
-## 练习
-
-1. **越界尝试。** 为安全测试加入三个你认为可能逃逸的路径：双分隔符、Unicode 相似字符、符号链接链。
-2. **让审批漂移。** 批准编辑后修改 `new_string`，断言旧审批不再授权。到底是哪一个 digest 字段变了？
-3. **分类危险工具。** 假设加入 `repo.chmod`，它应该归入哪一类？在 `read_only` 模式下拒绝它的
-   原因码是什么？
-4. **论证限制。** 用三句话区分：审批 digest 对显式 `bash -c` 能证明什么，以及只有 OS sandbox
-   才能证明什么。
-
-## 自测
-
-- 为什么 policy 的输入必须是程序采集的 facts，而不是模型参数？
-- 审批 digest 绑定哪五样东西？每一样防止什么？
-- TOCTOU 窗口在哪里？程序怎样关闭它？
+仓库”的假设。这个假设必须显式记录。
 
 ## 延伸阅读
 

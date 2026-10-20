@@ -78,29 +78,6 @@ both are documented in `docs/EVAL_LIVE.md`:
    map) lives in the adapter. This is the adapter layer doing exactly its job:
    absorbing a wire quirk so the core keeps its clean vocabulary.
 
-## Exercises
-
-1. **Trace an event.** In `openai_compatible.py`, follow a single SSE line from
-   bytes to a `ModelEvent`. Where would you add support for a provider that
-   sends tool-call arguments as a single blob instead of deltas?
-2. **Author a turn.** Write a JSON turn for `ScriptedModel` that emits some text,
-   then a `repo.read` tool call, then finishes. Run it through the pattern in
-   `tests/contract/test_scripted_model.py`.
-3. **Add a failure test.** Using `respx`/`httpx.MockTransport` as in
-   `tests/contract/test_openai_compatible.py`, assert that a 429 maps to
-   `rate_limited` and that a made-up API key never appears in the raised error.
-4. **(Live, optional)** Point Haven at any OpenAI-compatible endpoint and run
-   `uv run haven verify-provider --yes`. Read the output: TTFT, usage, and — for
-   a reasoning model — the reasoning-vs-answer character split.
-
-## Self-check
-
-- Why is `ModelPort` owned by the core rather than imported from an adapter?
-- A colleague wants to "just pass the OpenAI response object around, it's
-  simpler." Give the concrete cost in terms of testing and provider swap.
-- Why does a mid-stream failure need different handling from a failure before the
-  first event? (Module 05 makes this precise with the retry policy.)
-
 ## Further reading
 
 - ADR 0001 for the stack and single-provider-plus-fake decision.

@@ -14,6 +14,18 @@
 - 把运行重放为日志的纯投影，而不是再次运行；
 - 设计只能收紧、不能放宽安全边界的配置层级。
 
+## 本课路线
+
+- **前置：** 模块 03 的副作用边界，模块 05 的状态机，模块 06 的证据顺序。
+- **建议用时：** 60 分钟。
+- **阅读顺序：** 先用三种磁盘状态读恢复测试，再读 `RecoveryService.inspect`；理解三态分类后，
+  再读 SQLite schema 和 replay。
+- **最小验证：**
+
+```bash
+uv run pytest -q tests/recovery/test_recovery.py tests/contract/test_session_store.py
+```
+
 ## 检查点和日志不是一回事
 
 只有检查点不够：进程可能恰好死在“副作用已经发生”和“程序记录它已经发生”之间。Haven 同时保留两类记录：
@@ -26,7 +38,7 @@
 
 两者冲突时，以日志为准。检查点是方便恢复的缓存，日志才是事实依据。
 
-## 最重要的规则：不明确，就不要自动重放
+## 不明确，就不要自动重放
 
 阅读 `RecoveryService.inspect`。恢复时，它会找出所有已经 `started` 却没有 `confirmed` 的副作用，
 再用磁盘当前 digest 和记录中的 preimage/postimage 比较：
@@ -43,7 +55,7 @@
 haven reconcile RUN_ID CALL_ID --as confirmed|not_run|abandon
 ```
 
-Haven 不猜，因为重复一个可能已经完成的写入，比停下来问人更糟。
+不明确时停止，避免重复一个可能已完成的写入。
 
 > 如果你无法证明副作用没有发生，就不要重复它。
 
@@ -56,7 +68,7 @@ Haven 不猜，因为重复一个可能已经完成的写入，比停下来问�
 纯 reducer，因此 `haven replay` 能重建等价屏幕。这也解释了 golden trace 测试为什么可以断言 TUI
 和 headless 产生相同 Trace：两者都是日志消费者。
 
-## 值得照搬的持久化细节
+## 持久化细节
 
 阅读 `sqlite_session.py`：
 
@@ -64,8 +76,8 @@ Haven 不猜，因为重复一个可能已经完成的写入，比停下来问�
   碰到会话数据库；
 - `(run_id, seq)` 唯一；每个事件存储 content digest，加载时再次验证；
 - 审批消费是条件 `UPDATE`：同时匹配 id、digest 和 `consumed_at IS NULL`，一次性保证落在数据库层；
-- `memory_session.py` 实现同一个 port，契约测试对内存和 SQLite 两种实现运行同一套测试，防止快速替身
-  和真实实现渐渐分叉。
+- `adapters/memory_session.py` 实现同一个 port，契约测试对内存和 SQLite 两种实现运行同一套测试，防止
+  快速替身和真实实现渐渐分叉。
 
 ## 只能收紧的配置
 
@@ -75,21 +87,6 @@ agent policy。
 
 recipe 可以声明固定的进程能力，例如网络和可读取的根目录，因为它来自用户配置而非模型输入。secret
 只能来自环境变量，系统只报告存在或缺失，绝不打印值。
-
-## 练习
-
-1. **模拟崩溃。** 构造一个 edit 已 `started` 但未 `confirmed` 的运行，分别让文件匹配 preimage、
-   postimage，以及两者都不匹配；观察恢复、自动校正和阻塞。
-2. **破坏检查点。** 在测试中修改 checksum，断言加载器默认失败。
-3. **重放。** 运行一个脚本流程，再执行 `haven replay RUN_ID`，确认不会调用模型或工具。
-4. **只收紧。** 写一个试图把 `max_steps` 调高到默认值以上的 `.haven.toml`，用
-   `haven config explain` 证明它没有生效。
-
-## 自测
-
-- 检查点和日志各自解决什么问题？谁是权威？
-- 用一句话说出“不明确副作用”的处理规则。
-- 一次性审批的保证在物理上位于哪里？为什么条件 `UPDATE` 是正确原语？
 
 ## 延伸阅读
 

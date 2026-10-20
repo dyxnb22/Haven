@@ -77,32 +77,6 @@ need it.
   vocabulary. Note `TRANSIENT_KINDS` — the events that reach the UI but are
   never persisted (streaming deltas). Ask: why are those two different?
 
-## Exercises
-
-1. **Classify.** For each item, say whether it is State, Context, ModelResult,
-   or Trace, and name the file it would live in:
-   (a) the digest of a file the agent read on step 2;
-   (b) the assistant's streamed "let me look at the parser" text;
-   (c) the fact that `repo.edit` was denied by policy on step 4;
-   (d) the exact set of messages sent to the provider on step 5.
-2. **Find the boundary.** Grep for `httpx` and `aiosqlite` across `src/haven`.
-   Which packages import them, and which never do? Explain the pattern in terms
-   of the one idea above.
-3. **Break it on paper.** Suppose you moved the budget counter into `RunContext`
-   and let the context builder read it directly (it already can). Now suppose a
-   junior dev "helpfully" lets the model write to State to "remember things."
-   Describe the injection attack this opens.
-
-## Self-check
-
-- Why is "the model said it finished" not acceptable as a success signal? (You
-  will build the real answer in Module 06, but you should be able to argue it
-  now.)
-- A teammate says "State and Context are the same thing, you're overcomplicating
-  it." Give the two-sentence rebuttal grounded in a concrete payoff.
-- Which of the four concepts is the *authority* on what happened, and why can't
-  it be the transcript the model sees?
-
 ## Further reading
 
 - ADR 0002 for the execution-boundary decision this module motivates.

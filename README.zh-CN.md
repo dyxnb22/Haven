@@ -184,7 +184,7 @@ uv run python scripts/gates.py --list        # 检查图及其依赖
 | [`docs/SECURITY.md`](docs/SECURITY.md) | 资产、主体、攻击面、防御和限制 |
 | [`docs/EVAL.md`](docs/EVAL.md) | 用例设计、指标、离线与实时评估 |
 | [`docs/EVAL_LIVE.md`](docs/EVAL_LIVE.md) | 每次真实模型测量及其暴露的缺陷 |
-| [`course/`](course/README.md) | 一个推导模块加十个分层模块，教你从这个仓库学习代理工程 |
+| [`course/`](course/README.md) | 三门零基础预备课、一个推导模块和十个分层模块，教你从这个仓库学习代理工程 |
 | [`docs/DEMO.md`](docs/DEMO.md) | 2–3 分钟演示脚本 |
 | [`docs/PROJECT_CARD.md`](docs/PROJECT_CARD.md) | 一页式摘要、测量结果和权衡 |
 | [`docs/RESUME.zh-CN.md`](docs/RESUME.zh-CN.md) | 可直接拼接进简历的中文项目条目和面试讲述提纲 |
@@ -200,7 +200,7 @@ uv run python scripts/gates.py --list        # 检查图及其依赖
 
 ## 从这个仓库学习
 
-`course/` 是一套自学课程，带你通过阅读和扩展这个仓库来构建生产级编码代理。课程从“从零推导”开始，之后依次讲 Provider 契约、工具执行通道、Evidence Gate、持久化恢复和评估；所有模块都指向真实文件、ADR、测试和实时模型失败案例。课程完全离线运行，最后以结业项目收尾。从 [`course/README.md`](course/README.md) 开始。
+`course/` 是一套自学课程，带你通过阅读和扩展这个仓库来构建生产级编码代理。三门预备课先从零讲清 LLM、Tool Calling 与 Agent，补齐阅读 Haven 所需的 Python 构件，再带你跑通一条完整离线 Trace；之后从故障推导系统，并依次深入 Provider 契约、工具执行通道、Evidence Gate、持久化恢复和评估。所有模块都指向真实文件、ADR、测试和实时模型失败案例。课程完全离线运行，最后以结业项目收尾。从 [`course/README.md`](course/README.md) 开始。
 
 ## 设计参考
 

@@ -15,6 +15,19 @@
 - 让上下文由程序确定性选择，而不是无限累积；
 - 安全重试模型调用，并明确什么时候绝不能重试。
 
+## 本课路线
+
+- **前置：** 模块 01 的 State / Context，模块 03 的 `ToolResult`。
+- **建议用时：** 60–75 分钟。
+- **阅读顺序：** 先从 `StopReason` 枚举和预算测试建立边界，再读 `_drive` 主循环，最后单独研究
+  `ContextBuilder` 和 provider retry；不要同时追四条支线。
+- **最小验证：**
+
+```bash
+uv run pytest -q tests/unit/test_budget.py tests/unit/test_stuck.py \
+  tests/unit/test_context_builder.py tests/integration/test_provider_retry.py
+```
+
 ## 循环的职责
 
 `RunService._drive` 可以概括为：
@@ -26,12 +39,11 @@ Model → Tool(s) → Observation → Model → …
 它持续运行，直到程序决定停止。每一步开始前检查预算、计入步数、构建 Context，然后流式调用模型。
 模型如果提出工具，就交给工具通道；如果给出最终回答，就交给 Evidence Gate 判断。
 
-最值得复制的纪律是：**只有一个 `_finish`，而且它总会写出一个 `StopReason`。** 例如
+系统只有一个 `_finish`，而且它总会写出一个 `StopReason`。例如
 `final_answer`、`evidence_satisfied`、`evidence_missing`、`step_budget_exhausted`、
 `no_progress`、`provider_error`、`cancelled` 和 `verification_unavailable`。
 
-一次运行不能在“好像停了”的未知状态里结束。如果你说不出它为什么停止，那不是日志问题，而是 bug。
-状态迁移还会经过 `domain/transitions.py`；非法迁移直接抛异常，让状态机错误尽早暴露。
+运行不能在未知状态里结束。状态迁移经过 `domain/transitions.py`；非法迁移直接抛异常。
 
 ## 预算是代理无法抬高的天花板
 
@@ -42,13 +54,12 @@ ADR 0006 不只记录默认值（24 步、48 次工具调用），还记录推�
 read/edit/create/diff/check/answer，再加大约三轮修复—验证。第一版预算是 12/24，刚好在本应恢复时
 截断运行，只留下一个 `step_budget_exhausted`，掩盖了真正结果。
 
-预算不是“让程序别跑太久”的模糊开关，而是一个有名字、有解释的运行结果。它应该根据真实工作量设置，
-并在评估中验证。
+预算应根据真实工作量设置，并在评估中验证；命中预算时必须产生明确的停止原因。
 
 ## 卡死循环要尽早停
 
 `domain/stuck.py` 记录工具、参数和结果。如果三次连续调用完全相同，运行判定为 `no_progress`。
-这种检测便宜、确定，而且不依赖剩余预算；模型原地打转时，不会先把 token 全部烧光才被发现。
+检测不依赖剩余预算，因此能在耗尽 token 前停止重复行为。
 
 ## Context 是选择结果，不是聊天记录的堆积
 
@@ -81,21 +92,6 @@ read/edit/create/diff/check/answer，再加大约三轮修复—验证。第一�
 在线运行还发现，中途断流也可以重试：本轮组装中的文本和工具调用只存在于当前尝试，整轮完成前不会
 进入 transcript。UI 收到 `stream.restarted`，丢弃已经显示的半截内容。重试逻辑和上限由
 `tests/integration/test_provider_retry.py` 固定。
-
-## 练习
-
-1. **预测停止原因。** 运行 `test_agent_journeys.py` 中三个脚本流程，先预测各自的 `StopReason`，
-   再查看结果。
-2. **强制预算停止。** 使用 `Budget(max_steps=2)` 和一个永不结束的模型，断言它在第 2 步停止，原因
-   是 `step_budget_exhausted`。
-3. **证明前缀稳定。** 在两轮之间推进预算计数器，断言只有尾部消息变化。
-4. **解释重试边界。** 为什么模型调用可以重试，工具调用不行？这依赖模块 03 的哪一条不变量？
-
-## 自测
-
-- 给出三个不同的 `StopReason`，以及各自的触发条件。
-- 为什么不能用模型写的摘要做截断策略？
-- 计划存在哪里？它为什么同时影响截断安全性和缓存命中率？
 
 ## 延伸阅读
 

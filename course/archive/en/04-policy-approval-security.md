@@ -93,26 +93,6 @@ will attempt — the kernel profile, not the digest, bounds capability. Register
 checks are user-authored authority and may run without a backend on an unsupported
 platform, which is why the locally-trusted-repository assumption remains.
 
-## Exercises
-
-1. **Escape attempts.** Add three path inputs to the security tests that you
-   think might escape (try a doubled separator, a Unicode look-alike, a symlink
-   chain). Confirm they fail closed.
-2. **Drift an approval.** Write a test that approves an edit, then changes
-   `new_string`, and asserts the old approval no longer authorizes execution.
-   Which field of the digest changed?
-3. **Classify a dangerous tool.** Suppose someone adds `repo.chmod`. Where does
-   it go in the policy, and what is the reason code for denying it in
-   `read_only` mode?
-4. **Argue the caveat.** In three sentences, distinguish what the approval digest
-   proves about an explicit `bash -c` call from what only the OS sandbox proves.
-
-## Self-check
-
-- Why must policy inputs be program-collected facts rather than model arguments?
-- What five things does the approval digest bind, and what does each prevent?
-- What is the TOCTOU window here, and how is it closed?
-
 ## Further reading
 
 - `docs/SECURITY.md` in full — this module is its walkthrough.

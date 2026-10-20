@@ -95,26 +95,6 @@ never reach the transcript until the turn completes. The UI is told to discard
 what it showed via a `stream.restarted` event. `tests/integration/test_provider_retry.py`
 pins both the retry and its bounds.
 
-## Exercises
-
-1. **Name the stop.** Run three scripted journeys from `test_agent_journeys.py`
-   and, for each, predict the `StopReason` before you look.
-2. **Force a budget stop.** Write a scripted run with `Budget(max_steps=2)` and a
-   model that never finishes; assert `step_budget_exhausted` and that it stopped
-   at step 2, not later.
-3. **Prove the prefix.** Extend `TestPrefixStability`: advance the budget counter
-   between two turns and assert that only the trailing message differs.
-4. **Reason about retry.** Explain why retrying a tool call would be unsafe even
-   though retrying a model call is fine. Which invariant from Module 03 is at
-   stake?
-
-## Self-check
-
-- Give three distinct `StopReason`s and the condition that produces each.
-- Why is model-written summarization banned as a truncation strategy?
-- Where does the plan live, and why does that placement matter twice (truncation
-  *and* caching)?
-
 ## Further reading
 
 - ADR 0006 (planning + budgets) and ADR 0008 (prefix ordering).

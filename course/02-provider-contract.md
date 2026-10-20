@@ -15,10 +15,21 @@
 - 用脚本模型让整套系统可以离线、免费、确定性地测试；
 - 理解 fake 为什么是承重结构，而不是测试捷径。
 
+## 本课路线
+
+- **前置：** 模块 01 中 ModelResult 与 Context 的区别；了解 async iterator 更容易阅读流式代码。
+- **建议用时：** 45–60 分钟。
+- **阅读顺序：** 先从两个契约测试看期望事件，再读 `contracts/model.py` 的事件 union，最后进入
+  `openai_compatible.py` 的线格式解析。
+- **最小验证：**
+
+```bash
+uv run pytest -q tests/contract/test_scripted_model.py tests/contract/test_openai_compatible.py
+```
+
 ## 先把 provider 关在适配器里
 
-代理不应该知道自己正在和哪家 provider 对话。一旦 OpenAI 的字段名渗进循环，换 provider 会变难，
-离线测试会被迫模拟 HTTP 细节，provider 的怪癖也会变成核心 bug。
+核心不应知道具体 provider。否则换 provider 会成为跨层修改，离线测试也被迫模拟 HTTP 细节。
 
 Haven 用三层把边界画清楚：
 
@@ -30,7 +41,7 @@ Haven 用三层把边界画清楚：
 - **适配器**（`adapters/providers/`）：只有这里处理 SSE、`choices[].delta` 或 DeepSeek 的
   cache 字段。脚本模型也实现同一个端口，只是把预先写好的事件重新播放出来。
 
-核心依赖端口，而不是某个 provider 的 SDK；这使“换 provider”和“离线测试”成为局部工作。
+核心只依赖端口，因此 provider 替换和离线测试都是局部工作。
 
 ## 真正危险的地方在流式传输
 
@@ -49,8 +60,7 @@ Haven 用三层把边界画清楚：
 `ScriptedModel` 从普通 JSON 读取一组 turn，每个 turn 又是一组 `ModelEvent`，然后按顺序重放。
 因此整套测试和离线评估都不需要网络，也不消耗 token，而且每次运行都能复现。
 
-这里的设计教训是：一开始就把 fake 当作一等公民。如果事后才补，核心代码已经到处假设某个真实
-provider 的行为，到那时再做离线替身会非常痛苦。
+fake 与真实 adapter 使用同一端口，避免核心依赖某家 provider 的行为。
 
 ## 两个只有真实模型才会暴露的怪癖
 
@@ -63,23 +73,6 @@ provider 的行为，到那时再做离线替身会非常痛苦。
 2. **带命名空间的工具名被拒绝。** API 对函数名限制为 `^[a-zA-Z0-9_-]+$`，所以 `repo.read`
    会返回 400。点号是核心词汇的一部分，适配器负责在请求中使用 `repo__read`，并维护本次请求的
    精确反向映射。核心不必为线格式的限制改名。
-
-## 练习
-
-1. **跟一条事件。** 在 `openai_compatible.py` 中跟踪一行 SSE 从字节到 `ModelEvent` 的过程。
-   如果某 provider 一次性发送完整的工具参数，而不是增量发送，你会在哪一层处理？
-2. **编写一个 turn。** 为 `ScriptedModel` 写一组 JSON：先输出文本，再提出 `repo.read`，最后结束。
-   按 `tests/contract/test_scripted_model.py` 的方式运行它。
-3. **写失败测试。** 使用 `respx` 或 `httpx.MockTransport`，断言 429 映射到 `rate_limited`，
-   并确认伪造的 API key 不会出现在错误中。
-4. **可选在线练习。** 配置 key 后运行 `uv run haven verify-provider --yes`，观察 TTFT、用量，
-   以及推理模型的 reasoning/answer 字符拆分。
-
-## 自测
-
-- 为什么 `ModelPort` 应由核心拥有，而不是从某个 adapter 导入？
-- 如果同事说“直接把 OpenAI response object 传遍系统更简单”，它会怎样伤害测试和 provider 替换？
-- 流中途失败为什么不能和首事件之前失败一视同仁？模块 05 会把重试边界讲清楚。
 
 ## 延伸阅读
 

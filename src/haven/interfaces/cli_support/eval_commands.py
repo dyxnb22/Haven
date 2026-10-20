@@ -1,4 +1,4 @@
-"""离线和在线评估命令。"""
+"""提供 Haven 离线评估和真实模型评估的命令。"""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ def eval_command(
     cases: Path = typer.Option(Path("evals/cases"), "--cases", help="Directory of case JSON."),
     out: Path = typer.Option(Path("eval_report"), "--out", help="Report output directory."),
 ) -> None:
-    """运行评估套件并写入 JSON + Markdown 报告。"""
+    """运行评估案例，并生成 JSON 和 Markdown 报告。"""
     categories = tuple(c.strip() for c in category.split(",") if c.strip())
 
     if offline:

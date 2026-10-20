@@ -78,28 +78,6 @@ This is a recurring theme you should steal: for a well-defined class of defects,
 a deterministic check beats a probabilistic one on cost, latency, *and*
 reliability. Save the model for the fuzzy problems.
 
-## Exercises
-
-1. **Order matters.** Using the helpers in `test_evidence_gate.py`, construct a
-   ledger with a passing check *before* the last edit and assert the gate does
-   **not** pass. Then move the check after and watch it pass.
-2. **Unwinnable.** Write an integration run with no recipes where the model
-   edits a file; assert it stops at `verification_unavailable` after ~3 steps,
-   not at budget exhaustion. (See `TestUnwinnableEvidenceGate`.)
-3. **Fool the reviewer (you can't, easily).** Add a diff that inserts an AWS key
-   and assert `review_failed`; then add one that only *removes* a line containing
-   a secret and assert it does **not** flag (only added lines count).
-4. **Extend review.** Add a check for an added line longer than, say, 5000 chars
-   (a likely accidental paste). Write its test first.
-
-## Self-check
-
-- Why is "the model said done" insufficient, and what is the minimal evidence
-  for a run that edited files?
-- Why must evidence be sequence-stamped?
-- Give the general rule an "unwinnable gate" teaches about retry loops.
-- When is a deterministic check the *right* choice over a model reviewer?
-
 ## Further reading
 
 - ADR 0003 (gate) and ADR 0007 (why not a reviewer agent).

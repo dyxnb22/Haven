@@ -15,21 +15,33 @@
 - 明确只有在线运行才能回答的问题；
 - 用前后测量和诚实的限定做成本工程。
 
+## 本课路线
+
+- **前置：** 模块 02 的 scripted/real provider 边界，模块 06 的 Evidence Gate。
+- **建议用时：** 60 分钟；在线练习另计，并会产生费用。
+- **阅读顺序：** 先读一个 case JSON，再看 runner 如何建立临时工作区，最后对照报告字段；只有在能
+  解释离线评估边界后才阅读在线历史数字。
+- **最小验证：**
+
+```bash
+uv run pytest -q tests/eval/test_eval_suite.py
+uv run haven eval --offline
+```
+
 ## 把离线评估当作 CI 门禁
 
 打开 `evalkit/runner.py`。每个用例是 `evals/cases/` 中的 JSON：它指定一个 fixture、脚本模型的
 turn、注册的检查 recipe 和预期结果。运行时复制 fixture 到临时目录，使用真实的 RunService、工具管线、
 文件系统和子进程执行器，只有模型被替换成脚本模型。
 
-因此它快速、免费、确定，而且测试的不是一堆 mock，而是真实应用栈。
+因此评估快速、免费、确定，同时覆盖模型之外的真实应用栈。
 
 无论用例自己的预期是什么，每个用例都必须满足两条全局不变量：
 
 1. `expect.allowed_changed_files` 之外不能有文件变化；
 2. `transcript_must_not_contain` 指定的禁止字符串不能进入模型 transcript。
 
-这些安全不变量与任务是否成功、是否修改了工作区范围外的文件分别报告。ADR 0005 的关键不是“多了
-一个评估命令”，而是拒绝把安全和质量平均成一个分数：如果任务成功率很高，安全回归也不能藏在平均数里。
+安全不变量与任务成功分别报告，不能平均成一个分数；高任务成功率不能掩盖安全回归。
 `haven eval --offline` 会单独打印 `security violations: N`，只要不是 0，CI 就失败。
 
 `tests/eval/test_eval_suite.py` 把整套评估当普通测试运行，这样门禁不会因为没人手动运行而腐烂。
@@ -60,23 +72,7 @@ oracle，确认有 bug 时为红、还原后为绿，再用真实 provider 驱�
    是模型噪声，不能归因于这项修改。
 
 `evals/compare_prompt.py` 可以离线计算上下文变化带来的确定性部分（新增字节/token）。在线百分比
-位于 `EVAL_LIVE.md`，并明确标成不可复现。能精确计算的地方就计算，不能精确计算的地方就标成估计；
-这才是成本数据应有的诚实程度。
-
-## 练习
-
-1. **添加用例。** 在 `generate_cases.py` 中为尚未覆盖的任务类型写一个离线用例，明确填写
-   `allowed_changed_files`，重新生成 JSON，运行 `uv run haven eval --offline` 并确认安全违规为 0。
-2. **触发安全门禁。** 写一个脚本模型试图编辑受保护路径，确认 policy 拒绝它，并且报告中出现安全违规。
-3. **按类别切片。** 运行 `uv run haven eval --offline --category security,injection`，检查数量是否符合预期。
-4. **可选在线练习。** 设置 key 后运行 `uv run haven eval --live --yes --category task`，阅读摘要中的
-   cache-hit 率，再与 `EVAL_LIVE.md` 对照。
-
-## 自测
-
-- 为什么安全指标必须与任务成功分开报告？
-- 说出两类只有在线运行才能发现的缺陷，以及两类离线评估更适合确定性覆盖的缺陷。
-- 89% 这个数字单独不能证明什么？
+位于 `EVAL_LIVE.md`，并明确标成不可复现。能精确计算就计算，否则标成估计并说明边界。
 
 ## 延伸阅读
 

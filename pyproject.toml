@@ -3,9 +3,7 @@ name = "haven"
 version = "0.1.0"
 description = "Evidence-driven, replayable local TUI Coding Agent"
 readme = "README.md"
-authors = [
-    { name = "diaoyuxuan", email = "714833073@qq.com" },
-]
+authors = [{ name = "diaoyuxuan", email = "714833073@qq.com" }]
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
@@ -21,6 +19,7 @@ dependencies = [
 [project.scripts]
 haven = "haven.interfaces.cli:app"
 
+# 开发时用的依赖组
 [dependency-groups]
 dev = [
     "coverage",
@@ -34,17 +33,11 @@ dev = [
     "ruff",
 ]
 # evals/real 中固定版本第三方仓库仅用于测试的依赖
-#（它们的测试套件必须在此虚拟环境中通过；见 evals/real/repos.lock）：
-# markupsafe + trio 是 jinja 声明的测试依赖，wcag-contrast-ratio 是 pygments
-# 的依赖。它们纯粹用于测试基础设施，Haven 本身不会导入任何一个。
-real-evals = [
-    "markupsafe",
-    "trio",
-    "wcag-contrast-ratio",
-]
+#（它们的测试套件必须在此虚拟环境中通过；见 evals/real/repos.lock）： markupsafe + trio 是 jinja 声明的测试依赖，wcag-contrast-ratio 是 pygments 的依赖。它们纯粹用于测试基础设施，Haven 本身不会导入任何一个。
+real-evals = ["markupsafe", "trio", "wcag-contrast-ratio"]
 
-[tool.uv]
-default-groups = ["dev", "real-evals"]
+[tool.uv] # 专门给 uv 用的
+default-groups = ["dev", "real-evals"] # 默认同步项目依赖时，也安装 dev 和 real-evals 这两个依赖组
 
 [build-system]
 requires = ["uv_build>=0.12.3,<0.13.0"]

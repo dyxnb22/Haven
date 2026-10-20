@@ -15,25 +15,39 @@
 - 把模型和仓库文本视为 renderer 的不可信输入，而不只是模型的不可信输入；
 - 在没有真实终端、没有网络的情况下，确定性测试 hostile input 和取消行为。
 
+## 本课路线
+
+- **前置：** 模块 01 的 Trace，模块 07 的 replay；不要求熟悉 Textual。
+- **建议用时：** 45 分钟。
+- **阅读顺序：** 先直接调用纯 `reduce`，再读 presenter 测试，最后看 `app.py` 怎样接线；不要从
+  widget 生命周期开始。
+- **最小验证：**
+
+```bash
+uv run pytest -q tests/tui/test_presenter.py tests/golden/test_golden_trace.py
+```
+
 ## UI 只做接口，而且由依赖规则强制保证
 
 ADR 0001 和 CI 中的 import-linter 共同约束：TUI 把用户意图转成服务调用，从共享事件流渲染视图状态。
 它不能拥有 policy、executor 或 provider。
 
-如果 TUI 自己决定权限，系统就会有两套必须保持一致的安全模型；正确的架构是只有一套，而且它不在 UI 里。
+TUI 若自行决定权限，系统就会出现两套安全模型；权限逻辑必须留在应用与领域层。
 
 ## Presenter 是纯 reducer
 
 阅读 `presenter.py`。核心是：
 
-```text
-reduce(state, event) -> state
+```python
+def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
+    event = envelope.event
+    ...
 ```
 
-它把上一个 `PresenterState` 和一个 `ApplicationEvent` 纯粹地变成下一个状态：没有 I/O、没有 widget、
-没有时钟。真正的 Textual 壳 `app.py` 只负责接收事件，再把 reducer 产生的状态画出来。
+它把 `PresenterState` 和 `EventEnvelope`（包含 `ApplicationEvent` 与序号）变成下一个状态，不做 I/O，
+也不接触 widget 或时钟。Textual 壳 `app.py` 只接收事件并渲染 reducer 的结果。
 
-这个形状有三个具体收益：
+它带来三个结果：
 
 - **无需终端也能测试。** `test_presenter.py` 直接构造事件调用 `reduce`，不需要 Textual、异步或屏幕；
 - **重放天然可用。** live 事件和 journal 事件经过同一个 reducer，`haven replay` 可以重建屏幕；
@@ -60,21 +74,6 @@ policy 或 OS sandbox。
 
 审批对话框展示精确 diff 和授权它的 digest。用户在这里确认的只是当前待处理动作，不能顺手批准别的动作。
 `test_tui_journey.py` 完全离线地驱动整个流程：提交任务、批准 edit 和 check、确认成功，并确认文件确实变化。
-
-## 练习
-
-1. **手动 reducer。** 参考 `test_presenter.py`，依次把 `RunCreated`、`StepStarted`、
-   `ToolProposed`、`RunFinished` 送入 `reduce`，断言最终 `PresenterState`。不需要启动 Textual。
-2. **恶意输入。** 给 presenter 传入包含 `\x1b[2J`（清屏）的模型文本，断言它不会出现在
-   `PresenterState`。
-3. **证明等价。** 阅读 golden trace 测试，用本模块的术语解释 TUI 与 headless 为什么必须生成相同 Trace。
-4. **拒绝审批。** 扩展 `test_tui_journey.py`，加入在审批 modal 拒绝的运行，并断言文件保持不变。
-
-## 自测
-
-- Presenter 是纯 reducer，具体换来了哪三种能力？
-- 为什么仓库文本对 renderer 也是不可信输入，而不只是对模型不可信？
-- `haven replay` 不调用模型，怎样重建屏幕？
 
 ## 延伸阅读
 

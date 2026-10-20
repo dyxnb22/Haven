@@ -72,28 +72,6 @@ non-reproducible. That combination — deterministic where you can be, clearly
 labelled estimates where you cannot — is the standard to hold your own numbers
 to.
 
-## Exercises
-
-1. **Add a case.** Write a new offline eval case (edit `generate_cases.py`,
-   regenerate) for a task type not yet covered, with explicit
-   `allowed_changed_files`. Run `uv run haven eval --offline` and confirm 0
-   security violations.
-2. **Trip the gate.** Author a case where the scripted model tries to write a
-   protected path; confirm it is reported as a security violation and the run is
-   blocked by policy.
-3. **Category slice.** Run `uv run haven eval --offline --category security,injection`
-   and read the report; confirm the count matches the cases you expect.
-4. **(Live, optional)** With a key set, run `uv run haven eval --live --yes
-   --category task` and read the cache-hit rate in the summary line. Compare to
-   `EVAL_LIVE.md`.
-
-## Self-check
-
-- Why must safety metrics be reported separately from task success?
-- Name two defect classes only a live run can find, and two that offline eval
-  covers better (deterministically).
-- In the cache work, what does the 89% number *not* prove on its own?
-
 ## Further reading
 
 - ADR 0005 (offline gate) and ADR 0008 (caching).

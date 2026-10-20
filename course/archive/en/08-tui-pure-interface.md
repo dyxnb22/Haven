@@ -27,8 +27,8 @@ must be one, and it is not in the UI.
 
 ## The presenter is a pure reducer
 
-Read `presenter.py`. Its core is `reduce(state, event) -> state`: a pure function
-from the previous `PresenterState` and one `ApplicationEvent` to the next state.
+Read `presenter.py`. Its core is `reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState`: a pure function
+from the previous `PresenterState` and one `EventEnvelope` (wrapping an `ApplicationEvent`) to the next state.
 No I/O, no widgets, no time. `app.py` is the thin Textual shell that feeds events
 in and renders whatever state comes out.
 
@@ -71,25 +71,6 @@ The approval dialog shows the exact diff and the digest that authorizes it
 anything else. The Pilot journey test (`test_tui_journey.py`) drives the whole
 thing offline: submit a task, approve the edit and the check, assert success and
 that the file changed.
-
-## Exercises
-
-1. **Reduce by hand.** Using `test_presenter.py` as a model, feed a
-   `RunCreated`, a `StepStarted`, a `ToolProposed`, and a `RunFinished` into
-   `reduce` and assert the resulting `PresenterState`. No Textual needed.
-2. **Hostile input.** Add a presenter test that feeds model text containing
-   `\x1b[2J` (clear screen) and asserts it never reaches `PresenterState`.
-3. **Prove the equivalence.** Read the golden trace test. Explain, in terms of
-   this module, why TUI and headless *must* produce the same trace.
-4. **(Pilot)** Extend `test_tui_journey.py` with a run that gets rejected at the
-   approval modal and assert the file is untouched.
-
-## Self-check
-
-- What does "the presenter is a pure reducer" buy you, concretely, three ways?
-- Why is repository text an untrusted input to the renderer and not only to the
-  model?
-- How can `haven replay` rebuild the screen without calling the model?
 
 ## Further reading
 

@@ -85,29 +85,6 @@ backend hiccup, wrap execution errors as results). When you build your own
 channel, write this test *first*; it is the one that catches the scariest class
 of bug — the one that takes down the whole run.
 
-## Exercises
-
-1. **Narrate the channel.** Take the `repo.edit` journey from
-   `test_agent_journeys.py` and annotate each event (`tool.proposed`,
-   `policy.decided`, `approval.requested`, `execution.started`, `tool.completed`)
-   with the pipeline stage that emitted it.
-2. **Try to smuggle.** Attempt (on paper, then in a test) to make the executor
-   act on an argument the model supplied but the ticket did not bind. Explain why
-   you cannot.
-3. **Add a read-only tool.** Sketch a `repo.stat` tool: its args model, its
-   registry entry, its policy classification, and the one test that would fail if
-   you forgot to classify it.
-4. **Reproduce the containment bug.** Temporarily make `repo.search` raise on a
-   missing path (don't commit it) and watch a run abort; then see how the current
-   code turns it into a `not_found` result.
-
-## Self-check
-
-- What exactly does an `ExecutionTicket` bind, and why each field?
-- Why validate the JSON text rather than a parsed dict?
-- Give the invariant about tool failures in one sentence, and name the test that
-  guards it.
-
 ## Further reading
 
 - ADR 0002 for the boundary; `docs/SECURITY.md` §"single execution channel."

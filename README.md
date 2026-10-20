@@ -239,7 +239,7 @@ including one where the security gate itself was wrong.
 | `docs/SECURITY.md` | assets, principals, attack surface, defenses, limitations |
 | `docs/EVAL.md` | case design, metrics, offline vs. live eval |
 | `docs/EVAL_LIVE.md` | every live real-model measurement: five task tiers, zero-config discovery, a head-to-head vs a peer agent, and the harness defects each round exposed |
-| `course/` | one derivation module plus 10 layer modules that teach agent engineering from this repo |
+| `course/` | three beginner foundations, one derivation module, and 10 layer modules that teach agent engineering from this repo |
 | `docs/DEMO.md` | 2–3 minute walkthrough script |
 | `docs/PROJECT_CARD.md` | one-page summary, measured results, trade-offs |
 | [`docs/RESUME.zh-CN.md`](docs/RESUME.zh-CN.md) | concise Chinese résumé entry and interview talking points |
@@ -255,11 +255,13 @@ including one where the security gate itself was wrong.
 ## Learn from this repo
 
 `course/` is a self-paced course that teaches how to build a production-grade
-coding agent by reading and extending this one. A derive-it-from-scratch module
-is followed by ten layer modules — from the provider contract to the execution
-channel, Evidence Gate, durable recovery, and evaluation — each pointing at
-real files, ADRs, tests, and live-model failures. It runs fully offline (no API
-key) and ends with a capstone. Start at [`course/README.md`](course/README.md).
+coding agent by reading and extending this one. Three foundations first explain
+LLM/tool-call/agent basics, the Python constructs used by Haven, and a complete
+offline trace. A derive-it-from-scratch module is then followed by ten layer
+modules — from the provider contract to the execution channel, Evidence Gate,
+durable recovery, and evaluation — each pointing at real files, ADRs, tests, and
+live-model failures. It runs fully offline (no API key) and ends with a capstone.
+Start at [`course/README.md`](course/README.md).
 
 ## Design references
 

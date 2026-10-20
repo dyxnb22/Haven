@@ -17,7 +17,8 @@ Read these as the description of the frozen implementation:
 4. `docs/SECURITY.md` — trust model, enforcement, and explicit gaps.
 5. `docs/EVAL.md` and `docs/EVAL_LIVE.md` — what was measured and what the
    measurements do not prove.
-6. `course/` — the guided reading path through the implementation.
+6. `course/` — the guided reading path, including three no-Agent-experience
+   foundations before the implementation modules.
 
 `docs/codebase/` is a current audit companion. It summarizes the same code from
 the perspectives of structure, stack, testing, integrations, conventions, and
