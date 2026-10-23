@@ -50,10 +50,24 @@ class StopReason(StrEnum):
 
 
 class PermissionMode(StrEnum):
-    """特意只提供两种模式：不存在完全自主的写入模式。"""
+    """权限模式：区分写入权限的硬性边界（read_only 下策略层硬性 DENY 一切修改）。"""
 
     INTERACTIVE = "interactive"
     READ_ONLY = "read_only"
+
+
+class ApprovalMode(StrEnum):
+    """分级审批模式：控制当策略返回 ASK 时，如何对操作做出批准决断。
+
+    - ``ASK``（严格审查）：每次副作用均需人工审批卡片确认。
+    - ``SMART``（智能分级）：低/中风险操作自动放行，
+      仅高风险操作（删除、移动、大补丁、Shell）弹窗确认。
+    - ``FULL``（工作区自主）：工作区内只要策略允许 ASK，全部自动放行；DENY 仍不可逾越。
+    """
+
+    ASK = "ask"
+    SMART = "smart"
+    FULL = "full"
 
 
 class PolicyDecision(StrEnum):
@@ -84,6 +98,7 @@ class ToolErrorCode(StrEnum):
     AMBIGUOUS_MATCH = "ambiguous_match"
     TIMEOUT = "timeout"
     TRUNCATED = "truncated"
+    SYNTAX_ERROR = "syntax_error"
     INTERNAL = "internal"
     #: 进程修改了 `.git` / `.haven` / `.haven.toml`——这是内核无法强制保护的
     #: 边界（使用 Landlock 或没有沙箱后端时）。工具调用会失败，因此该违规

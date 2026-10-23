@@ -53,7 +53,14 @@ class RunTelemetry:
         )
         return digest
 
-    def charge_usage(self, ctx: RunContext, request: ModelRequest, result: ModelResult) -> None:
+    def charge_usage(
+        self,
+        ctx: RunContext,
+        request: ModelRequest,
+        result: ModelResult,
+        *,
+        pricing: Pricing | None = None,
+    ) -> None:
         """将提供商或估算的 token 用量计入运行统计和费用。"""
         usage = result.usage
         estimated = usage.estimated
@@ -75,7 +82,8 @@ class RunTelemetry:
             )
             input_tokens = max(1, input_chars // 4)
             output_tokens = max(1, output_chars // 4)
-        cost = self._pricing.cost(input_tokens, output_tokens, usage.cached_input_tokens)
+        active_pricing = pricing if pricing is not None else self._pricing
+        cost = active_pricing.cost(input_tokens, output_tokens, usage.cached_input_tokens)
         ctx.usage = ctx.usage.charge_tokens(
             input_tokens,
             output_tokens,

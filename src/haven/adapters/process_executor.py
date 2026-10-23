@@ -104,6 +104,11 @@ class ProcessExecutor:
         env = {key: os.environ[key] for key in ENV_ALLOWLIST if key in os.environ}
         sandbox.scratch_dir.mkdir(parents=True, exist_ok=True)
         env["TMPDIR"] = str(sandbox.scratch_dir)
+        # 强制非交互与禁用 ANSI 光标/彩色重绘，保障沙箱运行不受交互提示阻塞
+        env["CI"] = "1"
+        env["DEBIAN_FRONTEND"] = "noninteractive"
+        env["TERM"] = "dumb"
+        env["NO_COLOR"] = "1"
         env.update(self._extra_env)
 
         command = self._launcher.wrap(argv, sandbox) if self._launcher is not None else argv
@@ -149,7 +154,7 @@ class ProcessExecutor:
             out, out_trunc, err, err_trunc = b"", False, b"", False
             await self._shutdown(proc)
             await self._cancel_readers(stdout_task, stderr_task)
-        except asyncio.CancelledError:
+        except BaseException:
             await self._shutdown(proc)
             await self._cancel_readers(stdout_task, stderr_task)
             raise
@@ -220,7 +225,11 @@ class ProcessExecutor:
             elif proc.returncode is None:  # pragma: no cover - see above
                 proc.kill()
             if proc.returncode is None:
-                await proc.wait()
+                try:
+                    async with asyncio.timeout(1.0):
+                        await proc.wait()
+                except TimeoutError:
+                    pass
 
     @classmethod
     async def _cleanup_descendants(cls, proc: Process) -> None:
@@ -249,5 +258,5 @@ class ProcessExecutor:
     def _signal_group(process_group: int, sig: signal.Signals) -> None:
         try:
             os.killpg(process_group, sig)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError, OSError):
             return

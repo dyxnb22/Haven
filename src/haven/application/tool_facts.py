@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from haven.application.approval_cards import ToolPreview
+from haven.application.mcp_client import MCPClientManager
 from haven.application.state import RunContext
 from haven.contracts.model import ToolCallProposal
 from haven.contracts.tools import (
@@ -21,8 +22,12 @@ from haven.contracts.tools import (
     RepoExecArgs,
     RepoListArgs,
     RepoMoveArgs,
+    RepoOutlineArgs,
     RepoReadArgs,
     RepoSearchArgs,
+    RepoSymbolArgs,
+    SkillReadArgs,
+    TaskStartArgs,
     ToolArgs,
 )
 from haven.domain.digest import canonical_json, sha256_text
@@ -45,14 +50,19 @@ class ToolFactsCollector:
         workspace: WorkspacePort,
         recipes: dict[str, RecipeSpec],
         launcher: SandboxLauncher | None,
+        mcp_manager: MCPClientManager | None = None,
     ) -> None:
         self._workspace = workspace
         self._recipes = recipes
         self._launcher = launcher
+        self._mcp_manager = mcp_manager
         self.handlers: dict[str, FactsHandler] = {
             "repo.list": self._facts_path_read,
             "repo.search": self._facts_path_read,
             "repo.read": self._facts_path_read,
+            "repo.outline": self._facts_path_read,
+            "repo.symbol": self._facts_symbol,
+            "skill.read": self._facts_skill,
             "repo.edit": self._facts_edit,
             "repo.create": self._facts_create,
             "repo.delete": self._facts_delete,
@@ -62,21 +72,46 @@ class ToolFactsCollector:
             "repo.check": self._facts_check,
             "repo.diff": self._facts_stateless,
             "task.plan": self._facts_stateless,
+            "task.start": self._facts_task_start,
+            "task.status": self._facts_stateless,
+            "task.logs": self._facts_stateless,
+            "task.stop": self._facts_stateless,
+            "web.search": self._facts_stateless,
+            "web.fetch": self._facts_stateless,
         }
 
     async def collect(
         self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
     ) -> tuple[ToolFacts, ToolPreview]:
         """按工具类型收集路径、摘要、沙箱和预览事实，供策略与审批使用。"""
+        if call.tool_name.startswith("mcp."):
+            return await self._facts_mcp(ctx, call, args)
         handler = self.handlers.get(call.tool_name)
         if handler is None:  # pragma: no cover - 接线测试保证不可达
             return ToolFacts(tool_name=call.tool_name), None
         return await handler(ctx, call, args)
 
+    async def _facts_mcp(
+        self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
+    ) -> tuple[ToolFacts, ToolPreview]:
+        tool = self._mcp_manager.get_tool(call.tool_name) if self._mcp_manager else None
+        is_drifted = self._mcp_manager.is_drifted(call.tool_name) if self._mcp_manager else False
+        server_name = tool.server_name if tool else ""
+        is_read_only = tool.is_read_only if tool else False
+        return (
+            ToolFacts(
+                tool_name=call.tool_name,
+                mcp_server=server_name,
+                mcp_read_only=is_read_only,
+                mcp_schema_drift=is_drifted,
+            ),
+            None,
+        )
+
     async def _facts_path_read(
         self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
     ) -> tuple[ToolFacts, ToolPreview]:
-        assert isinstance(args, RepoListArgs | RepoSearchArgs | RepoReadArgs)
+        assert isinstance(args, RepoListArgs | RepoSearchArgs | RepoReadArgs | RepoOutlineArgs)
         facts = self._workspace.path_facts(args.path)
         return (
             ToolFacts(
@@ -84,6 +119,29 @@ class ToolFactsCollector:
                 within_workspace=facts.within_workspace,
                 touches_protected_path=facts.is_protected,
                 path=facts.normalized,
+            ),
+            None,
+        )
+
+    async def _facts_symbol(
+        self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
+    ) -> tuple[ToolFacts, ToolPreview]:
+        assert isinstance(args, RepoSymbolArgs)
+        if args.path:
+            facts = self._workspace.path_facts(args.path)
+            within = facts.within_workspace
+            is_protected = facts.is_protected
+            norm_path = facts.normalized
+        else:
+            within = True
+            is_protected = False
+            norm_path = "."
+        return (
+            ToolFacts(
+                tool_name=call.tool_name,
+                within_workspace=within,
+                touches_protected_path=is_protected,
+                path=norm_path,
             ),
             None,
         )
@@ -112,6 +170,7 @@ class ToolFactsCollector:
             args.new_string,
             occurrence=args.occurrence,
             replace_all=args.replace_all,
+            skip_syntax_check=args.skip_syntax_check,
         )
         return (
             ToolFacts(
@@ -131,7 +190,9 @@ class ToolFactsCollector:
         facts = self._workspace.path_facts(args.path)
         if not facts.within_workspace or facts.is_protected:
             return _path_denied(call, facts.within_workspace, facts.is_protected, facts.normalized)
-        preview = await self._workspace.preview_create(args.path, args.content)
+        preview = await self._workspace.preview_create(
+            args.path, args.content, skip_syntax_check=args.skip_syntax_check
+        )
         return (
             ToolFacts(
                 tool_name=call.tool_name,
@@ -209,7 +270,9 @@ class ToolFactsCollector:
                 touches_protected_path=protected,
             ), None
         plan = await self._workspace.preview_patch(
-            tuple(_to_patch_spec(op) for op in args.operations), ctx.files_read
+            tuple(_to_patch_spec(op) for op in args.operations),
+            ctx.files_read,
+            skip_syntax_check=args.skip_syntax_check,
         )
         aggregate = sha256_text(canonical_json(dict(sorted(plan.preimages.items()))))
         return (
@@ -239,6 +302,23 @@ class ToolFactsCollector:
             None,
         )
 
+    async def _facts_task_start(
+        self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
+    ) -> tuple[ToolFacts, ToolPreview]:
+        assert isinstance(args, TaskStartArgs)
+        facts = self._workspace.path_facts(args.cwd)
+        return (
+            ToolFacts(
+                tool_name=call.tool_name,
+                within_workspace=facts.within_workspace,
+                touches_protected_path=facts.is_protected,
+                exec_class=classify_argv(args.argv).value,
+                sandbox_available=self._launcher is not None and self._launcher.available(),
+                path=facts.normalized,
+            ),
+            None,
+        )
+
     async def _facts_check(
         self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
     ) -> tuple[ToolFacts, ToolPreview]:
@@ -252,6 +332,20 @@ class ToolFactsCollector:
         self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
     ) -> tuple[ToolFacts, ToolPreview]:
         return ToolFacts(tool_name=call.tool_name), None
+
+    async def _facts_skill(
+        self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
+    ) -> tuple[ToolFacts, ToolPreview]:
+        """`skill.read` 的事实：只记录读了哪个文件，供审计和策略诊断使用。
+
+        刻意不复用 `_facts_path_read`：它调用 `workspace.path_facts`，而技能文件
+        在工作区之外（用户级）或位于 PROTECTED_COMPONENT 之内（项目级），两者都会
+        让 `evaluate_policy` 硬拒绝。`within_workspace` 保持默认的 True，因为这个
+        工具的读取范围由 `read_skill_file` 自己界定——那是 Haven 唯一允许触及工作区
+        之外字节的路径，边界写在那里，而不是靠策略猜。
+        """
+        assert isinstance(args, SkillReadArgs)
+        return ToolFacts(tool_name=call.tool_name, path=f"skill:{args.name}/{args.path}"), None
 
 
 def _path_denied(

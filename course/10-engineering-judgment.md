@@ -69,7 +69,7 @@ Alternatives-considered，既记录决定，也记录被舍弃的选项和代价
 
 ## 范围窄但严谨，还是范围广但浅薄
 
-Haven 有十二个编译进程序的工具、一条 provider 连接、没有 shell-string 工具，也没有多代理编排。
+Haven 拥有严格编译进程序并受策略约束的工具集、一条 provider 连接、没有 shell-string 工具，也没有多代理编排。
 显式解释器仍可通过 `repo.exec` 使用，但必须审批并运行在强制 exec sandbox 中。
 
 作为交换，系统能做出可证明的声明：离线安全门禁中的未授权变更为 0；不明确的副作用从不自动重放；

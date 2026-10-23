@@ -4,7 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from haven.config import ConfigError, explain, load_config
+from haven.config import (
+    ConfigError,
+    config_dir,
+    explain,
+    load_config,
+    user_config_path,
+    user_skills_dir,
+)
 from haven.domain.budget import Budget
 
 
@@ -163,3 +170,12 @@ def test_invalid_provider_environment_is_rejected(
     monkeypatch.setenv("HAVEN_API_KEY_ENV", "NOT=A=NAME")
     with pytest.raises(ConfigError, match="environment variable"):
         load_config(tmp_path)
+
+
+def test_the_user_config_dir_is_overridable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`HAVEN_CONFIG_DIR` 与 `HAVEN_DATA_DIR` 同构：测试必须无法触达开发者的
+    真实配置，否则一次本地点下的技能会静默进入金色轨迹。"""
+    monkeypatch.setenv("HAVEN_CONFIG_DIR", "/tmp/haven-config-under-test")
+    assert config_dir() == Path("/tmp/haven-config-under-test")
+    assert user_config_path() == Path("/tmp/haven-config-under-test/config.toml")
+    assert user_skills_dir() == Path("/tmp/haven-config-under-test/skills")

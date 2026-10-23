@@ -54,6 +54,12 @@ def test_run_created_initializes_header() -> None:
     assert not state.reasoning_text and not state.context_summary
 
 
+def test_header_line_displays_active_skills() -> None:
+    state = PresenterState(workspace="/home/user/project", selected_skills=("tdd", "review"))
+    header = state.header_line()
+    assert "skills: [tdd, review]" in header
+
+
 def test_streaming_then_completion() -> None:
     state = PresenterState(run_id="run-1")
     state = reduce(state, wrap(AssistantDelta(run_id="run-1", step=1, text="Hel")))

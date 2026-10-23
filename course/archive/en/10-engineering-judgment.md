@@ -78,7 +78,7 @@ N local exceptions.
 ## Narrow-but-rigorous vs. broad-but-shallow
 
 The most important judgment in the whole project is the scope itself. Haven has
-twelve compiled-in tools, one provider connection, no shell-string tool, and no
+compiled-in, policy-classified tools, one provider connection, no shell-string tool, and no
 multi-agent orchestration. An explicit interpreter in `repo.exec` is still
 possible, but it always asks and runs inside the mandatory exec sandbox. In
 exchange Haven can make *provable* claims: unauthorized changes at 0 across the

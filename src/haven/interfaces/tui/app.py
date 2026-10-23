@@ -7,7 +7,10 @@ PresenterState。它不会执行工具、决定策略，也不会直接与提供
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Protocol
 
@@ -21,7 +24,8 @@ from textual.worker import Worker
 
 from haven.application.approvals import QueueApprovalBroker
 from haven.application.recovery_service import RecoveryService
-from haven.application.run_service import RunService
+from haven.application.run_service import RunOutcome, RunService
+from haven.application.skills import SkillCatalog, SkillSelectionError
 from haven.application.state import RunContext
 from haven.config import ResolvedConfig
 from haven.contracts.events import (
@@ -29,7 +33,7 @@ from haven.contracts.events import (
     ApprovalRequested,
     EventEnvelope,
 )
-from haven.domain.enums import ApprovalDecision, PermissionMode
+from haven.domain.enums import ApprovalDecision, ApprovalMode, PermissionMode
 from haven.interfaces.tui.commands import HELP_TEXT, route_command
 from haven.interfaces.tui.input_helpers import expand_mentions
 from haven.interfaces.tui.presenter import PresenterState, TimelineEntry, reduce, sanitize
@@ -82,6 +86,15 @@ class SessionServices(Protocol):
     @property
     def lease_warning(self) -> str:
         """返回工作区降级为只读时需要展示的警告文本。"""
+        ...
+
+    @property
+    def skills(self) -> SkillCatalog:
+        """返回启动时发现的技能目录（含被拒绝的文件及原因）。"""
+        ...
+
+    async def reconcile_worktree_if_succeeded(self, outcome: RunOutcome) -> list[str]:
+        """如果处于临时工作树隔离模式且运行成功，将变更合流回主工作区。"""
         ...
 
     async def close(self) -> None:
@@ -195,11 +208,32 @@ class HavenApp(App[None]):
         workspace: Path,
         resume_run_id: str | None = None,
         services_builder: ServicesBuilder | None = None,
+        approval_mode: ApprovalMode | str | None = None,
+        worktree: bool | None = None,
+        fast_model: str | None = None,
+        deep_model: str | None = None,
     ) -> None:
         super().__init__()
         self._workspace = workspace
         self._resume_run_id = resume_run_id
         self._services_builder = services_builder
+        self._worktree = worktree
+        self._fast_model = fast_model
+        self._deep_model = deep_model
+        if isinstance(approval_mode, ApprovalMode):
+            self._approval_mode = approval_mode
+        elif (
+            isinstance(approval_mode, str)
+            and approval_mode.lower() in ApprovalMode._value2member_map_
+        ):
+            self._approval_mode = ApprovalMode(approval_mode.lower())
+        else:
+            env_mode = os.environ.get("HAVEN_APPROVAL_MODE")
+            self._approval_mode = (
+                ApprovalMode(env_mode.strip().lower())
+                if env_mode and env_mode.strip().lower() in ApprovalMode._value2member_map_
+                else ApprovalMode.ASK
+            )
         self._services: SessionServices | None = None
         self._broker = QueueApprovalBroker()
         self._sink = QueueSink()
@@ -208,6 +242,9 @@ class HavenApp(App[None]):
         self._rendered_timeline = 0
         #: 由 /fork 设置；下一次提交会从该运行 ID 分支，而不是继续当前会话。
         self._fork_run_id = ""
+        #: 由 /skill use 设置；应用到之后开始的每一次运行，直到 /skill clear。
+        #: 它必须在运行开始前解析，因为上下文头部在那一刻被固定（ADR 0008/0031）。
+        self._selected_skills: tuple[str, ...] = ()
 
     # -- 布局 ------------------------------------------------------------------
 
@@ -249,6 +286,10 @@ class HavenApp(App[None]):
                     mode=PermissionMode.INTERACTIVE,
                     approvals=self._broker,
                     sinks=[self._sink],
+                    approval_mode=self._approval_mode,
+                    worktree=self._worktree,
+                    fast_model=self._fast_model,
+                    deep_model=self._deep_model,
                 )
         except Exception as exc:  # noqa: BLE001 - 在 UI 中显示启动问题
             self._log_line("system", f"startup failed: {exc}")
@@ -262,6 +303,7 @@ class HavenApp(App[None]):
             branch=services.git_branch,
             model_name=services.model_name,
             mode="interactive",
+            approval_mode=self._approval_mode.value,
         )
         if services.lease_warning:
             self._log_line("system", services.lease_warning)
@@ -285,16 +327,47 @@ class HavenApp(App[None]):
             self._apply(envelope)
 
     @work(exclusive=True, group="run")
-    async def _execute_run(self, goal: str) -> None:
-        await self._svc.run_service.run(goal)
+    async def _execute_run(self, goal: str, skill_names: tuple[str, ...]) -> None:
+        try:
+            outcome = await self._svc.run_service.run(
+                goal, skill_names=skill_names, approval_mode=self._approval_mode
+            )
+            reconciler = getattr(self._svc, "reconcile_worktree_if_succeeded", None)
+            if reconciler is not None:
+                reconciled = await reconciler(outcome)
+                if reconciled:
+                    self._log_line("system", f"reconciled {len(reconciled)} file(s) from worktree")
+        except SkillSelectionError as exc:
+            # 在 turn loop 之前失败，因此没有任何运行需要清理；只要把原因说清楚。
+            self._log_line("system", f"cannot start the run: {exc}")
 
     @work(exclusive=True, group="run")
-    async def _execute_continue(self, previous_run_id: str, follow_up: str) -> None:
-        await self._svc.run_service.continue_run(previous_run_id, follow_up)
+    async def _execute_continue(
+        self, previous_run_id: str, follow_up: str, skill_names: tuple[str, ...]
+    ) -> None:
+        try:
+            outcome = await self._svc.run_service.continue_run(
+                previous_run_id,
+                follow_up,
+                skill_names=skill_names,
+                approval_mode=self._approval_mode,
+            )
+            reconciler = getattr(self._svc, "reconcile_worktree_if_succeeded", None)
+            if reconciler is not None:
+                reconciled = await reconciler(outcome)
+                if reconciled:
+                    self._log_line("system", f"reconciled {len(reconciled)} file(s) from worktree")
+        except SkillSelectionError as exc:
+            self._log_line("system", f"cannot start the run: {exc}")
 
     @work(exclusive=True, group="run")
     async def _execute_resume(self, ctx: RunContext) -> None:
-        await self._svc.run_service.resume(ctx)
+        outcome = await self._svc.run_service.resume(ctx)
+        reconciler = getattr(self._svc, "reconcile_worktree_if_succeeded", None)
+        if reconciler is not None:
+            reconciled = await reconciler(outcome)
+            if reconciled:
+                self._log_line("system", f"reconciled {len(reconciled)} file(s) from worktree")
 
     def _start_resume(self, run_id: str) -> None:
         async def _do() -> None:
@@ -386,14 +459,16 @@ class HavenApp(App[None]):
         fork_target = self._fork_run_id
         self._fork_run_id = ""
         if fork_target:
-            self._run_worker = self._execute_continue(fork_target, text)
+            self._run_worker = self._execute_continue(fork_target, text, self._selected_skills)
             return
         # 已完成运行后的后续提交会继续同一段对话，因此模型保留上一轮上下文，
         # 而不是从空白开始（Phase 2）。会话中的第一次提交会启动新运行。
         if self._state.run_id:
-            self._run_worker = self._execute_continue(self._state.run_id, text)
+            self._run_worker = self._execute_continue(
+                self._state.run_id, text, self._selected_skills
+            )
         else:
-            self._run_worker = self._execute_run(text)
+            self._run_worker = self._execute_run(text, self._selected_skills)
 
     def _expand_mentions(self, text: str) -> str:
         """将 @path 提及展开为列出文件的说明，让目标明确指向这些文件。
@@ -414,11 +489,14 @@ class HavenApp(App[None]):
 
     def _handle_command(self, command: str) -> None:
         budget = self._services.config.budget if self._services is not None else None
-        action = route_command(command, self._state, budget)
+        skills = self._services.skills if self._services is not None else None
+        action = route_command(command, self._state, budget, skills)
         if action.kind == "log":
             self._log_line("system", action.value)
         elif action.kind == "sessions":
             self._list_sessions()
+        elif action.kind == "skill":
+            self._skill_command(action.value)
         elif action.kind == "fork":
             self._fork_run_id = action.value
             self._log_line(
@@ -427,12 +505,50 @@ class HavenApp(App[None]):
             )
         elif action.kind == "diff":
             self.query_one("#tabs", TabbedContent).active = "tab-diff"
+        elif action.kind == "mode":
+            new_mode = ApprovalMode(action.value)
+            self._approval_mode = new_mode
+            if self._services is not None:
+                self._services.run_service.set_approval_mode(new_mode)
+            self._state = replace(self._state, approval_mode=new_mode.value)
+            self.query_one("#header", Static).update(self._state.header_line())
+            self._log_line("system", f"approval mode switched to: {new_mode.value}")
         elif action.kind == "rewind":
             self._rewind_command(action.value)
         elif action.kind == "export":
             self._export_run()
         elif action.kind == "quit":
             self.exit()
+
+    def _skill_command(self, value: str) -> None:
+        """记录、清除或列出技能选择。
+
+        运行中途选择会被接受，但必须说明它对当前这次运行无效：上下文头部在运行
+        开始时就被固定了（ADR 0008），中途改动会移动可缓存前缀。静默接受等于
+        悄悄丢掉用户的输入，那是这个界面唯一不能做的事。
+        """
+        if value == "clear":
+            self._selected_skills = ()
+            self._state = replace(self._state, selected_skills=())
+            with contextlib.suppress(Exception):
+                self.query_one("#header", Static).update(self._state.header_line())
+            self._log_line("system", "skill selection cleared")
+            return
+        names = tuple(value.split())
+        self._selected_skills = names
+        self._state = replace(self._state, selected_skills=names)
+        with contextlib.suppress(Exception):
+            self.query_one("#header", Static).update(self._state.header_line())
+        listed = ", ".join(names)
+        if self._state.running:
+            self._log_line(
+                "system",
+                f"skill selection saved for your next run: {listed}\n"
+                "(the active run's context was fixed when it started — ADR 0008 — "
+                "so it will NOT see it)",
+            )
+        else:
+            self._log_line("system", f"skill selection saved for your next run: {listed}")
 
     def _rewind_command(self, command: str) -> None:
         """用户级撤销本会话最近一次已完成的运行（ADR 0020）。

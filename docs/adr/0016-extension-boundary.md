@@ -54,15 +54,33 @@ new kind arrives, not before (YAGNI).
   lightweight, deterministic stand-in (`ast`-based symbol lookup for Python)
   could deliver much of the value first if a real task shows `repo.search` is
   insufficient — pulled in on demand, not speculatively.
+
+  > **Extended by ADR 0035 (2026-10-22).** The lightweight, deterministic `ast`-based
+  > stand-in predicted above was adopted in ADR 0035 via `repo.outline` and `repo.symbol`.
+  > It delivers structural AST outline and symbol reference navigation without the
+  > runtime complexity or failure modes of an external language-server daemon.
+
 - **MCP — deferred, conditions unchanged from ADR 0007.** Deny by default,
   per-server per-tool allowlists, pinned schema digests with fail-closed drift
   detection, and offline eval cases for schema drift, server-identity change,
   oversized results, and injection via tool results. None of these are built,
   and MCP would enlarge the one attack surface the security suite exists to
   cover. It stays out until a named task needs a named server.
+
+  > **Amended by ADR 0039 (2026-10-23).** The hardened MCP gateway was adopted in
+  > ADR 0039, satisfying all conditions: static declaration in configuration,
+  > namespace isolation (`mcp.<server>.<tool>`), strict allowlist filtering, and
+  > fail-closed SHA-256 schema pinning with deterministic policy evaluation.
+
 - **Plugins / skills / hooks — deferred, lowest priority.** Each widens the
   auditable boundary for convenience, not for a metric Haven measures. They
   wait behind LSP and MCP, if ever.
+
+  > **Extended by ADR 0031, ADR 0032 (2026-10-20), and ADR 0034 (2026-10-21).**
+  > Declarative prompt-fragment *skills* were adopted in ADR 0031, made on-demand
+  > loadable via `skill.read` with bounded standing tool approvals in ADR 0032,
+  > and expanded with companion file manifests and lifecycle tooling in ADR 0034.
+  > Plugins and hooks remain deferred.
 - **Multi-agent — deferred, decision made measurable.** ADR 0007's benefit gate
   stands. The Phase 4 quality/safety split is the instrument: adopt a
   planner/subagent only when a real-task baseline shows a single agent failing

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -19,19 +20,37 @@ from haven.adapters.sandbox.seatbelt import SeatbeltLauncher
 from haven.adapters.sqlite_session import SqliteSessionStore
 from haven.adapters.workspace_fs import FsWorkspace
 from haven.adapters.workspace_lease import LeaseHeld, WorkspaceLease, acquire_workspace_lease
+from haven.adapters.worktree import (
+    EphemeralWorktree,
+    cleanup_ephemeral_worktree,
+    create_ephemeral_worktree,
+    is_git_repo,
+    reconcile_worktree_to_main,
+)
 from haven.application.approvals import ApprovalResponder
 from haven.application.context_builder import ContextBuilder
 from haven.application.emitter import EventEmitter
+from haven.application.model_router import ModelRouter
 from haven.application.profiles import profile_for
 from haven.application.recovery_service import RecoveryService
 from haven.application.replay_service import ReplayService
+from haven.application.run_persistence import RunOutcome
 from haven.application.run_service import RunService
-from haven.config import ResolvedConfig, artifacts_dir, data_dir, db_path, load_config
+from haven.application.skills import SkillCatalog, discover_skills, resolve_selected_skills
+from haven.config import (
+    ResolvedConfig,
+    artifacts_dir,
+    data_dir,
+    db_path,
+    load_config,
+    user_skills_dir,
+)
 from haven.contracts.events import ContextSegment
 from haven.contracts.model import ModelRequest
 from haven.contracts.tools import tool_schemas
 from haven.domain.budget import BudgetUsage
-from haven.domain.enums import PermissionMode
+from haven.domain.enums import ApprovalMode, PermissionMode, RunStatus
+from haven.domain.ids import new_run_id
 from haven.ports.event_sink import EventSinkPort
 from haven.ports.model import ModelPort
 from haven.ports.sandbox import SandboxLauncher
@@ -52,6 +71,8 @@ class AppServices:
 
     #: 合并后的用户、项目和环境配置。
     config: ResolvedConfig
+    #: 启动时发现的技能目录，含被拒绝的文件及原因（`haven doctor` 呈现后者）。
+    skills: SkillCatalog
     #: 负责执行路径和受保护目录规则的工作区适配器。
     workspace: FsWorkspace
     #: 提供事务边界的会话持久化实现。
@@ -79,6 +100,16 @@ class AppServices:
     lease: WorkspaceLease | None = None
     #: 因租约而降级为只读模式时展示的人类可读警告。
     lease_warning: str = ""
+    #: 初始配置的分级审批模式（ask / smart / full）。
+    approval_mode: ApprovalMode = ApprovalMode.ASK
+    #: 临时投机工作树实例（ADR 0041）；未启用时为 None。
+    ephemeral_worktree: EphemeralWorktree | None = None
+
+    async def reconcile_worktree_if_succeeded(self, outcome: RunOutcome) -> list[str]:
+        """如果处于临时工作树隔离模式且运行成功，将变更合流回主工作区。"""
+        if self.ephemeral_worktree is not None and outcome.status is RunStatus.SUCCEEDED:
+            return await reconcile_worktree_to_main(self.ephemeral_worktree)
+        return []
 
     async def close(self) -> None:
         """关闭模型与存储后释放租约；任一步失败都不会跳过后续清理。"""
@@ -91,8 +122,12 @@ class AppServices:
                 try:
                     await self.store.close()
                 finally:
-                    if self.lease is not None:
-                        self.lease.release()
+                    try:
+                        if self.ephemeral_worktree is not None:
+                            await cleanup_ephemeral_worktree(self.ephemeral_worktree)
+                    finally:
+                        if self.lease is not None:
+                            self.lease.release()
 
 
 def select_launcher(platform: str | None = None) -> SandboxLauncher | None:
@@ -131,6 +166,11 @@ async def build_services(
     model: ModelPort | None = None,
     store_path: Path | None = None,
     tier: str | None = None,
+    approval_mode: ApprovalMode | None = None,
+    worktree: bool | None = None,
+    fast_model: ModelPort | str | None = None,
+    deep_model: ModelPort | str | None = None,
+    fast_turns: int | None = None,
 ) -> AppServices:
     """组装一个工作区的完整服务图；所有接口都通过此函数完成组装。
 
@@ -142,13 +182,28 @@ async def build_services(
     """
     workspace_root = resolve_workspace(workspace_path)
     config = load_config(workspace_root, tier)
-    api_key = config.provider.api_key() if model is None else None
-    if model is None and api_key is None:
+    has_injected_models = model is not None or (
+        isinstance(fast_model, ModelPort) and isinstance(deep_model, ModelPort)
+    )
+    api_key = config.provider.api_key() if not has_injected_models else None
+    if not has_injected_models and api_key is None:
         # 在获取写者租约或打开数据库之前失败，避免启动错误遗留资源。
         raise BootstrapError(
             f"no API key found in ${config.provider.api_key_env}; "
             "set it or run offline commands only"
         )
+
+    # 临时投机工作树隔离（ADR 0041）
+    ephemeral_wt: EphemeralWorktree | None = None
+    should_worktree = worktree if worktree is not None else config.worktree
+    active_root = workspace_root
+    if should_worktree:
+        if not await is_git_repo(workspace_root):
+            raise BootstrapError(f"worktree isolation requires a git repository: {workspace_root}")
+        ephemeral_wt = await create_ephemeral_worktree(
+            workspace_root, run_id=f"wt-{new_run_id()[:8]}"
+        )
+        active_root = ephemeral_wt.worktree_path
 
     # 单写者租约：同一进程内的每次写入都固定并重新验证 preimage，但同一工作区
     # 中的第二个 Haven 进程可能在另一次运行审批和执行之间修改文件。第一个
@@ -164,20 +219,76 @@ async def build_services(
 
     store: SqliteSessionStore | None = None
     try:
-        workspace = FsWorkspace(workspace_root)
+        workspace = FsWorkspace(active_root)
         store = await SqliteSessionStore.open(store_path or db_path(), artifacts_dir())
         emitter = EventEmitter(store, sinks)
 
+        effective_fast_turns = (
+            fast_turns
+            if fast_turns is not None
+            else (config.router.fast_turns if config.router else None)
+        )
         if model is None:
-            assert api_key is not None
-            configured_profile = profile_for(config.provider.model)
-            model = OpenAICompatibleModel(
-                base_url=config.provider.base_url,
-                api_key=api_key,
-                model=config.provider.model,
-                requires_tool_call_reasoning=configured_profile.requires_tool_call_reasoning,
-                idle_timeout=configured_profile.stream_idle_timeout_s,
-            )
+            if isinstance(fast_model, ModelPort) and isinstance(deep_model, ModelPort):
+                model = ModelRouter(
+                    fast_model=fast_model, deep_model=deep_model, fast_turns=effective_fast_turns
+                )
+            else:
+                assert api_key is not None
+                use_router = (
+                    (config.router is not None and config.router.enabled)
+                    or fast_model is not None
+                    or deep_model is not None
+                )
+                if use_router:
+                    fast_name = (
+                        fast_model
+                        if isinstance(fast_model, str)
+                        else (
+                            config.router.fast_model
+                            if config.router and config.router.fast_model
+                            else "gpt-4o-mini"
+                        )
+                    )
+                    deep_name = (
+                        deep_model
+                        if isinstance(deep_model, str)
+                        else (
+                            config.router.deep_model
+                            if config.router and config.router.deep_model
+                            else config.provider.model
+                        )
+                    )
+                    fast_p = profile_for(fast_name)
+                    deep_p = profile_for(deep_name)
+                    fast_inst = OpenAICompatibleModel(
+                        base_url=config.provider.base_url,
+                        api_key=api_key,
+                        model=fast_name,
+                        requires_tool_call_reasoning=fast_p.requires_tool_call_reasoning,
+                        idle_timeout=fast_p.stream_idle_timeout_s,
+                    )
+                    deep_inst = OpenAICompatibleModel(
+                        base_url=config.provider.base_url,
+                        api_key=api_key,
+                        model=deep_name,
+                        requires_tool_call_reasoning=deep_p.requires_tool_call_reasoning,
+                        idle_timeout=deep_p.stream_idle_timeout_s,
+                    )
+                    model = ModelRouter(
+                        fast_model=fast_inst,
+                        deep_model=deep_inst,
+                        fast_turns=effective_fast_turns,
+                    )
+                else:
+                    configured_profile = profile_for(config.provider.model)
+                    model = OpenAICompatibleModel(
+                        base_url=config.provider.base_url,
+                        api_key=api_key,
+                        model=config.provider.model,
+                        requires_tool_call_reasoning=configured_profile.requires_tool_call_reasoning,
+                        idle_timeout=configured_profile.stream_idle_timeout_s,
+                    )
 
         profile = profile_for(model.model_name)
         if config.sources.get("pricing") == "default" and profile.pricing.is_known:
@@ -189,8 +300,20 @@ async def build_services(
 
         baseline = await capture_git_baseline(workspace_root)
         guidance = await _read_guidance(workspace)
+        skills = discover_skills(user_root=user_skills_dir(), project_root=workspace_root)
         candidate = select_launcher()
         launcher = candidate if candidate is not None and candidate.available() else None
+
+        env_approval = os.environ.get("HAVEN_APPROVAL_MODE")
+        resolved_approval_mode = (
+            approval_mode
+            if approval_mode is not None
+            else (
+                ApprovalMode(env_approval.strip().lower())
+                if env_approval and env_approval.strip().lower() in ApprovalMode._value2member_map_
+                else ApprovalMode.ASK
+            )
+        )
 
         run_service = RunService(
             model=model,
@@ -206,7 +329,10 @@ async def build_services(
             git_branch=baseline.branch,
             git_commit=baseline.commit,
             project_guidance=guidance,
+            skills=skills,
             launcher=launcher,
+            approval_mode=resolved_approval_mode,
+            mcp_servers=config.mcp_servers,
             # 前缀续写既需要能力也需要支持该能力的 endpoint；这里是唯一知道已配置
             # base URL 的位置。
             supports_prefix_continuation=profile.prefix_continuation_enabled(
@@ -215,6 +341,7 @@ async def build_services(
         )
         return AppServices(
             config=config,
+            skills=skills,
             workspace=workspace,
             store=store,
             emitter=emitter,
@@ -228,17 +355,27 @@ async def build_services(
             sandbox_backend=sandbox_backend_name(launcher),
             lease=lease,
             lease_warning=lease_warning,
+            approval_mode=resolved_approval_mode,
+            ephemeral_worktree=ephemeral_wt,
         )
     except BaseException:
         try:
             await _close_model(model)
         finally:
             try:
-                if store is not None:
-                    await store.close()
+                await _close_model(getattr(model, "fast_model", None))
+                await _close_model(getattr(model, "deep_model", None))
             finally:
-                if lease is not None:
-                    lease.release()
+                try:
+                    if store is not None:
+                        await store.close()
+                finally:
+                    try:
+                        if ephemeral_wt is not None:
+                            await cleanup_ephemeral_worktree(ephemeral_wt)
+                    finally:
+                        if lease is not None:
+                            lease.release()
         raise
 
 
@@ -340,22 +477,29 @@ def build_provider(config: ResolvedConfig) -> OpenAICompatibleModel:
 
 
 async def build_context_preview(
-    workspace_path: Path | None, goal: str
+    workspace_path: Path | None,
+    goal: str,
+    *,
+    skill_names: Sequence[str] = (),
 ) -> tuple[ModelRequest, tuple[ContextSegment, ...], ResolvedConfig]:
     """在不调用任何提供商的情况下，为目标组装第一轮 Context。
 
-    这是 `haven debug-context` 的实现基础：使用实际的 ContextBuilder、配置和
-    工作区指导，回答“模型会看到什么，以及原因是什么”。
+    这是 `haven debug-context` 的实现基础：使用实际的 ContextBuilder、配置、
+    工作区指导和技能目录，回答“模型会看到什么，以及原因是什么”。它与
+    `build_services` 读同样的两个来源，因此预览的上下文不会与真实运行漂移。
     """
     workspace_root = resolve_workspace(workspace_path)
     config = load_config(workspace_root)
     guidance = await _read_guidance(FsWorkspace(workspace_root))
+    skills = discover_skills(user_root=user_skills_dir(), project_root=workspace_root)
     builder = ContextBuilder(
         goal=goal,
         tools=tool_schemas(),
         budget=config.budget,
         recipe_ids=tuple(config.recipes),
         project_guidance=guidance,
+        skills=skills.skills,
+        selected_skills=resolve_selected_skills(skills.skills, skill_names),
     )
     request, segments = builder.build([], BudgetUsage())
     return request, segments, config

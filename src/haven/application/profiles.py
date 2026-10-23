@@ -122,5 +122,31 @@ _PROFILES: dict[str, ModelProfile] = {
 
 
 def profile_for(model_name: str) -> ModelProfile:
-    """返回指定模型的 profile，找不到时返回保守默认值。"""
-    return _PROFILES.get(model_name, DEFAULT_PROFILE)
+    """返回指定模型的 profile，找不到时返回保守默认值。
+
+    对双轨混合路由器（`routed(fast+deep)`），自适应继承深度模型的上下文上限、
+    定价策略、推理要求与前缀续写能力，避免双轨模式被退化为 96k 的保守默认值。
+    """
+    if model_name in _PROFILES:
+        return _PROFILES[model_name]
+
+    if model_name.startswith("routed(") and model_name.endswith(")") and "+" in model_name:
+        inner = model_name[7:-1]
+        fast_name, _, deep_name = inner.partition("+")
+        fast_p = profile_for(fast_name)
+        deep_p = profile_for(deep_name)
+        pricing = deep_p.pricing if deep_p.pricing.is_known else fast_p.pricing
+        max_context = max(fast_p.max_context_chars, deep_p.max_context_chars)
+        return ModelProfile(
+            name=model_name,
+            max_context_chars=max_context,
+            pricing=pricing,
+            reasoning_effort=deep_p.reasoning_effort,
+            requires_tool_call_reasoning=deep_p.requires_tool_call_reasoning,
+            context_window_tokens=max(fast_p.context_window_tokens, deep_p.context_window_tokens),
+            supports_assistant_prefix=deep_p.supports_assistant_prefix,
+            prefix_beta_base_url=deep_p.prefix_beta_base_url,
+            stream_idle_timeout_s=max(fast_p.stream_idle_timeout_s, deep_p.stream_idle_timeout_s),
+        )
+
+    return DEFAULT_PROFILE

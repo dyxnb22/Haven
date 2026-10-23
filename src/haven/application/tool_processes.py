@@ -7,6 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from haven.application.approval_cards import ToolPreview
+from haven.application.background_tasks import TaskManager
+from haven.application.diagnostic_feeder import (
+    extract_diagnostics,
+    format_diagnostics_summary,
+)
 from haven.application.emitter import EventEmitter
 from haven.application.state import RunContext
 from haven.application.tool_execution_types import (
@@ -18,7 +23,16 @@ from haven.application.tool_execution_types import (
 )
 from haven.contracts.events import EvidenceRecorded, Notice
 from haven.contracts.model import ToolCallProposal
-from haven.contracts.tools import RecipeSpec, RepoCheckArgs, RepoExecArgs, ToolArgs
+from haven.contracts.tools import (
+    RecipeSpec,
+    RepoCheckArgs,
+    RepoExecArgs,
+    TaskLogsArgs,
+    TaskStartArgs,
+    TaskStatusArgs,
+    TaskStopArgs,
+    ToolArgs,
+)
 from haven.domain.enums import EffectState, ToolErrorCode
 from haven.domain.evidence import CheckEvidence, EditEvidence
 from haven.ports.executor import ExecSpec, ExecutorPort
@@ -53,10 +67,19 @@ class ProcessToolExecutor:
         self._recipes = recipes
         self._launcher = launcher
         self._scratch_dir = scratch_dir
+        self._task_manager = TaskManager()
         self.handlers: dict[str, ExecuteHandler] = {
             "repo.exec": self.execute_exec,
             "repo.check": self.execute_check,
+            "task.start": self.execute_task_start,
+            "task.status": self.execute_task_status,
+            "task.logs": self.execute_task_logs,
+            "task.stop": self.execute_task_stop,
         }
+
+    async def close_tasks(self) -> None:
+        """终止所有正在运行的后台子进程。"""
+        await self._task_manager.close_all()
 
     def replace_scratch_dir(self, scratch_dir: Path) -> None:
         """切换到新运行独占的临时目录；旧目录由 RunService 负责回收。"""
@@ -140,19 +163,21 @@ class ProcessToolExecutor:
                     call, ToolErrorCode.TIMEOUT, f"command timed out after {args.timeout_seconds}s"
                 )
             )
-        return ToolExecution(
-            ok_result(
-                call,
-                {
-                    "exit_code": outcome.exit_code,
-                    "duration_ms": outcome.duration_ms,
-                    "stdout_tail": clip(outcome.stdout_tail, 4000),
-                    "stderr_tail": clip(outcome.stderr_tail, 2000),
-                    "sandbox": self._launcher.backend,
-                },
-                truncated=outcome.truncated,
+        exec_payload: dict[str, object] = {
+            "exit_code": outcome.exit_code,
+            "duration_ms": outcome.duration_ms,
+            "stdout_tail": clip(outcome.stdout_tail, 4000),
+            "stderr_tail": clip(outcome.stderr_tail, 2000),
+            "sandbox": self._launcher.backend,
+        }
+        if outcome.exit_code != 0:
+            exec_diags = extract_diagnostics(
+                "exec", outcome.stdout_tail, outcome.stderr_tail, outcome.exit_code
             )
-        )
+            if exec_diags:
+                exec_payload["diagnostics"] = [d.to_dict() for d in exec_diags]
+                exec_payload["summary"] = format_diagnostics_summary(exec_diags)
+        return ToolExecution(ok_result(call, exec_payload, truncated=outcome.truncated))
 
     async def execute_check(
         self,
@@ -226,19 +251,112 @@ class ProcessToolExecutor:
                     f"recipe {recipe.id!r} timed out after {recipe.timeout_seconds}s",
                 )
             )
+        check_payload: dict[str, object] = {
+            "recipe_id": recipe.id,
+            "exit_code": outcome.exit_code,
+            "duration_ms": outcome.duration_ms,
+            "stdout_tail": clip(outcome.stdout_tail, 4000),
+            "stderr_tail": clip(outcome.stderr_tail, 2000),
+        }
+        if outcome.exit_code != 0:
+            check_diags = extract_diagnostics(
+                recipe.id, outcome.stdout_tail, outcome.stderr_tail, outcome.exit_code
+            )
+            if check_diags:
+                check_payload["diagnostics"] = [d.to_dict() for d in check_diags]
+                check_payload["summary"] = format_diagnostics_summary(check_diags)
+        return ToolExecution(ok_result(call, check_payload, truncated=outcome.truncated))
+
+    async def execute_task_start(
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: ToolArgs,
+        ticket_digest: str,
+        preview: ToolPreview,
+    ) -> ToolExecution:
+        assert isinstance(args, TaskStartArgs)
+        if self._launcher is None:
+            return ToolExecution(
+                error_result(call, ToolErrorCode.DENIED, "refusing to run task without sandbox")
+            )
+        cwd_path = self._workspace.root / args.cwd
+        try:
+            task = await self._task_manager.start(
+                argv=args.argv,
+                cwd=cwd_path,
+                description=args.description,
+                sandbox_spec=self.sandbox_spec(),
+                launcher=self._launcher,
+            )
+        except Exception as exc:
+            return ToolExecution(
+                error_result(
+                    call, ToolErrorCode.INTERNAL, f"failed to start background task: {exc}"
+                )
+            )
+
         return ToolExecution(
             ok_result(
                 call,
                 {
-                    "recipe_id": recipe.id,
-                    "exit_code": outcome.exit_code,
-                    "duration_ms": outcome.duration_ms,
-                    "stdout_tail": clip(outcome.stdout_tail, 4000),
-                    "stderr_tail": clip(outcome.stderr_tail, 2000),
+                    "task_id": task.task_id,
+                    "status": "running",
+                    "argv": list(args.argv),
+                    "cwd": args.cwd,
+                    "description": args.description,
+                    "sandbox": self._launcher.backend,
                 },
-                truncated=outcome.truncated,
             )
         )
+
+    async def execute_task_status(
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: ToolArgs,
+        ticket_digest: str,
+        preview: ToolPreview,
+    ) -> ToolExecution:
+        assert isinstance(args, TaskStatusArgs)
+        status_info = self._task_manager.status(args.task_id)
+        if status_info.get("status") == "not_found":
+            return ToolExecution(
+                error_result(call, ToolErrorCode.NOT_FOUND, f"task {args.task_id!r} not found")
+            )
+        return ToolExecution(ok_result(call, status_info))
+
+    async def execute_task_logs(
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: ToolArgs,
+        ticket_digest: str,
+        preview: ToolPreview,
+    ) -> ToolExecution:
+        assert isinstance(args, TaskLogsArgs)
+        logs_info = self._task_manager.logs(args.task_id, tail_lines=args.tail_lines)
+        if logs_info.get("status") == "not_found":
+            return ToolExecution(
+                error_result(call, ToolErrorCode.NOT_FOUND, f"task {args.task_id!r} not found")
+            )
+        return ToolExecution(ok_result(call, logs_info))
+
+    async def execute_task_stop(
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: ToolArgs,
+        ticket_digest: str,
+        preview: ToolPreview,
+    ) -> ToolExecution:
+        assert isinstance(args, TaskStopArgs)
+        stop_info = await self._task_manager.stop(args.task_id)
+        if stop_info.get("status") == "not_found":
+            return ToolExecution(
+                error_result(call, ToolErrorCode.NOT_FOUND, f"task {args.task_id!r} not found")
+            )
+        return ToolExecution(ok_result(call, stop_info))
 
     async def record_process_writes(
         self,

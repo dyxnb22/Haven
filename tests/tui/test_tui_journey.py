@@ -13,6 +13,7 @@ from haven.application.emitter import EventEmitter
 from haven.application.recovery_service import RecoveryService
 from haven.application.replay_service import ReplayService
 from haven.application.run_service import RunService
+from haven.application.skills import Skill, SkillCatalog
 from haven.domain.budget import Budget
 from haven.domain.enums import PermissionMode
 from haven.interfaces.tui.app import HavenApp
@@ -28,7 +29,12 @@ from tests.integration.harness import (
 
 
 class _Services:
-    def __init__(self, run_service: RunService, store: MemorySessionStore) -> None:
+    def __init__(
+        self,
+        run_service: RunService,
+        store: MemorySessionStore,
+        skills: SkillCatalog | None = None,
+    ) -> None:
         self.run_service = run_service
         self.store = store
         self.recovery = RecoveryService(store, run_service._workspace)  # noqa: SLF001
@@ -37,6 +43,10 @@ class _Services:
         self.model_name = "scripted"
         self.lease_warning = ""
         self.config = type("Cfg", (), {"budget": Budget()})()
+        self.skills = skills if skills is not None else SkillCatalog()
+
+    async def reconcile_worktree_if_succeeded(self, outcome: Any) -> list[str]:
+        return []
 
     async def close(self) -> None:
         return None
@@ -63,6 +73,31 @@ def make_builder(repo: Path, turns: list[list[Any]]):  # type: ignore[no-untyped
             launcher=launcher,
         )
         return _Services(service, store)
+
+    return _builder
+
+
+def _skills_builder(repo: Path, skills: SkillCatalog):  # noqa: ANN001
+    """与 `make_builder` 相同，但注入了技能目录，因此 `/skill` 有东西可列。"""
+
+    async def _builder(*, workspace: Path, approvals: Any, sinks: list[Any]) -> _Services:
+        ws = FsWorkspace(repo)
+        store = MemorySessionStore()
+        launcher = RecordingLauncher()
+        service = RunService(
+            model=ScriptedModel([[text("done."), finish()]], repeat_last=True),
+            workspace=ws,
+            executor=ProcessExecutor(launcher=launcher),
+            store=store,
+            emitter=EventEmitter(store, sinks),
+            approvals=approvals,
+            recipes=default_recipes(),
+            mode=PermissionMode.INTERACTIVE,
+            budget=Budget(),
+            launcher=launcher,
+            skills=skills,
+        )
+        return _Services(service, store, skills)
 
     return _builder
 
@@ -359,6 +394,10 @@ async def test_mention_expands_into_the_goal(tmp_path: Path) -> None:
         assert "mentioned files" in expanded and "src/calc.py" in expanded
         # 不存在的路径保持原样。
         assert app._expand_mentions("see @nope.py") == "see @nope.py"  # noqa: SLF001
+        # 逃逸、绝对路径及受保护控制面路径保持原样，严格拒绝展开。
+        assert app._expand_mentions("see @../../outside.py") == "see @../../outside.py"  # noqa: SLF001
+        assert app._expand_mentions("see @/etc/passwd") == "see @/etc/passwd"  # noqa: SLF001
+        assert app._expand_mentions("see @.git/config") == "see @.git/config"  # noqa: SLF001
 
 
 @pytest.mark.timeout(30)
@@ -399,3 +438,82 @@ async def test_tab_switching(tmp_path: Path) -> None:
         await pilot.press("f4")
         await pilot.pause()
         assert app.query_one("#tabs", TabbedContent).active == "tab-trace"
+
+
+async def test_skill_command_lists_the_discovered_catalog(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    app = HavenApp(
+        workspace=repo,
+        services_builder=_skills_builder(
+            repo,
+            SkillCatalog(
+                (
+                    Skill(
+                        "write-tests",
+                        "先写失败测试",
+                        "user",
+                        "skills/write-tests/SKILL.md",
+                        "abc123def456",
+                        "正文",
+                    ),
+                )
+            ),
+        ),
+    )
+    async with app.run_test() as pilot:
+        await _wait_ready(app, pilot)
+        await _submit(app, pilot, "/skill")
+        await _settle(pilot, 10)
+        assert any("write-tests" in e.text for e in app._state.timeline)  # noqa: SLF001
+        assert not any("正文" in e.text for e in app._state.timeline)  # noqa: SLF001
+
+
+async def test_skill_selection_reaches_the_next_run(tmp_path: Path) -> None:
+    """选中的技能必须真正到达模型请求；否则这个命令只是自我安慰。"""
+    repo = make_repo(tmp_path)
+    skill = Skill(
+        name="write-tests",
+        description="先写失败测试",
+        scope="user",
+        source="skills/write-tests/SKILL.md",
+        digest="abc123def456",
+        body="SKILL-BODY-MARKER",
+    )
+    app = HavenApp(workspace=repo, services_builder=_skills_builder(repo, SkillCatalog((skill,))))
+    async with app.run_test() as pilot:
+        await _wait_ready(app, pilot)
+        await _submit(app, pilot, "/skill use write-tests")
+        await _settle(pilot, 10)
+        await _submit(app, pilot, "first question")
+        await _settle(pilot, 40)
+        requests = app._services.run_service._model.requests_seen  # noqa: SLF001
+        assert requests, "the model was never called"
+        assert any("SKILL-BODY-MARKER" in m.content for m in requests[0].messages), (
+            "the selected skill body never reached the model"
+        )
+
+
+async def test_skill_command_during_a_run_says_it_applies_to_the_next_run(tmp_path: Path) -> None:
+    """运行中途选择会被接受，但必须说明它对当前这次运行无效。
+
+    静默接受等于悄悄丢掉用户的输入——这正是 ADR 0008 的代价，必须被说出来。
+    这里直接驱动处理器并让展示状态处于 running：要测的是"运行活跃时处理器怎么
+    回答"，与运行机器本身无关，而后者由集成测试覆盖。
+    """
+    from dataclasses import replace
+
+    repo = make_repo(tmp_path)
+    app = HavenApp(
+        workspace=repo,
+        services_builder=_skills_builder(
+            repo, (Skill("write-tests", "先写失败测试", "user", "s", "abc123def456", "正文"),)
+        ),
+    )
+    async with app.run_test() as pilot:
+        await _wait_ready(app, pilot)
+        app._state = replace(app._state, running=True)  # noqa: SLF001
+        app._skill_command("write-tests")  # noqa: SLF001
+        await _settle(pilot, 5)
+        notice = next(e.text for e in app._state.timeline if "next run" in e.text)  # noqa: SLF001
+        assert "will NOT see it" in notice
+        assert app._selected_skills == ("write-tests",)  # noqa: SLF001

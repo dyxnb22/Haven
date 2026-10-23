@@ -33,6 +33,8 @@ human would:
   pipeline verifies unattended but never mutates;
 - `all` — approve everything (full unattended auto-fix).
 
+> **Extended and unified by ADR 0033 (2026-10-22).** Headless write approval policies are unified with the system-wide tiered approval modes (`ask`, `smart`, `full`).
+
 `all` is reachable only with an explicit `--write`, so unattended mutation can
 never be the accidental default. A headless `--write` run whose workspace
 writer lease is held by another process (ADR 0020) exits with a policy error

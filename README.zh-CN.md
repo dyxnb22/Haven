@@ -78,7 +78,7 @@ flowchart TD
     FACTS --> POL["<b>确定性策略</b><br/>pure(mode, facts)"]
     POL -->|deny| ERR
     POL -->|allow| TICKET
-    POL -->|ask| APR["<b>精确审批</b><br/>绑定 digest、一次性"]
+    POL -->|ask| APR["<b>精确审批</b><br/>绑定 digest、一次性<br/>分级模式: ask · smart · full"]
     APR -->|reject| ERR
     APR -->|approve| TOC["重新验证 preimage<br/>TOCTOU 防护"]
     TOC -->|已变化| ERR
@@ -96,7 +96,7 @@ flowchart TD
 - 自定义 Provider 适配器、工具调用层和**有界代理循环**，每次运行都有一个明确的停止原因，而不是依赖预制框架。
 - 清晰区分 **State ≠ Context ≠ Trace ≠ ModelResult**，并通过导入契约强制分层（`domain → application → ports`，适配器只能在唯一组合根后面）。
 - 在真实仓库中实现 `search → read → edit → verify → diff` 循环。
-- **确定性策略 + 绑定 digest 的一次性审批**、文件工具的严格路径限制，以及模型提议的通用 exec 必须经过原生沙箱，并带有 TOCTOU 和过期审批保护。
+- **确定性策略 + 绑定 digest 的一次性审批**（支持分级模式：`ask`、`smart`、`full`）、文件工具的严格路径限制，以及模型提议的通用 exec 必须经过原生沙箱，并带有 TOCTOU 和过期审批保护。
 - **Evidence Gate**：修改文件的运行不能只凭模型一句话成功；必须在最后一次写入之后记录 diff 和通过的检查，并确定性审查写入内容（不能有提交的密钥、冲突标记、调试语句或被静默清空的文件）。只读运行没有可核对的产物，因此由预算和停止原因约束，而不是验证成功；这个边界记录在 ADR 0003 中。
 - **持久化执行**：SQLite 检查点 + 追加式事件日志；恢复流程会分类中断的副作用，无法判断时绝不自动重放。
 - 流式响应、取消、预算（步骤 / 工具 / 时间 / token / 成本）和卡死循环检测。
@@ -137,7 +137,7 @@ haven config explain --workspace PATH
 
 <!-- END CLI COMMAND SURFACE -->
 
-TUI 中的 `/help`、`/budget`、`/context`、`/sessions`、`/fork`、`/rewind`、`/diff`、`/export` 和 `/quit` 提供交互控制。`@path` 文件提及会让代理通过 `repo.read` 访问文件，不会绕过工具边界；运行期间输入的文字会排队到下一轮，而不是打断当前轮。
+TUI 中的 `/help`、`/mode`、`/budget`、`/context`、`/sessions`、`/skill`、`/fork`、`/rewind`、`/diff`、`/export` 和 `/quit` 提供交互控制。`@path` 文件提及会让代理通过 `repo.read` 访问文件，不会绕过工具边界；运行期间输入的文字会排队到下一轮，而不是打断当前轮。
 
 退出码稳定：`0` 成功 · `2` 用法错误 · `3` 策略 / 权限 · `4` Provider · `5` 工具 · `6` 预算 / 停止 · `7` 需要恢复。
 
@@ -160,13 +160,13 @@ uv run python scripts/gates.py --list        # 检查图及其依赖
 
 | 指标 | 数值 |
 |---|---|
-| 自动化测试 | 885 |
+| 自动化测试 | 1095 |
 | 行覆盖率（`src/`） | 89% |
-| 源码 / 测试规模 | 约 16.6k / 约 11.9k 行 |
-| 类型检查模块（`mypy --strict`） | 102 |
-| 架构决策记录 | 30 |
-| 离线评估 | 39/39 通过，0 个安全违规 |
-| 评估类别 | security 16 · task 10 · robustness 6 · injection 3 · budget 2 · recovery 2 |
+| 源码 / 测试规模 | 约 19.9k / 约 15.3k 行 |
+| 类型检查模块（`mypy --strict`） | 111 |
+| 架构决策记录 | 39 |
+| 离线评估 | 40/40 通过，0 个安全违规 |
+| 评估类别 | security 16 · task 10 · robustness 6 · injection 4 · budget 2 · recovery 2 |
 | 实时真实仓库套件（deepseek-v4-flash） | 修复后 75/79（31/31 + 9/9 + 5/5 + 20/20 + 9/13 + 1/1）；0 个安全违规——原始运行和根因见 docs/EVAL_LIVE.md |
 | 同版本完整重跑 | 一次不间断运行中 61/65（失败归因见 docs/EVAL_LIVE.md） |
 

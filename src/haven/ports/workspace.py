@@ -287,6 +287,7 @@ class WorkspacePort(Protocol):
         *,
         occurrence: int | None = None,
         replace_all: bool = False,
+        skip_syntax_check: bool = False,
     ) -> EditPreview:
         """计算编辑预览和前后摘要；此操作不修改磁盘。"""
         ...
@@ -300,15 +301,20 @@ class WorkspacePort(Protocol):
         *,
         occurrence: int | None = None,
         replace_all: bool = False,
+        skip_syntax_check: bool = False,
     ) -> EditOutcome:
         """校验 expected_preimage 后原子应用单文件编辑，过期时失败关闭。"""
         ...
 
-    async def preview_create(self, path: str, content: str) -> EditPreview:
+    async def preview_create(
+        self, path: str, content: str, *, skip_syntax_check: bool = False
+    ) -> EditPreview:
         """为不存在的文件生成创建预览，不覆盖已有路径。"""
         ...
 
-    async def apply_create(self, path: str, content: str) -> EditOutcome:
+    async def apply_create(
+        self, path: str, content: str, *, skip_syntax_check: bool = False
+    ) -> EditOutcome:
         """按创建预览原子写入新文件，目标已存在时失败。"""
         ...
 
@@ -331,12 +337,18 @@ class WorkspacePort(Protocol):
         ...
 
     async def preview_patch(
-        self, ops: tuple[PatchOpSpec, ...], files_read: dict[str, str]
+        self,
+        ops: tuple[PatchOpSpec, ...],
+        files_read: dict[str, str],
+        *,
+        skip_syntax_check: bool = False,
     ) -> PatchPreview:
         """按顺序规划多文件补丁，并绑定读取前像和逐文件效果。"""
         ...
 
-    async def apply_patch(self, plan: PatchPreview) -> tuple[EditOutcome, ...]:
+    async def apply_patch(
+        self, plan: PatchPreview, *, skip_syntax_check: bool = False
+    ) -> tuple[EditOutcome, ...]:
         """提交补丁计划；任一失败都尝试回滚，无法回滚则报告未知效果。"""
         ...
 

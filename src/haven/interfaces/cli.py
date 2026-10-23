@@ -25,6 +25,7 @@ from haven.interfaces.cli_support.diagnostic_commands import (
     verify_provider,
 )
 from haven.interfaces.cli_support.eval_commands import eval_command
+from haven.interfaces.cli_support.mcp_commands import mcp
 from haven.interfaces.cli_support.recovery_commands import reconcile, resume, rewind
 from haven.interfaces.cli_support.run_commands import continue_, run
 from haven.interfaces.cli_support.session_commands import (
@@ -35,6 +36,7 @@ from haven.interfaces.cli_support.session_commands import (
     sessions_show,
 )
 from haven.interfaces.cli_support.sinks import ConsoleSink, JsonlEventSink, NullSink
+from haven.interfaces.cli_support.skill_commands import skills
 from haven.interfaces.cli_support.workspace_commands import config_explain, discover, init
 
 __all__ = [
@@ -78,11 +80,40 @@ def main(
 @app.command()
 def tui(
     path: Path = typer.Argument(Path("."), help="Workspace directory."),
+    approval_mode: str = typer.Option(
+        "ask",
+        "--approval-mode",
+        help=(
+            "Approval mode: ask (strict) | smart (approve for me) | "
+            "full (autonomous within workspace)."
+        ),
+    ),
+    worktree: bool | None = typer.Option(
+        None,
+        "--worktree/--no-worktree",
+        help="Run speculatively inside an isolated git worktree.",
+    ),
+    fast_model: str | None = typer.Option(
+        None,
+        "--fast-model",
+        help="Fast explorer model for dual-track routing.",
+    ),
+    deep_model: str | None = typer.Option(
+        None,
+        "--deep-model",
+        help="Deep reasoning/coding model for dual-track routing.",
+    ),
 ) -> None:
     """在工作区中启动交互式 TUI。"""
     from haven.interfaces.tui.app import HavenApp
 
-    HavenApp(workspace=path.resolve()).run()
+    HavenApp(
+        workspace=path.resolve(),
+        approval_mode=approval_mode,
+        worktree=worktree,
+        fast_model=fast_model,
+        deep_model=deep_model,
+    ).run()
 
 
 # 注册顺序保持原 CLI 的帮助输出稳定；实现模块不依赖此组装模块。
@@ -100,6 +131,8 @@ app.command()(export)
 app.command()(discover)
 app.command()(init)
 app.command("config")(config_explain)
+app.command("skills")(skills)
+app.command("mcp")(mcp)
 app.command("debug-context")(debug_context)
 app.command("verify-provider")(verify_provider)
 app.command("eval")(eval_command)

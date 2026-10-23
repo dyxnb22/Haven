@@ -683,3 +683,34 @@ async def test_response_size_limit() -> None:
         await collect(model)
     assert exc.value.code == "protocol"
     assert "size" in str(exc.value)
+
+
+def test_inline_refs_handles_circular_schema() -> None:
+    from haven.adapters.providers.openai_wire import inline_refs
+
+    circular_schema = {
+        "$defs": {
+            "TreeNode": {
+                "type": "object",
+                "properties": {
+                    "val": {"type": "integer"},
+                    "child": {"$ref": "#/$defs/TreeNode"},
+                },
+            }
+        },
+        "type": "object",
+        "properties": {"root": {"$ref": "#/$defs/TreeNode"}},
+    }
+    inlined = inline_refs(circular_schema)
+    assert isinstance(inlined, dict)
+    assert "root" in inlined["properties"]
+
+
+def test_tool_call_collector_handles_null_index() -> None:
+    from haven.adapters.providers.openai_wire import ToolCallCollector
+
+    collector = ToolCallCollector()
+    collector.feed({"index": None, "id": "call-0", "function": {"name": "test_tool"}})
+    completed = collector.completed({"test_tool": "test_tool"})
+    assert len(completed) == 1
+    assert completed[0].call_id == "call-0"

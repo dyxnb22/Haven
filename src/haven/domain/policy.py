@@ -12,7 +12,23 @@ from haven.domain.enums import PermissionMode, PolicyDecision, RiskLevel
 from haven.domain.exec_policy import ExecClass
 
 #: 只观察工作区的工具。
-READ_ONLY_TOOLS = frozenset({"repo.list", "repo.search", "repo.read", "repo.diff"})
+#: `skill.read` 读的是技能目录里的文件——用户级在工作区之外，项目级在 `.haven`
+#: 之内，两者都在 `repo.read` 的管辖之外，因此它有自己的通道（ADR 0032）。
+READ_ONLY_TOOLS = frozenset(
+    {
+        "repo.list",
+        "repo.search",
+        "repo.read",
+        "skill.read",
+        "repo.diff",
+        "repo.outline",
+        "repo.symbol",
+        "task.status",
+        "task.logs",
+        "web.search",
+        "web.fetch",
+    }
+)
 
 #: 会对文件或进程产生副作用的工具。
 EFFECT_TOOLS = frozenset(
@@ -21,11 +37,11 @@ EFFECT_TOOLS = frozenset(
 
 #: 只修改当前运行自身内存状态的工具。它们既不接触磁盘，也不接触运行范围
 #: 之外的内容，因此即使在 read_only 模式下也允许使用。
-STATE_TOOLS = frozenset({"task.plan"})
+STATE_TOOLS = frozenset({"task.plan", "task.stop"})
 
 #: 运行任意程序的工具。它们的影响范围由操作系统沙箱限制，而不是由参数
 #: 允许列表限制，因此在没有可用沙箱时，策略必须完全拒绝它们。
-EXEC_TOOLS = frozenset({"repo.exec"})
+EXEC_TOOLS = frozenset({"repo.exec", "task.start"})
 
 KNOWN_TOOLS = READ_ONLY_TOOLS | EFFECT_TOOLS | STATE_TOOLS | EXEC_TOOLS
 
@@ -53,6 +69,10 @@ class ToolFacts:
     preimage_digest: str | None = None
     #: 规范化后的目标路径（如工具适用）；仅用于审计和策略诊断。
     path: str | None = None
+    #: MCP 扩展工具相关事实（ADR 0039）。
+    mcp_server: str | None = None
+    mcp_read_only: bool = False
+    mcp_schema_drift: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +89,15 @@ class PolicyOutcome:
 
 def evaluate_policy(mode: PermissionMode, facts: ToolFacts) -> PolicyOutcome:
     """为一项提议决定 allow/ask/deny。这是纯函数，并且对所有输入都有定义。"""
+    if facts.tool_name.startswith("mcp."):
+        if facts.mcp_schema_drift:
+            return PolicyOutcome(PolicyDecision.DENY, "mcp_schema_drift", RiskLevel.HIGH)
+        if mode is PermissionMode.READ_ONLY and not facts.mcp_read_only:
+            return PolicyOutcome(PolicyDecision.DENY, "read_only_mode", RiskLevel.MEDIUM)
+        if facts.mcp_read_only:
+            return PolicyOutcome(PolicyDecision.ALLOW, "mcp_read_only", RiskLevel.LOW)
+        return PolicyOutcome(PolicyDecision.ASK, "mcp_requires_approval", RiskLevel.HIGH)
+
     if facts.tool_name not in KNOWN_TOOLS:
         return PolicyOutcome(PolicyDecision.DENY, "unknown_tool", RiskLevel.HIGH)
 
@@ -112,15 +141,15 @@ def evaluate_policy(mode: PermissionMode, facts: ToolFacts) -> PolicyOutcome:
         return PolicyOutcome(PolicyDecision.ASK, "create_requires_approval", RiskLevel.MEDIUM)
 
     if facts.tool_name == "repo.delete":
-        return PolicyOutcome(PolicyDecision.ASK, "delete_requires_approval", RiskLevel.MEDIUM)
+        return PolicyOutcome(PolicyDecision.ASK, "delete_requires_approval", RiskLevel.HIGH)
 
     if facts.tool_name == "repo.move":
-        return PolicyOutcome(PolicyDecision.ASK, "move_requires_approval", RiskLevel.MEDIUM)
+        return PolicyOutcome(PolicyDecision.ASK, "move_requires_approval", RiskLevel.HIGH)
 
     if facts.tool_name == "repo.apply_patch":
         # 整个补丁只需一次审批；预览包含完整 diff，审批摘要绑定每个被触及
         # 文件的 preimage。
-        return PolicyOutcome(PolicyDecision.ASK, "patch_requires_approval", RiskLevel.MEDIUM)
+        return PolicyOutcome(PolicyDecision.ASK, "patch_requires_approval", RiskLevel.HIGH)
 
     # repo.edit：普通编辑路径。
     return PolicyOutcome(PolicyDecision.ASK, "write_requires_approval", RiskLevel.MEDIUM)

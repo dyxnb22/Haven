@@ -100,6 +100,19 @@ class TestScope:
         findings = review_diff(diff(["    breakpoint()"], path="src/deep/mod.py"))
         assert findings[0].path == "src/deep/mod.py"
 
+    def test_diff_headers_with_tab_timestamps_are_parsed(self) -> None:
+        raw = (
+            "--- a/src/app.py\t2026-10-23 10:00:00.000000000 +0000\n"
+            "+++ b/src/app.py\t2026-10-23 10:05:00.000000000 +0000\n"
+            "@@ -1,1 +1,2 @@\n"
+            " pass\n"
+            "+    breakpoint()\n"
+        )
+        findings = review_diff(raw)
+        assert len(findings) == 1
+        assert findings[0].path == "src/app.py"
+        assert findings[0].code == "debug_leftover"
+
     def test_clean_diff_has_no_findings(self) -> None:
         assert review_diff(diff(["    return a + b"], removed=["    return a - b"])) == ()
 

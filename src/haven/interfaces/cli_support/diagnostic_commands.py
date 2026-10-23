@@ -8,7 +8,8 @@ from pathlib import Path
 import typer
 
 from haven.application.context_builder import MAX_CONTEXT_CHARS
-from haven.config import ConfigError, load_config
+from haven.application.skills import SkillSelectionError, discover_skills
+from haven.config import ConfigError, load_config, user_skills_dir
 from haven.contracts.events import ContextBuilt
 from haven.interfaces.cli_support.common import EXIT_OK, EXIT_PROVIDER, EXIT_USAGE
 
@@ -47,7 +48,21 @@ def doctor(
     )
     ws = workspace.resolve()
     check("workspace", ws.is_dir(), str(ws))
-    check("git repo", (ws / ".git").exists(), "found" if (ws / ".git").exists() else "not a repo")
+    is_git = (ws / ".git").exists() or any((p / ".git").exists() for p in ws.parents)
+    if not is_git and shutil.which("git") is not None and ws.is_dir():
+        import subprocess
+
+        try:
+            res = subprocess.run(
+                ["git", "rev-parse", "--is-inside-work-tree"],
+                cwd=ws,
+                capture_output=True,
+                check=False,
+            )
+            is_git = res.returncode == 0
+        except OSError:
+            pass
+    check("git repo", is_git, "found" if is_git else "not a repo")
     try:
         config = load_config(ws)
         check("config", True, "loaded")
@@ -58,11 +73,42 @@ def doctor(
             f"{'present' if key else 'missing'} (env {config.provider.api_key_env}; "
             "only needed for live runs)",
         )
+        if config.router and config.router.enabled:
+            fast = config.router.fast_model or config.provider.model
+            deep = config.router.deep_model or config.provider.model
+            check("router", True, f"fast={fast}, deep={deep}")
         for recipe_id, spec in sorted(config.recipes.items()):
-            found = shutil.which(spec.argv[0]) is not None or Path(spec.argv[0]).exists()
+            found = (
+                shutil.which(spec.argv[0]) is not None
+                or (ws / spec.argv[0]).exists()
+                or Path(spec.argv[0]).exists()
+            )
             check(f"recipe {recipe_id}", found, spec.argv[0])
+        for mcp_srv in config.mcp_servers:
+            mcp_found = (
+                shutil.which(mcp_srv.command) is not None
+                or (ws / mcp_srv.command).exists()
+                or Path(mcp_srv.command).exists()
+            )
+            check(f"mcp {mcp_srv.name}", mcp_found, mcp_srv.command)
     except ConfigError as exc:
         check("config", False, str(exc))
+    try:
+        skills = discover_skills(user_root=user_skills_dir(), project_root=ws)
+    except OSError as exc:
+        check("skills", False, str(exc))
+    else:
+        # 失败即关闭必须可见：一个被拒绝的技能如果不出现在这里，用户就只会
+        # 以为自己的技能放错了地方（ADR 0031）。
+        check(
+            "skills",
+            not skills.refused,
+            f"{len(skills.skills)} loaded"
+            + (f", {len(skills.refused)} refused" if skills.refused else "")
+            + (f" ({', '.join(skills.names())})" if skills.skills else ""),
+        )
+        for refusal in skills.refused:
+            check(f"skill {refusal.source}", False, refusal.reason)
 
     from haven.config import data_dir
 
@@ -87,6 +133,11 @@ def debug_context(
     workspace: Path = typer.Option(Path("."), "--workspace", "-w"),
     run_id: str = typer.Option("", "--run", help="Show the recorded context of a stored run."),
     show_prompt: bool = typer.Option(False, "--show-prompt", help="Print the full system prompt."),
+    skills: list[str] = typer.Option(
+        [],
+        "--skill",
+        help="Preview with a discovered skill loaded (repeatable). Advisory context, not tools.",
+    ),
 ) -> None:
     """解释模型本轮看到什么、内容来自哪里以及原因是什么。"""
     if run_id:
@@ -99,8 +150,10 @@ def debug_context(
         from haven.bootstrap import BootstrapError, build_context_preview
 
         try:
-            request, segments, config = await build_context_preview(workspace, goal)
-        except (BootstrapError, ConfigError) as exc:
+            request, segments, config = await build_context_preview(
+                workspace, goal, skill_names=skills
+            )
+        except (BootstrapError, ConfigError, SkillSelectionError) as exc:
             typer.echo(f"error: {exc}")
             return EXIT_USAGE
 
@@ -126,8 +179,10 @@ def debug_context(
         typer.echo("  - repository files: only what the agent reads via repo.read enters context")
         typer.echo("  - prior runs / other sessions: context is per-run, never cross-run memory")
         typer.echo("  - secrets and env: never placed in context, traces, or checkpoints")
-        typer.echo(f"  - anything beyond {MAX_CONTEXT_CHARS} chars: oldest tool outputs are")
-        typer.echo("    deterministically dropped first (no model-written summaries)")
+        typer.echo("  - skill bodies: only skills you select with --skill are loaded; the")
+        typer.echo("    catalog is always shown, and a skill file is not readable via repo.read")
+        typer.echo(f"  - anything beyond {MAX_CONTEXT_CHARS} chars: multi-tier compaction folds")
+        typer.echo("    bulky observations first, then drops oldest outputs deterministically")
         if show_prompt:
             typer.echo("")
             typer.echo("--- system prompt ---")
@@ -229,6 +284,8 @@ def verify_provider(
             typer.echo(f"provider verification failed: {exc}")
             return EXIT_PROVIDER
         finally:
-            await model.aclose()
+            closer = getattr(model, "aclose", None)
+            if closer is not None:
+                await closer()
 
     raise typer.Exit(asyncio.run(_verify()))

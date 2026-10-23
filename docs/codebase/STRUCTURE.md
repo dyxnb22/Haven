@@ -33,7 +33,7 @@
 | `domain/` | Pure decision logic (policy, digests, budgets, evidence gate, transitions) | Any I/O, framework imports (import-linter contract "domain is isolated") |
 | `ports/` | `typing.Protocol` interfaces the core depends on | Implementations |
 | `contracts/` | Strict pydantic DTOs crossing boundaries | Behavior |
-| `application/` | Use-case orchestration (run loop, tool pipeline, context, recovery, maintenance) | Direct adapter imports (contract: application never imports adapters) |
+| `application/` | Use-case orchestration (run loop, tool pipeline, context, skills and their grants, recovery, maintenance) | Direct adapter imports (contract: application never imports adapters) |
 | `adapters/` | Port implementations (fs workspace, sqlite, provider, sandbox launchers, lease) | Cross-adapter coupling to interfaces |
 | `interfaces/` | CLI + TUI presentation | Direct adapter imports (contract: interfaces reach adapters only through bootstrap) |
 | `bootstrap.py` | The only composition root | Business logic |

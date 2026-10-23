@@ -13,6 +13,7 @@ from haven.adapters.workspace_fs import FsWorkspace
 from haven.application.approvals import ApprovalResponder, AutoApprover
 from haven.application.emitter import EventEmitter
 from haven.application.run_service import RunService
+from haven.application.skills import SkillCatalog
 from haven.contracts.events import ApplicationEvent, EventEnvelope
 from haven.contracts.model import (
     ModelEvent,
@@ -25,7 +26,7 @@ from haven.contracts.model import (
 )
 from haven.contracts.tools import RecipeSpec
 from haven.domain.budget import Budget
-from haven.domain.enums import PermissionMode
+from haven.domain.enums import ApprovalMode, PermissionMode
 from haven.domain.pricing import Pricing
 from haven.ports.sandbox import SandboxLauncher
 from tests.integration.fakes import RecordingLauncher
@@ -129,6 +130,8 @@ class Harness:
         model_name: str = "scripted",
         pricing: Pricing | None = None,
         supports_prefix_continuation: bool | None = None,
+        skills: SkillCatalog | None = None,
+        approval_mode: ApprovalMode = ApprovalMode.ASK,
     ) -> None:
         self.workspace = FsWorkspace(repo)
         self.store = MemorySessionStore()
@@ -154,4 +157,6 @@ class Harness:
             launcher=resolved,
             pricing=pricing,
             supports_prefix_continuation=supports_prefix_continuation,
+            skills=skills,
+            approval_mode=approval_mode,
         )

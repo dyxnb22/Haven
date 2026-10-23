@@ -21,9 +21,11 @@ from urllib.parse import urlsplit
 
 import platformdirs
 
+from haven.contracts.mcp import MCPServerConfig
 from haven.contracts.tools import RecipeSpec
 from haven.domain.budget import BUDGET_TIERS, Budget
 from haven.domain.pricing import Pricing
+from haven.domain.skill_grants import grants_enabled
 
 APP_NAME = "haven"
 
@@ -55,6 +57,16 @@ class ProviderConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RouterConfig:
+    """双轨模型路由配置（ADR 0042）。"""
+
+    enabled: bool = False
+    fast_model: str = ""
+    deep_model: str = ""
+    fast_turns: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ResolvedConfig:
     """合并用户配置、项目配置和环境变量后的最终配置。"""
 
@@ -66,13 +78,41 @@ class ResolvedConfig:
     pricing: Pricing
     #: 按 recipe id 索引的、允许项目检查阶段执行的命令定义。
     recipes: dict[str, RecipeSpec] = field(default_factory=dict)
+    #: 配置的受控外部 MCP Server 列表（ADR 0039）。
+    mcp_servers: tuple[MCPServerConfig, ...] = ()
+    #: 是否启用临时 Git 投机工作树隔离（ADR 0041）。
+    worktree: bool = False
+    #: 双轨模型路由配置（ADR 0042）。
+    router: RouterConfig | None = None
     #: config key -> 最终值的来源，用于诊断和可审计的配置报告。
     sources: dict[str, str] = field(default_factory=dict)
 
 
+def config_dir() -> Path:
+    """用户级 Haven 配置目录；`HAVEN_CONFIG_DIR` 可覆盖它。
+
+    与 `data_dir()` 的 `HAVEN_DATA_DIR` 完全同构：这里放的是用户自己撰写的
+    内容（配置文件、技能），测试和沙箱运行必须无法触达开发者的真实配置，
+    否则一次本地点下的技能会静默进入金色轨迹。
+    """
+    override = os.environ.get("HAVEN_CONFIG_DIR")
+    if override:
+        return Path(override)
+    return Path(platformdirs.user_config_dir(APP_NAME))
+
+
 def user_config_path() -> Path:
     """返回当前用户级 Haven 配置文件路径。"""
-    return Path(platformdirs.user_config_dir(APP_NAME)) / "config.toml"
+    return config_dir() / "config.toml"
+
+
+def user_skills_dir() -> Path:
+    """用户级技能根目录：`<config dir>/skills`。
+
+    目录可以不存在——`application.skills.discover_skills` 把缺失的根当作空目录，
+    因此这里不像 `workspace_lease` 那样急着 mkdir。
+    """
+    return config_dir() / "skills"
 
 
 def data_dir() -> Path:
@@ -250,12 +290,43 @@ def _parse_recipes(raw: object, origin: str) -> dict[str, RecipeSpec]:
     return recipes
 
 
+def _parse_mcp_servers(raw: object, origin: str) -> tuple[MCPServerConfig, ...]:
+    if not isinstance(raw, dict):
+        raise ConfigError(f"[mcp] in {origin} must be a table")
+    servers_dict = raw.get("servers", {})
+    if not isinstance(servers_dict, dict):
+        raise ConfigError(f"[mcp.servers] in {origin} must be a table")
+    configs: list[MCPServerConfig] = []
+    for name, spec in servers_dict.items():
+        if not isinstance(spec, dict) or "command" not in spec:
+            raise ConfigError(f"mcp server {name!r} in {origin} requires 'command'")
+        cmd = spec["command"]
+        args = tuple(spec.get("args", ()))
+        env = {str(k): str(v) for k, v in spec.get("env", {}).items()}
+        allowed_tools = tuple(spec.get("allowed_tools", ()))
+        read_only_tools = tuple(spec.get("read_only_tools", ()))
+        pinned_schemas = {str(k): str(v) for k, v in spec.get("pinned_schemas", {}).items()}
+        configs.append(
+            MCPServerConfig(
+                name=str(name),
+                command=str(cmd),
+                args=args,
+                env=env,
+                allowed_tools=allowed_tools,
+                read_only_tools=read_only_tools,
+                pinned_schemas=pinned_schemas,
+            )
+        )
+    return tuple(configs)
+
+
 def load_config(workspace: Path | None = None, tier: str | None = None) -> ResolvedConfig:
     """按默认值、用户配置、环境变量、预算档位和项目收紧规则合并配置。"""
     provider = ProviderConfig()
     budget = Budget()
     pricing = Pricing()
     recipes: dict[str, RecipeSpec] = {}
+    mcp_servers: list[MCPServerConfig] = []
     sources: dict[str, str] = {
         "provider.base_url": "default",
         "provider.model": "default",
@@ -266,11 +337,38 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
 
     # -- 用户级别 --------------------------------------------------------------
     user_path = user_config_path()
+    worktree = False
+    router: RouterConfig | None = None
+
     if user_path.is_file():
         raw = _read_toml(user_path)
-        unknown_top_level = set(raw) - {"provider", "budget", "pricing", "recipes"}
+        unknown_top_level = set(raw) - {
+            "provider",
+            "budget",
+            "pricing",
+            "recipes",
+            "mcp",
+            "runtime",
+            "router",
+        }
         if unknown_top_level:
             raise ConfigError(f"unknown top-level keys in {user_path}: {sorted(unknown_top_level)}")
+        if (
+            (runtime_raw := raw.get("runtime"))
+            and isinstance(runtime_raw, dict)
+            and "worktree" in runtime_raw
+        ):
+            worktree = bool(runtime_raw["worktree"])
+            sources["worktree"] = "user"
+        if (router_raw := raw.get("router")) and isinstance(router_raw, dict):
+            fast_turns_val = router_raw.get("fast_turns")
+            router = RouterConfig(
+                enabled=bool(router_raw.get("enabled", True)),
+                fast_model=str(router_raw.get("fast_model", "")),
+                deep_model=str(router_raw.get("deep_model", provider.model)),
+                fast_turns=int(fast_turns_val) if fast_turns_val is not None else None,
+            )
+            sources["router"] = "user"
         if (provider_raw := raw.get("provider")) is not None:
             if not isinstance(provider_raw, dict):
                 raise ConfigError(f"[provider] in {user_path} must be a table")
@@ -332,6 +430,9 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
         if recipes_raw := raw.get("recipes"):
             recipes.update(_parse_recipes(recipes_raw, str(user_path)))
             sources["recipes(user)"] = "user"
+        if mcp_raw := raw.get("mcp"):
+            mcp_servers.extend(_parse_mcp_servers(mcp_raw, str(user_path)))
+            sources["mcp(user)"] = "user"
 
     # -- 提供商的环境变量覆盖 --------------------------------------------------
     if env_url := os.environ.get("HAVEN_BASE_URL"):
@@ -365,12 +466,12 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
         project_path = project_config_path(workspace)
         if project_path.is_file():
             raw = _read_toml(project_path)
-            allowed = {"budget", "recipes"}
+            allowed = {"budget", "recipes", "mcp"}
             unknown = set(raw) - allowed
             if unknown:
                 raise ConfigError(
                     f"project config {project_path} may only contain "
-                    f"[budget] and [recipes]; found {sorted(unknown)}"
+                    f"[budget], [recipes], and [mcp]; found {sorted(unknown)}"
                 )
             if budget_raw := raw.get("budget"):
                 project_budget = _parse_budget(budget_raw, str(project_path))
@@ -379,6 +480,29 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
             if recipes_raw := raw.get("recipes"):
                 recipes.update(_parse_recipes(recipes_raw, str(project_path)))
                 sources["recipes(project)"] = "project"
+            if mcp_raw := raw.get("mcp"):
+                mcp_servers.extend(_parse_mcp_servers(mcp_raw, str(project_path)))
+                sources["mcp(project)"] = "project"
+
+    if env_worktree := os.environ.get("HAVEN_WORKTREE"):
+        worktree = env_worktree.strip().lower() in ("1", "true", "yes")
+        sources["worktree"] = "env"
+
+    fast_model_env = os.environ.get("HAVEN_FAST_MODEL")
+    deep_model_env = os.environ.get("HAVEN_DEEP_MODEL")
+    fast_turns_env = os.environ.get("HAVEN_FAST_TURNS")
+    if fast_model_env or deep_model_env or fast_turns_env:
+        router = RouterConfig(
+            enabled=True,
+            fast_model=fast_model_env or (router.fast_model if router else provider.model),
+            deep_model=deep_model_env or (router.deep_model if router else provider.model),
+            fast_turns=(
+                int(fast_turns_env)
+                if fast_turns_env is not None
+                else (router.fast_turns if router else None)
+            ),
+        )
+        sources["router"] = "env"
 
     _validate_provider(provider)
     return ResolvedConfig(
@@ -386,6 +510,9 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
         budget=budget,
         pricing=pricing,
         recipes=recipes,
+        mcp_servers=tuple(mcp_servers),
+        worktree=worktree,
+        router=router,
         sources=sources,
     )
 
@@ -422,4 +549,47 @@ def explain(config: ResolvedConfig, sandbox_backend: str = "unknown") -> list[tu
         rows.append((f"recipes.{recipe_id}", shlex.join(spec.argv) + network, "config"))
     rows.append(("storage.db", str(db_path()), "platformdirs"))
     rows.append(("storage.artifacts", str(artifacts_dir()), "platformdirs"))
+    rows.append(("skills.user_dir", str(user_skills_dir()), "platformdirs"))
+    rows.append(("skills.project_dir", ".haven/skills/", "convention"))
+    # 授权开关不在 config 对象里，因为它不是配置值而是一个退路：一旦有人不想让
+    # 仓库里的 SKILL.md 影响审批，他们需要不用改代码就关掉它（ADR 0032）。
+    rows.append(
+        (
+            "skills.standing_approval",
+            "enabled" if grants_enabled() else "disabled",
+            "HAVEN_SKILL_GRANTS",
+        )
+    )
+    rows.append(
+        (
+            "runtime.worktree",
+            "enabled" if config.worktree else "disabled",
+            config.sources.get("worktree", "default"),
+        )
+    )
+    if config.router and config.router.enabled:
+        router_src = config.sources.get("router", "default")
+        rows.append(("router.enabled", "enabled", router_src))
+        rows.append(
+            (
+                "router.fast_model",
+                config.router.fast_model or config.provider.model,
+                router_src,
+            )
+        )
+        rows.append(
+            (
+                "router.deep_model",
+                config.router.deep_model or config.provider.model,
+                router_src,
+            )
+        )
+        if config.router.fast_turns is not None:
+            rows.append(("router.fast_turns", str(config.router.fast_turns), router_src))
+    else:
+        rows.append(("router.enabled", "disabled", config.sources.get("router", "default")))
+
+    for mcp_srv in config.mcp_servers:
+        cmd_str = shlex.join((mcp_srv.command, *mcp_srv.args))
+        rows.append((f"mcp.{mcp_srv.name}", cmd_str, "config"))
     return rows

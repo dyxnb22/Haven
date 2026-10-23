@@ -22,6 +22,7 @@ from haven.domain.digest import canonical_json, digest_of, sha256_bytes, sha256_
 from haven.domain.enums import (
     ACTIVE_STATUSES,
     ApprovalDecision,
+    ApprovalMode,
     EffectState,
     PermissionMode,
     PolicyDecision,
@@ -61,6 +62,11 @@ from haven.domain.policy import (
 from haven.domain.pricing import Pricing
 from haven.domain.review import ReviewFinding, review_diff
 from haven.domain.stuck import StuckLoopDetector, call_fingerprint
+from haven.domain.syntax_gate import (
+    SyntaxDiagnostic,
+    format_syntax_error,
+    validate_syntax,
+)
 from haven.domain.ticket import ExecutionTicket, mint_ticket
 from haven.domain.transitions import InvalidTransitionError, transition
 
@@ -73,6 +79,7 @@ __all__ = [
     "STATE_TOOLS",
     "ApprovalDecision",
     "ApprovalId",
+    "ApprovalMode",
     "ApprovalRecord",
     "ApprovalRequest",
     "Budget",
@@ -97,6 +104,7 @@ __all__ = [
     "StepId",
     "StopReason",
     "StuckLoopDetector",
+    "SyntaxDiagnostic",
     "ToolCallId",
     "ToolErrorCode",
     "ToolFacts",
@@ -110,6 +118,7 @@ __all__ = [
     "digest_of",
     "evaluate_evidence_gate",
     "evaluate_policy",
+    "format_syntax_error",
     "mint_ticket",
     "new_approval_id",
     "new_run_id",
@@ -117,4 +126,5 @@ __all__ = [
     "sha256_bytes",
     "sha256_text",
     "transition",
+    "validate_syntax",
 ]

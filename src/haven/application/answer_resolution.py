@@ -81,9 +81,12 @@ class AnswerResolver:
                 ),
             )
             if self._supports_prefix:
-                ctx.transcript.append(
-                    ModelMessage(role="assistant", content=result.text, is_prefix=True)
-                )
+                if ctx.transcript and ctx.transcript[-1].role == "assistant":
+                    ctx.transcript[-1] = ctx.transcript[-1].model_copy(update={"is_prefix": True})
+                else:
+                    ctx.transcript.append(
+                        ModelMessage(role="assistant", content=result.text, is_prefix=True)
+                    )
             else:
                 ctx.transcript.append(
                     ModelMessage(

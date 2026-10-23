@@ -7,6 +7,8 @@ from pathlib import Path
 
 from haven.application.approval_cards import ToolPreview
 from haven.application.emitter import EventEmitter
+from haven.application.mcp_client import MCPClientManager
+from haven.application.skills import SkillCatalog
 from haven.application.state import RunContext
 from haven.application.tool_execution_types import (
     ExecuteHandler as ExecuteHandler,
@@ -18,6 +20,7 @@ from haven.application.tool_execution_types import (
     clip,
     error_result,
     map_workspace_error,
+    ok_result,
     summarize_payload,
 )
 from haven.application.tool_mutations import MutationToolExecutor
@@ -54,9 +57,12 @@ class ToolExecutor:
         recipes: dict[str, RecipeSpec],
         launcher: SandboxLauncher | None,
         scratch_dir: Path,
+        skills: SkillCatalog | None = None,
+        mcp_manager: MCPClientManager | None = None,
     ) -> None:
-        readers = ReadToolExecutor(workspace, emitter)
+        readers = ReadToolExecutor(workspace, emitter, skills)
         mutations = MutationToolExecutor(workspace, store, emitter)
+        self._mcp_manager = mcp_manager
         self._processes = ProcessToolExecutor(
             workspace=workspace,
             executor=executor,
@@ -77,6 +83,41 @@ class ToolExecutor:
         """把新运行的独占临时目录传递给进程工具。"""
         self._processes.replace_scratch_dir(scratch_dir)
 
+    async def close_tasks(self) -> None:
+        """终止所有正在运行的后台子进程与 MCP Server。"""
+        await self._processes.close_tasks()
+        if self._mcp_manager is not None:
+            await self._mcp_manager.close_all()
+
+    async def execute_mcp(
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: ToolArgs,
+        ticket_digest: str,
+        preview: ToolPreview,
+    ) -> ToolExecution:
+        if self._mcp_manager is None:
+            return ToolExecution(
+                error_result(call, ToolErrorCode.UNKNOWN_TOOL, "no MCP manager configured")
+            )
+        raw_args = getattr(args, "arguments", {})
+        res = await self._mcp_manager.call_tool(call.tool_name, raw_args)
+        if res.get("is_error"):
+            err_msg = str(res.get("error", "MCP tool execution failed"))
+            err_code = ToolErrorCode.DENIED if res.get("drift") else ToolErrorCode.INTERNAL
+            return ToolExecution(error_result(call, err_code, err_msg))
+
+        return ToolExecution(
+            ok_result(
+                call,
+                {
+                    "content": res.get("content", ""),
+                    "raw": res.get("raw", {}),
+                },
+            )
+        )
+
     async def run_ticketed(
         self,
         ctx: RunContext,
@@ -86,6 +127,8 @@ class ToolExecutor:
         preview: ToolPreview,
     ) -> ToolExecution:
         """把已通过审批的调用路由到对应处理器，并保留票据摘要用于审计。"""
+        if call.tool_name.startswith("mcp."):
+            return await self.execute_mcp(ctx, call, args, ticket_digest, preview)
         handler = self.handlers.get(call.tool_name)
         if handler is None:  # pragma: no cover - 注册表连线测试覆盖全部键集合
             return ToolExecution(

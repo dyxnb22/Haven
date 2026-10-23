@@ -16,11 +16,14 @@
     "kind": "request.envelope",
     "step": 1,
     "reason": "initial",
-    "system_prompt_chars": 2050,
+    "system_prompt_chars": 2509,
     "tool_names": [
       "repo.list",
       "repo.search",
       "repo.read",
+      "repo.outline",
+      "repo.symbol",
+      "skill.read",
       "repo.edit",
       "repo.create",
       "repo.delete",
@@ -29,7 +32,13 @@
       "repo.exec",
       "repo.diff",
       "repo.check",
-      "task.plan"
+      "task.plan",
+      "task.start",
+      "task.status",
+      "task.logs",
+      "task.stop",
+      "web.search",
+      "web.fetch"
     ],
     "reasoning_effort": "",
     "max_output_tokens": 4096
@@ -41,7 +50,7 @@
       {
         "source": "system_rules",
         "trust": "trusted",
-        "size_bytes": 2054,
+        "size_bytes": 2513,
         "reason": "fixed operating rules"
       },
       {
@@ -110,7 +119,7 @@
       {
         "source": "system_rules",
         "trust": "trusted",
-        "size_bytes": 2054,
+        "size_bytes": 2513,
         "reason": "fixed operating rules"
       },
       {
@@ -191,7 +200,7 @@
       {
         "source": "system_rules",
         "trust": "trusted",
-        "size_bytes": 2054,
+        "size_bytes": 2513,
         "reason": "fixed operating rules"
       },
       {
@@ -301,7 +310,7 @@
       {
         "source": "system_rules",
         "trust": "trusted",
-        "size_bytes": 2054,
+        "size_bytes": 2513,
         "reason": "fixed operating rules"
       },
       {
@@ -418,7 +427,7 @@
       {
         "source": "system_rules",
         "trust": "trusted",
-        "size_bytes": 2054,
+        "size_bytes": 2513,
         "reason": "fixed operating rules"
       },
       {
@@ -552,7 +561,7 @@
       {
         "source": "system_rules",
         "trust": "trusted",
-        "size_bytes": 2054,
+        "size_bytes": 2513,
         "reason": "fixed operating rules"
       },
       {

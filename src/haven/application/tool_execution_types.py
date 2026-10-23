@@ -22,6 +22,7 @@ _ERROR_CODES: dict[str, ToolErrorCode] = {
     "stale_preimage": ToolErrorCode.STALE_PREIMAGE,
     "ambiguous_match": ToolErrorCode.AMBIGUOUS_MATCH,
     "timeout": ToolErrorCode.TIMEOUT,
+    "syntax_error": ToolErrorCode.SYNTAX_ERROR,
     "internal": ToolErrorCode.INTERNAL,
 }
 

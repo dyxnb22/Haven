@@ -55,6 +55,11 @@ approaches it; a genuine multi-file refactor hits it and reports
 
 ## Decision 1: deterministic compaction
 
+> **Extended by ADR 0036 (2026-10-22).** Compaction was upgraded to a multi-tier
+> pipeline: Tier 1 transparently folds bulky tool observations on demand, Tier 2
+> derives the structural `run_digest`, and Tier 3 applies the hard clamp while
+> strictly protecting user steering and system instructions.
+
 `application/compaction.py` provides `summarize_dropped(messages, limit)`,
 which drops the oldest tool-call turns and returns the survivors plus one
 digest, and `build_run_digest(dropped)`, which renders the digest. The digest

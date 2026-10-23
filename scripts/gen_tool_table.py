@@ -47,6 +47,17 @@ CONSTRAINTS: dict[str, str] = {
     "repo.read": (
         "regular UTF-8 files, line and byte caps; records the digest that later binds an edit"
     ),
+    "repo.outline": (
+        "regular source files, extracts structural AST outline (classes, functions, "
+        "methods, imports) without reading whole body (ADR 0035)"
+    ),
+    "repo.symbol": (
+        "workspace source files, locates definitions and references with line previews (ADR 0035)"
+    ),
+    "skill.read": (
+        "a discovered skill's own directory only: relative paths, symlinks refused, "
+        "byte cap; companion manifest discovery (ADR 0032, 0034)"
+    ),
     "repo.diff": "shows only what *this run* changed, including created files",
     "repo.edit": (
         "existing files only, preimage-bound, unique match unless `occurrence` or "
@@ -68,6 +79,23 @@ CONSTRAINTS: dict[str, str] = {
         "`$HOME` unreadable; output is never evidence"
     ),
     "task.plan": "touches only run state; no path, no external effect",
+    "task.start": (
+        "managed long-running process in OS sandbox; non-blocking ring buffer; "
+        "auto-cleaned (ADR 0037)"
+    ),
+    "task.status": (
+        "inspects running status and exit code of a task in this run's job pool (ADR 0037)"
+    ),
+    "task.logs": (
+        "reads bounded tail lines from background task stdout/stderr ring buffer (ADR 0037)"
+    ),
+    "task.stop": "graceful SIGTERM/SIGKILL termination of a managed background task (ADR 0037)",
+    "web.search": (
+        "read-only web documentation search, bounded results, untrusted data framing (ADR 0038)"
+    ),
+    "web.fetch": (
+        "read-only web fetch converted to markdown, byte-capped, SSRF protected (ADR 0038)"
+    ),
 }
 
 #: 工具所属的集合，用于 class 列。

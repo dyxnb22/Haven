@@ -402,6 +402,13 @@ class TestSqliteSpecific:
         cursor = await store._db.execute("SELECT version FROM schema_meta")  # type: ignore[attr-defined]  # noqa: SLF001
         row = await cursor.fetchone()
         assert row is not None and int(row["version"]) == DB_SCHEMA_VERSION
+
+        # 验证索引迁移成功建立
+        idx_cursor = await store._db.execute(  # type: ignore[attr-defined]  # noqa: SLF001
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_runs_created_at'"
+        )
+        assert await idx_cursor.fetchone() is not None
+
         await store.close()
 
 

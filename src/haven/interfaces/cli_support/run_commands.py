@@ -10,9 +10,10 @@ from typing import Literal
 import typer
 
 from haven.application.approvals import ApprovalResponder, AutoApprover
+from haven.application.skills import SkillSelectionError
 from haven.config import ConfigError
 from haven.domain.budget import BUDGET_TIERS, DEFAULT_TIER
-from haven.domain.enums import PermissionMode
+from haven.domain.enums import ApprovalMode, PermissionMode
 from haven.interfaces.cli_support.common import EXIT_POLICY, EXIT_USAGE, exit_code_for
 from haven.interfaces.cli_support.sinks import ConsoleSink, JsonlEventSink, NullSink
 from haven.ports.event_sink import EventSinkPort
@@ -32,6 +33,14 @@ def run(
         "--approval-policy",
         help="Headless approval when --write is set: reject | trusted-recipe | all.",
     ),
+    approval_mode: str = typer.Option(
+        "ask",
+        "--approval-mode",
+        help=(
+            "Approval mode: ask (strict) | smart (approve for me) | "
+            "full (autonomous within workspace)."
+        ),
+    ),
     json_output: bool = typer.Option(
         False, "--json", "--jsonl", help="Print the final outcome as one JSON object."
     ),
@@ -47,6 +56,30 @@ def run(
             f"Budget preset: {', '.join(sorted(BUDGET_TIERS))}. "
             "A project file may still tighten it."
         ),
+    ),
+    skills: list[str] = typer.Option(
+        [],
+        "--skill",
+        help=(
+            "Load a discovered skill by name (repeatable). Skill bodies are advisory "
+            "context, not tools. Names come from the catalog — `haven doctor` lists them."
+        ),
+    ),
+    worktree: bool | None = typer.Option(
+        None,
+        "--worktree/--no-worktree",
+        "--isolated/--no-isolated",
+        help="Run task in an ephemeral git worktree; atomically reconcile back only on success.",
+    ),
+    fast_model: str | None = typer.Option(
+        None,
+        "--fast-model",
+        help="Fast model for exploration steps (repo.list/search/outline, web.search).",
+    ),
+    deep_model: str | None = typer.Option(
+        None,
+        "--deep-model",
+        help="Deep reasoning model for code mutation steps (repo.edit/create/apply_patch).",
     ),
 ) -> None:
     """无头运行一个目标。
@@ -87,6 +120,14 @@ def run(
                 approvals=approver,
                 sinks=sinks,
                 tier=tier,
+                approval_mode=(
+                    ApprovalMode(approval_mode)
+                    if approval_mode in ApprovalMode._value2member_map_
+                    else ApprovalMode.ASK
+                ),
+                worktree=worktree,
+                fast_model=fast_model,
+                deep_model=deep_model,
             )
         except (BootstrapError, ConfigError) as exc:
             if events_sink is not None:
@@ -100,7 +141,18 @@ def run(
                 events_sink.close()
             return EXIT_POLICY
         try:
-            outcome = await services.run_service.run(goal)
+            outcome = await services.run_service.run(goal, skill_names=skills)
+            reconciled = await services.reconcile_worktree_if_succeeded(outcome)
+            if reconciled and not json_output:
+                typer.echo(f"Worktree reconciled {len(reconciled)} file(s) back to main workspace.")
+        except SkillSelectionError as exc:
+            # 选择在 turn loop 之前解析，因此一个未知名字让这次运行拒绝启动，
+            # 而不是静默少一段上下文（ADR 0031）。
+            await services.close()
+            if events_sink is not None:
+                events_sink.close()
+            typer.echo(f"error: {exc}")
+            return EXIT_USAGE
         finally:
             await services.close()
             if events_sink is not None:
@@ -134,6 +186,11 @@ def continue_(
     follow_up: str = typer.Argument(..., help="The follow-up request."),
     workspace: Path = typer.Option(Path("."), "--workspace", "-w"),
     json_output: bool = typer.Option(False, "--json", help="Print the outcome as JSON."),
+    skills: list[str] = typer.Option(
+        [],
+        "--skill",
+        help="Load a discovered skill by name (repeatable). Advisory context, not tools.",
+    ),
 ) -> None:
     """在之前运行的上下文中提出后续请求（只读、无头）。"""
 
@@ -152,7 +209,11 @@ def continue_(
             typer.echo(f"error: {exc}")
             return EXIT_USAGE
         try:
-            outcome = await services.run_service.continue_run(run_id, follow_up)
+            outcome = await services.run_service.continue_run(run_id, follow_up, skill_names=skills)
+        except SkillSelectionError as exc:
+            await services.close()
+            typer.echo(f"error: {exc}")
+            return EXIT_USAGE
         except ValueError as exc:
             typer.echo(f"error: {exc}")
             return EXIT_USAGE

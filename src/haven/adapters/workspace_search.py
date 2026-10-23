@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
 import time
@@ -163,25 +164,31 @@ async def _read_ripgrep(
     lines = 0
     truncated = False
     try:
-        async with asyncio.timeout(timeout_seconds):
-            while True:
-                line = await proc.stdout.readline()
-                if not line:
-                    break
-                chunks.append(line)
-                total += len(line)
-                lines += 1
-                if lines >= max_results or total >= _RG_RAW_OUTPUT_CAP_BYTES:
-                    truncated = True
-                    await _terminate(proc)
-                    break
-            if proc.returncode is None:
-                await proc.wait()
-    except TimeoutError:
-        truncated = True
-        await _terminate(proc)
-    stderr = await stderr_task
-    return b"".join(chunks), stderr, truncated
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                while True:
+                    line = await proc.stdout.readline()
+                    if not line:
+                        break
+                    chunks.append(line)
+                    total += len(line)
+                    lines += 1
+                    if lines >= max_results or total >= _RG_RAW_OUTPUT_CAP_BYTES:
+                        truncated = True
+                        await _terminate(proc)
+                        break
+                if proc.returncode is None:
+                    await proc.wait()
+        except TimeoutError:
+            truncated = True
+            await _terminate(proc)
+        stderr = await stderr_task
+        return b"".join(chunks), stderr, truncated
+    finally:
+        if not stderr_task.done():
+            stderr_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await stderr_task
 
 
 async def _read_bounded_stderr(stream: asyncio.StreamReader) -> bytes:

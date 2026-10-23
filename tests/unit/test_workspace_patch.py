@@ -268,3 +268,38 @@ class TestApply:
         monkeypatch.setattr(workspace_fs.os, "replace", failing_replace)
         with pytest.raises(PatchRollbackError):
             await ws.apply_patch(plan)
+
+
+class TestReplacementTolerantMatching:
+    def test_whitespace_and_newline_tolerant_replacement(self) -> None:
+        from haven.adapters.workspace_patch import apply_replacement
+
+        text = "def calc():\n    x = 1  \r\n    return x\n"
+        # 模型给的 old 没有行尾空格，换行是 \n
+        old = "    x = 1\n    return x"
+        new = "    x = 42\n    return x"
+        result = apply_replacement(text, old, new, "test.py", occurrence=None, replace_all=False)
+        assert "x = 42" in result
+
+    def test_ambiguous_tolerant_match_rejected(self) -> None:
+        from haven.adapters.workspace_patch import apply_replacement
+
+        text = "def a():\n    return 1  \ndef b():\n    return 1   \n"
+        old = "    return 1"
+        with pytest.raises(WorkspaceError) as err:
+            apply_replacement(
+                text, old, "    return 2", "test.py", occurrence=None, replace_all=False
+            )
+        assert err.value.code == "ambiguous_match"
+
+    def test_closest_block_diagnostic_hint(self) -> None:
+        from haven.adapters.workspace_patch import apply_replacement
+
+        text = "def greet(name):\n    print('hello', name)\n    return True\n"
+        # 与第 2 行很像但有拼写错误
+        old = "    print('helllo', name)\n    return True"
+        with pytest.raises(WorkspaceError) as err:
+            apply_replacement(text, old, "    pass", "test.py", occurrence=None, replace_all=False)
+        assert err.value.code == "not_found"
+        assert "Closest matching lines around line" in str(err.value)
+        assert "print('hello', name)" in str(err.value)

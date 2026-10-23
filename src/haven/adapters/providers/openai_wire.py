@@ -27,19 +27,22 @@ def inline_refs(schema: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(defs, dict):
         return schema
 
-    def resolve(node: Any) -> Any:
-        """递归解析节点中的本地定义引用。"""
+    def resolve(node: Any, seen: frozenset[str] = frozenset()) -> Any:
+        """递归解析节点中的本地定义引用，避免自引用无限递归。"""
         if isinstance(node, dict):
             ref = node.get("$ref")
             if isinstance(ref, str) and ref.startswith("#/$defs/"):
-                target = defs.get(ref.rsplit("/", 1)[-1], {})
+                ref_key = ref.rsplit("/", 1)[-1]
+                if ref_key in seen:
+                    return {key: value for key, value in node.items() if key != "$ref"}
+                target = defs.get(ref_key, {})
                 return {
-                    **resolve(target),
+                    **resolve(target, seen | {ref_key}),
                     **{key: value for key, value in node.items() if key != "$ref"},
                 }
-            return {key: resolve(value) for key, value in node.items() if key != "$defs"}
+            return {key: resolve(value, seen) for key, value in node.items() if key != "$defs"}
         if isinstance(node, list):
-            return [resolve(item) for item in node]
+            return [resolve(item, seen) for item in node]
         return node
 
     inlined = resolve(schema)
@@ -157,7 +160,8 @@ class ToolCallCollector:
 
     def feed(self, delta: dict[str, Any]) -> None:
         """合并一条流式工具调用增量，按 index 保持调用顺序。"""
-        index = int(delta.get("index", 0))
+        raw_index = delta.get("index")
+        index = int(raw_index) if raw_index is not None else 0
         slot = self._calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
         if call_id := delta.get("id"):
             slot["id"] = str(call_id)

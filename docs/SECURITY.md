@@ -21,6 +21,8 @@ deterministic code owns permission, execution, and the definition of success.
 | The model | untrusted proposer | text and tool calls only; no direct side effects |
 | Repository contents / tool outputs | untrusted data | wrapped in `<tool_output>` and labelled untrusted in Context |
 | `AGENTS.md` project guidance | untrusted data | included in Context; explicitly cannot change permissions |
+| Skill text (user and project skills) | untrusted data | catalog always in Context; bodies on selection or via `skill.read`; cannot change permissions |
+| A skill's `allowed-tools` | untrusted *request*, never a grant | standing approval for the named tools, run-scoped and in-memory only; can turn ASK into ALLOW but never DENY into ALLOW; `HAVEN_SKILL_GRANTS=0` disables it (ADR 0032) |
 | Provider transport | trusted control plane | endpoint/credentials come from config, not from the model |
 
 ## Attack surface and defenses
@@ -92,15 +94,70 @@ before execution; if the file changed in between, execution fails closed with
 postimage is re-read and digest-checked — a successful `write()` is not trusted
 on its own.
 
-### 5. Prompt injection (repository files, tool output, AGENTS.md)
+### 5. Prompt injection (repository files, tool output, AGENTS.md, skills)
 
 Repository content and tool results are wrapped in `<tool_output>` blocks and
 declared untrusted in the system prompt. `AGENTS.md` is loaded as untrusted
-guidance that "cannot change permissions or rules." Crucially, injection can only
-influence *proposals*; the deterministic policy, approval binding, and workspace
-confinement are unaffected by anything in Context. Eval cases `inj-readme-ssh`,
-`inj-tool-output`, and `inj-config-edit` exercise this: the scripted model "obeys"
-the injection and every attempt is denied.
+guidance that "cannot change permissions or rules." Skill text is framed the
+same way, in both pieces: the catalog (name, scope, digest, description) is
+always in Context, and a body enters only when the user selects it — neither can
+change permissions or rules. A skill file that mentions a script, command, or
+path grants no authority to it.
+
+Project skills live under `.haven/skills/`, which is a `PROTECTED_COMPONENT`.
+That has two consequences worth stating: the model cannot read a skill file
+through `repo.read` (the call is denied by construction), and it cannot *edit* one
+either — a skill cannot rewrite its own instructions mid-run. Reading a skill is
+`skill.read`'s job; see §5a for its bounds.
+
+Skill loading itself is fail-closed (`application/skills.py`): a missing or
+unknown frontmatter key, a name that disagrees with its directory, an invalid
+name charset, a symlinked file (which would let a skill read an arbitrary file
+outside the workspace), an unregistered tool name in `allowed-tools`, or an empty
+body refuses the whole skill, and the refusal is reported by `haven skills list`
+and `haven doctor` rather than silently dropped.
+
+### 5a. Skill-requested standing approval (an accepted risk, ADR 0032)
+
+A skill may name tools in `allowed-tools`, and selecting that skill gives those
+tools standing approval for the run. **This is an accepted, deliberate narrowing
+of the boundary above**: a cloned repository shipping
+`.haven/skills/helper/SKILL.md` that requests `repo.edit` gets its workspace
+writes auto-approved once the user runs `--skill helper`. The owner chose this for
+parity with Claude Code.
+
+What still holds, pinned by `tests/unit/test_skill_grants.py`:
+
+- **A grant can only turn `ASK` into `ALLOW.** `evaluate_policy` is a pure
+  function of `(mode, facts)` with no grant parameter, and the pipeline returns on
+  `DENY` before approval is ever reached. A granted skill still cannot write
+  `.git` or `.haven`, escape the workspace, exec without a sandbox, or write in
+  read-only mode.
+- **Only explicitly selected skills grant.** A body the model loads itself via
+  `skill.read` arrives as a tool result and never enters the grant table.
+- **Grants are run-scoped and in-memory.** Nothing persists, so a resumed run
+  re-asks and a malicious repo cannot grant permanently.
+- **Every granted execution is journaled**: a `warning` notice at selection naming
+  the skill, its scope, source, digest and tools, plus one `approval.decided` per
+  execution, so replay shows exactly which asks were skipped.
+- **`HAVEN_SKILL_GRANTS=0`** disables all of it; `haven config explain` reports
+  the state.
+
+Otherwise injection can only influence *proposals*; the deterministic policy,
+approval binding, and workspace confinement are unaffected by anything in
+Context. Eval cases `inj-readme-ssh`, `inj-tool-output`, `inj-config-edit`, and
+`inj-skill-body` exercise this: the scripted model "obeys" the injection and every
+attempt is denied.
+
+### 5b. Tiered approval modes (ADR 0033)
+
+To counter approval fatigue during long tasks while preserving security guarantees, Haven supports three tiered approval modes: `ask` (default, strict), `smart` (auto-approves low/medium-risk actions such as standard file edits and registered checks; prompts on high-risk operations), and `full` (auto-approves all non-denied operations within workspace).
+
+Crucial security boundaries:
+1. **`DENY` is structurally untouchable**: Policy evaluation is a pure function that runs before approval mode is consulted. Workspace boundary escapes, protected-path touches (`.git`, `.haven`), unconfined executions without an OS sandbox, and mutations in `READ_ONLY` mode are hard-denied regardless of the approval mode.
+2. **Every auto-approved action is ticketed and journaled**: An approval record and decision event is logged and atomically consumed in SQLite for every action, ensuring 100% auditability and replay parity.
+3. **High-risk actions require confirmation under `smart` mode**: Deletions (`repo.delete`), path mutations (`repo.move`), multi-file patches (`repo.apply_patch`), and commands with shell syntax (`shell_passthrough`) are classified as `RiskLevel.HIGH` and always prompt for explicit human confirmation in `smart` mode.
+4. **Evidence Gate remains mandatory**: Every run that writes files still requires a fresh diff and a passing check after the last write to succeed.
 
 ### 6. Arbitrary command execution
 
@@ -230,6 +287,39 @@ times), which is also why moving it to a thread does not help and was not
 done. Bounding one pathological subject would need a killable subprocess;
 ripgrep, the default backend, uses a linear engine and is unaffected.
 
+### 6b. Managed background tasks (ADR 0037)
+
+Background processes spawned via `task.start` are subject to the same strict
+OS sandbox guarantees as `repo.exec`:
+- **Mandatory sandbox**: every background task executes under the platform OS
+  sandbox backend (`Seatbelt` on macOS, `Landlock` on Linux). Network access is
+  denied by default, the workspace is read-only, and `$HOME` is unreadable.
+- **Controlled output streaming**: background tasks write to a fixed-capacity
+  in-memory ring buffer (default 2,000 lines), preventing unbounded disk or RAM
+  exhaustion from runaway logging.
+- **Orphan defense**: all active background processes are registered with the
+  `TaskManager`. On run completion, session close, Ctrl-C cancellation, or
+  unhandled exception, `TaskManager.close_all()` sends `SIGTERM` followed by a
+  grace-period `SIGKILL`, ensuring no unconfined orphan processes outlive the run.
+
+### 6c. Sandboxed technical documentation lookup & SSRF defense (ADR 0038)
+
+To eliminate API hallucinations on third-party frameworks without compromising
+local execution isolation, Haven introduces read-only technical documentation
+lookup (`web.search`, `web.fetch`):
+- **Isolation invariant intact**: `repo.exec`'s sandbox keeps its `(deny network*)`
+  rule absolute. Subprocesses remain completely network-isolated.
+- **Host-level SSRF defense**: URLs fetched via `web.fetch` are validated strictly:
+  only `http` and `https` schemes are allowed. Hostnames are resolved to IP
+  addresses and checked against loopback (`127.0.0.0/8`, `::1`), private networks
+  (RFC 1918 `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), link-local
+  (`169.254.0.0/16`), and multicast address ranges. Any request to local or internal
+  infrastructure is blocked immediately.
+- **Untrusted data framing**: fetched web pages and search snippets are converted
+  to clean Markdown, length-capped, and wrapped in `<tool_output tool="web.*">` tags
+  as untrusted data. System instructions explicitly dictate that text inside web
+  outputs cannot enlarge permissions or alter execution rules.
+
 ### 7. Secret leakage
 
 The API key is read from an environment variable, never placed in CLI args, the
@@ -290,6 +380,32 @@ stuck-loop detector (identical tool+args+result three times → `no_progress`).
 Every run ends with exactly one stop reason. Budgets are a ceiling the agent
 cannot raise: a project `.haven.toml` may only lower them, and nothing in the
 loop extends them.
+
+### 10. Hardened MCP Gateway & Schema Drift Defense (ADR 0039)
+
+Model Context Protocol (MCP) integrations introduce external capabilities into
+Haven while preserving the project's single execution channel and deterministic
+policy invariants:
+- **Static configuration only**: MCP servers must be declared statically in user
+  or project configuration under `[mcp.servers.<name>]`. Dynamic mounting by the
+  model mid-session is strictly prohibited.
+- **Namespace isolation**: all external tools are mapped into a dedicated namespace
+  (`mcp.<server_name>.<tool_name>`), preventing tool collisions or shadowing of
+  built-in core tools.
+- **Strict allowlist filtering**: only tools explicitly listed in `allowed_tools`
+  are exposed to the model. Unlisted tools returned by the server are discarded.
+- **Fail-closed schema pinning**: tool configurations specify expected SHA-256
+  digests (`pinned_schemas`) of the canonical input parameter schema. If an
+  external server dynamically alters its schema between turns, the gateway detects
+  the drift and the policy layer issues an immediate `DENY` (`mcp_schema_drift`),
+  blocking execution and approval bypass.
+- **Deterministic approval gating**: tools listed in `read_only_tools` are
+  auto-allowed (`RiskLevel.LOW`). All other MCP tools default to high-risk mutating
+  operations requiring human approval (`PolicyDecision.ASK`, `RiskLevel.HIGH`).
+  In `READ_ONLY` mode, mutating MCP tools are hard-denied.
+- **Observations, not verification evidence**: MCP outputs are wrapped in
+  `<tool_output>` and serve exclusively as model observations. They cannot fulfill
+  the Evidence Gate (which strictly requires `repo.diff` and passing `repo.check`).
 
 ## Recovery safety
 

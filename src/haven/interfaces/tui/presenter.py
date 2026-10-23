@@ -78,6 +78,10 @@ class PresenterState:
     model_name: str = ""
     #: 当前运行的权限模式。
     mode: str = ""
+    #: 当前运行的分级审批模式（ask / smart / full）。
+    approval_mode: str = "ask"
+    #: 会话当前选中的技能名称（ADR 0034）。
+    selected_skills: tuple[str, ...] = field(default_factory=tuple)
     #: 对话上方展示的用户目标。
     goal: str = ""
     #: 当前运行或重放运行的稳定标识。
@@ -127,12 +131,19 @@ class PresenterState:
 
     def header_line(self) -> str:
         """生成标题栏中的工作区、分支、模型、模式、步数和费用摘要。"""
+        mode_str = (
+            f"{self.mode} [{self.approval_mode}]"
+            if self.mode == "interactive" and self.approval_mode
+            else self.mode
+        )
+        skills_str = f"skills: [{', '.join(self.selected_skills)}]" if self.selected_skills else ""
         parts = [
             "Haven",
             self.workspace.rsplit("/", 1)[-1] if self.workspace else "",
             self.branch,
             self.model_name,
-            self.mode,
+            mode_str,
+            skills_str,
         ]
         step = f"step {self.step}/{self.max_steps}" if self.max_steps else ""
         cost = (

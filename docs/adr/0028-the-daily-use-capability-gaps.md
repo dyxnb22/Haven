@@ -1,7 +1,7 @@
 # ADR 0028: the three capability gaps nobody had ever gated
 
 Date: 2026-08-14
-Status: Accepted (three deferrals, each with an unlock condition)
+Status: Accepted (three deferrals; background tasks amended by ADR 0037, web access amended by ADR 0038)
 
 ## Context
 
@@ -50,6 +50,13 @@ is untrusted repository content like any file).
 
 ## Web access — deferred, and the most expensive of the three
 
+> **Amended by ADR 0038 (2026-10-22).** The unlock condition was satisfied and
+> read-only technical documentation lookup was adopted in ADR 0038 via `web.search`
+> and `web.fetch`. The OS sandbox keeps `(deny network*)` absolute for `repo.exec`,
+> while host-level HTTP fetches enforce strict SSRF defenses (blocking private,
+> loopback, link-local, and multicast IP ranges) and wrap all fetched content as
+> untrusted `<tool_output tool="web.*">` data.
+
 Search and fetch would be Haven's first outbound network capability, against a
 design where **the sandbox denies network by default** (`(deny network*)` in
 the Seatbelt profile; the Landlock rules cover TCP) and `repo.exec`'s safety
@@ -79,6 +86,12 @@ external lookup, plus injection eval cases for fetched content, plus a decision
 on whether fetch runs inside or outside the sandbox closure.
 
 ## Background tasks and persistent terminals — deferred on a real conflict
+
+> **Amended by ADR 0037 (2026-10-22).** Managed background tasks and process pool
+> were adopted in ADR 0037 via `task.start`, `task.status`, `task.logs`, and `task.stop`.
+> The single sequential execution channel is preserved (task control operations
+> run synchronously through `ToolPipeline`), background processes inherit the OS
+> sandbox, and orphan processes are cleanly killed on session termination.
 
 This one is not merely unneeded; it is in tension with a load-bearing
 invariant. `_handle_tool_calls` is *deliberately* sequential, and the reason is

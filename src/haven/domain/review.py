@@ -151,6 +151,7 @@ def _scan_mass_deletion(added: dict[str, int], removed: dict[str, int]) -> list[
 
 
 def _strip_prefix(path: str) -> str:
+    path = path.split("\t", 1)[0].strip()
     for prefix in ("a/", "b/"):
         if path.startswith(prefix):
             return path[len(prefix) :]

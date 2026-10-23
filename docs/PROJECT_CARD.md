@@ -54,13 +54,13 @@ drifts from the sources, so no number here is hand-maintained.
 
 | Metric | Value |
 |---|---|
-| Automated tests | 885 |
+| Automated tests | 1095 |
 | Line coverage (`src/`) | 89% |
-| Source / test size | ~16.6k / ~11.9k lines |
-| Typed modules (`mypy --strict`) | 102 |
-| Architecture decision records | 30 |
-| Offline eval | 39/39 passed, 0 security violations |
-| Eval categories | security 16 · task 10 · robustness 6 · injection 3 · budget 2 · recovery 2 |
+| Source / test size | ~19.9k / ~15.3k lines |
+| Typed modules (`mypy --strict`) | 111 |
+| Architecture decision records | 39 |
+| Offline eval | 40/40 passed, 0 security violations |
+| Eval categories | security 16 · task 10 · robustness 6 · injection 4 · budget 2 · recovery 2 |
 | Live real-repo suite (deepseek-v4-flash) | 75/79 after fixes (31/31 + 9/9 + 5/5 + 20/20 + 9/13 + 1/1); 0 security violations — as-found runs and root causes in docs/EVAL_LIVE.md |
 | Same-version full rerun | 61/65 in one uninterrupted run (failure attribution in docs/EVAL_LIVE.md) |
 
@@ -89,7 +89,7 @@ change.
 | Chose | Over | Why |
 |---|---|---|
 | Deterministic diff review | A model Reviewer subagent | Its §11 gate requires measuring defect detection and false positives; with a scripted model those numbers would be authored, not measured (ADR 0007) |
-| No MCP client | Runtime-discovered tools | It breaks the invariant that every tool is compiled in and provably classified, and improves no metric Haven measures (ADR 0007) |
+| Hardened MCP Gateway with schema pinning | Unconstrained runtime MCP mounting | Preserves single execution channel, namespace isolation, explicit allowlists, and SHA-256 fail-closed drift defense while unlocking external integrations (ADR 0039) |
 | Explicit `while` loop + typed state machine | LangGraph | The loop, budgets, and recovery semantics *are* the project; a framework would hide exactly what I wanted to demonstrate |
 | Registered check recipes (id only) | Arbitrary shell | Unbounded risk and unreproducible eval; the model can never supply a command string |
 | Digest-bound one-time approval | Persistent broad grants | Easy to over-approve; drift must invalidate authorization |
@@ -110,8 +110,9 @@ change.
   is not a container or VM: IPC is open, Linux network confinement covers TCP
   only, `.git` write protection during checks is kernel-enforced on macOS but
   detect-and-fail on Linux, and secrets outside `$HOME` can remain readable.
-- Single repository, single provider, no background processes, no automatic Git
-  history changes, no multi-agent, no RAG, no MCP.
+- Single repository, single primary model provider, no automatic Git
+  history changes, no multi-agent orchestrator, no vector RAG (external tools
+  are strictly gated through the Hardened MCP Gateway).
 - Token/cost accounting is exact when the provider reports usage and explicitly
   flagged `estimated` otherwise.
 

@@ -85,7 +85,7 @@ flowchart TB
 
 ## 工具面
 
-项目刻意只保留十二个工具：足以完成真实仓库任务，又足够小，可以为每个工具指定明确的策略分类。单元测试会检查注册表与策略工具集合同步，并保证任何副作用工具都不能被自动允许，因此新增工具不会悄悄创建未分类路径。`repo.exec` 是唯一明确固定的例外：明显只读且操作数仍在工作区内的命令可以自动允许，测试也会断言只有这一类拥有该例外。
+项目包含二十一个编译进程序的内置工具，以及按命名空间隔离的外部受控 MCP 工具：足以完成复杂的真实仓库开发任务，且每个工具都拥有严格的确定性策略分类。单元测试会检查注册表与策略工具集合同步，并保证任何副作用工具都不能被自动允许，因此新增工具不会悄悄创建未分类路径。`repo.exec` 是唯一明确固定的例外：明显只读且操作数仍在工作区内的命令可以自动允许，测试也会断言只有这一类拥有该例外。
 
 <!-- BEGIN GENERATED TOOL TABLE (scripts/gen_tool_table.py; do not edit by hand) -->
 
@@ -134,7 +134,7 @@ flowchart TD
     FACTS --> POL["<b>确定性策略</b><br/>pure(mode, facts)"]
     POL -->|deny| E3["错误：denied"]
     POL -->|allow<br/>只读工具| TICKET
-    POL -->|ask<br/>edit / check| APR["<b>精确审批</b><br/>绑定 digest、一次性"]
+    POL -->|ask<br/>edit / check| APR["<b>精确审批</b><br/>绑定 digest、一次性<br/>分级模式: ask · smart · full"]
     APR -->|reject| E4["错误：approval_rejected"]
     APR -->|approve| TOC["重新验证 preimage<br/>TOCTOU 防护"]
     TOC -->|文件已变化| E5["错误：stale_preimage"]
@@ -157,8 +157,8 @@ flowchart TD
 
 - 执行器只接受程序创建的 `ExecutionTicket`，永远不接受模型 JSON。
 - 文件操作直接使用工作区适配器；OS 沙箱阶段只服务于进程工具。在支持的后端上，每个子进程都在执行器处被包装。没有后端时，模型提议的 `repo.exec` 会被拒绝而不是不受限运行，配置也不能覆盖这一点；用户注册的 `repo.check` 仍可在本地信任假设下运行（ADR 0009/0013）。
-- 审批绑定工作区、工具、规范参数、preimage 和预览 digest；任何漂移都会使审批失效，每个审批最多消费一次（通过条件 SQL `UPDATE`）。
-- `deny` 永远不能被用户文本或仓库内容变成 `allow`。
+- 审批绑定工作区、工具、规范参数、preimage 和预览 digest；任何漂移都会使审批失效，每个审批最多消费一次（通过条件 SQL `UPDATE`）。交互会话支持分级审批模式（ADR 0033：`ask`、`smart`、`full`）。
+- 策略层的 `deny` 永远不能被用户文本、仓库内容或审批模式变成 `allow`。
 - 修改过文件的运行，必须在最后一次写入之后记录 diff 并通过 check，才能报告成功。
 
 ## 运行状态机

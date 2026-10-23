@@ -42,11 +42,16 @@ class RunContext:
     #: 代理当前的计划。它位于 State 而不是 transcript 中，因此每轮都会重新
     #: 渲染到 Context，不会被截断丢弃。
     plan: tuple[PlanStep, ...] = ()
-    #: 本次运行中用户已经批准的 repo.check 调用的审批摘要（ADR 0025）。
-    #: 对这类检查进行字节级相同的重跑时，会带着日志记录自动批准，而不会
-    #: 再次询问。它仅在本次运行的内存范围内有效——特意不写入 checkpoint，
-    #: 因此恢复后的运行在重新启用前必须再次询问。
-    standing_check_grants: set[str] = field(default_factory=set)
+    #: 本次运行已授权的常驻审批：授权键 -> 请求它的技能名，或 ADR 0025 的哨兵值
+    #: （ADR 0025 推广到 ADR 0032）。命中时带着日志记录自动批准，而不会再次询问。
+    #: 它仅在本次运行的内存范围内有效——特意不写入 checkpoint，因此恢复后的运行
+    #: 在重新启用前必须再次询问；一次恶意仓库也无法借此获得持久授权。
+    standing_grants: dict[str, str] = field(default_factory=dict)
+    #: 被选中技能请求常驻授权的工具 -> 请求它的技能名（ADR 0032）。出现在这里
+    #: 的工具在本次运行内免审；不在这里的工具永远免审不了，因此技能文本无法
+    #: 自行扩大权限。它同样只在本次运行的内存里有效——不进 checkpoint、不跨
+    #: 进程，所以一次恶意仓库无法借此获得持久授权。
+    granted_tools: dict[str, str] = field(default_factory=dict)
     #: 尚未消费的用户引导/转向提示数量。
     nudges: int = 0
     #: 最后写入事件的序号，用于恢复时继续单调递增的事件流。

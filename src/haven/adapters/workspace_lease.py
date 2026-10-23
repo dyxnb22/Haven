@@ -66,7 +66,7 @@ class WorkspaceLease:
         """刷新当前租约心跳；租约已被替换或删除时不再写回。"""
         with _acquire_guard(self.path):
             payload = _read(self.path)
-            if payload is None or not self._is_mine():
+            if payload is None or not self._is_mine(payload):
                 return
             payload["heartbeat_at"] = _now()
             _write_atomic(self.path, payload)
@@ -80,8 +80,9 @@ class WorkspaceLease:
         finally:
             _HELD_TOKENS.discard(self.token)
 
-    def _is_mine(self) -> bool:
-        payload = _read(self.path)
+    def _is_mine(self, payload: dict[str, object] | None = None) -> bool:
+        if payload is None:
+            payload = _read(self.path)
         if payload is None:
             return False
         return (

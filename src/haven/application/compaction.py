@@ -28,6 +28,99 @@ _MAX_ITEMS_PER_LINE = 12
 _DIGEST_PREFIX_CHARS = 8
 
 
+def fold_text(
+    text: str, head_lines: int = 4, tail_lines: int = 4, threshold_chars: int = 400
+) -> tuple[str, bool]:
+    """折叠过长文本，保留头部和尾部关键行（ADR 0036）。"""
+    if len(text) <= threshold_chars:
+        return text, False
+    lines = text.splitlines(keepends=True)
+    if len(lines) <= head_lines + tail_lines + 2:
+        half = threshold_chars // 2
+        omitted = len(text) - threshold_chars
+        return f"{text[:half]}\n[... {omitted} chars folded ...]\n{text[-half:]}", True
+    head = "".join(lines[:head_lines])
+    tail = "".join(lines[-tail_lines:])
+    skipped = len(lines) - head_lines - tail_lines
+    return (
+        f"{head}\n[... {skipped} lines folded ({len(text)} chars); re-read on demand ...]\n{tail}",
+        True,
+    )
+
+
+def _mask_tool_message(msg: ModelMessage, threshold_chars: int = 600) -> tuple[ModelMessage, int]:
+    """折叠单条工具消息中超过阈值的观测内容，返回（新消息，节省字符数）。"""
+    if msg.role != "tool":
+        return msg, 0
+    content = msg.content
+    start = content.find(">")
+    end = content.rfind("</tool_output>")
+    if start == -1 or end <= start:
+        return msg, 0
+    tag = content[: start + 1]
+    body_str = content[start + 1 : end].strip()
+    closing = content[end:]
+    try:
+        data = json.loads(body_str)
+    except (ValueError, TypeError):
+        return msg, 0
+    if not isinstance(data, dict):
+        return msg, 0
+    result = data.get("result")
+    if not isinstance(result, dict):
+        return msg, 0
+
+    changed = False
+    for key in ("content", "stdout", "output", "diff"):
+        val = result.get(key)
+        if isinstance(val, str) and len(val) > threshold_chars:
+            folded, did_fold = fold_text(val, threshold_chars=threshold_chars)
+            if did_fold:
+                result[key] = folded
+                changed = True
+
+    if not changed:
+        return msg, 0
+
+    new_body = json.dumps(data, ensure_ascii=False)
+    new_content = f"{tag}\n{new_body}\n{closing}"
+    saved = len(content) - len(new_content)
+    if saved <= 0:
+        return msg, 0
+    return msg.model_copy(update={"content": new_content}), saved
+
+
+def mask_bulky_observations(
+    messages: list[ModelMessage],
+    threshold_chars: int = 600,
+    keep_recent_units: int = 2,
+) -> tuple[list[ModelMessage], int]:
+    """在丢弃单元之前，折叠较旧的体积过大工具输出（微压缩层，ADR 0036）。
+
+    保留工具调用的结构体与因果配对链，保留输出首尾关键行（如错误堆栈或首尾定义），
+    大幅缩减体积而不破坏历史上下文。
+    """
+    if not messages:
+        return [], 0
+    units = _all_units(messages)
+    protected_unit_indices = set(range(max(0, len(units) - keep_recent_units), len(units)))
+
+    new_messages = list(messages)
+    total_saved = 0
+
+    for u_idx, unit in enumerate(units):
+        if u_idx in protected_unit_indices:
+            continue
+        for msg_idx in unit:
+            msg = new_messages[msg_idx]
+            new_msg, saved = _mask_tool_message(msg, threshold_chars=threshold_chars)
+            if saved > 0:
+                new_messages[msg_idx] = new_msg
+                total_saved += saved
+
+    return new_messages, total_saved
+
+
 def message_chars(message: ModelMessage) -> int:
     """估算消息在线协议中的大小，用于上下文预算。
 
@@ -110,6 +203,28 @@ def build_run_digest(dropped: list[ModelMessage]) -> str:
             )
             _append_unique(edits, marker)
             continue
+        if tool == "repo.apply_patch":
+            paths = result.get("paths")
+            if isinstance(paths, list):
+                for p in paths:
+                    if isinstance(p, str):
+                        _append_unique(edits, p)
+                if paths:
+                    continue
+        if tool == "repo.delete" and isinstance(path, str):
+            _append_unique(edits, f"{path} (deleted)")
+            continue
+        if tool == "repo.move":
+            src = result.get("source_path")
+            dst = result.get("destination_path")
+            if isinstance(src, str) and isinstance(dst, str):
+                _append_unique(edits, f"{src} -> {dst}")
+                continue
+        if tool == "repo.outline":
+            outline_target = result.get("file") or path
+            if isinstance(outline_target, str) and outline_target:
+                _append_unique(reads, outline_target)
+                continue
         if tool == "repo.check":
             recipe = result.get("recipe_id")
             exit_code = result.get("exit_code")
@@ -136,18 +251,19 @@ def build_run_digest(dropped: list[ModelMessage]) -> str:
 
 
 def summarize_dropped(
-    messages: list[ModelMessage], limit: int
+    messages: list[ModelMessage],
+    limit: int,
+    *,
+    mask_observations: bool = False,
 ) -> tuple[list[ModelMessage], str, int]:
-    """通过丢弃最旧的工具输出来将 `messages` 放入 `limit` 个字符以内。
+    """通过折叠或丢弃最旧的工具输出来将 `messages` 放入 `limit` 个字符以内。
 
     返回保留的消息、被丢弃内容的摘要，以及摘要在保留列表中的插入位置；如果没有丢弃
     内容，则位置为 -1。
 
-    工具结果会与发起该调用的 assistant 轮次作为一个整体一起丢弃，因此保留的 assistant
-    消息不会携带一个结果已被丢弃的工具调用——OpenAI 和 DeepSeek 会拒绝这种孤立工具
-    调用。没有工具调用的 assistant 轮次（叙述）和 user 轮次（门禁反馈）永远不会丢弃。
-    最近的两条工具输出始终整体保留；由于易变尾部位于 transcript 之后，这里按角色而
-    不是按位置进行保护。
+    当 `mask_observations=True` 时启用 ADR 0036 多层压缩：
+    - Tier 1: 优先折叠最旧候选单元的过大观测结果，保留首尾关键行与完整因果链。
+    - Tier 2: 若折叠后仍超出预算（或未启用），则按单元丢弃最旧工具输出并生成确定性摘要。
     """
     total = sum(message_chars(message) for message in messages)
     if total <= limit:
@@ -156,6 +272,28 @@ def summarize_dropped(
     units = _droppable_units(messages)
     protected = _protected_units(messages, units)
 
+    working_messages = list(messages)
+    if mask_observations:
+        # Tier 1 (ADR 0036): Observation Masking
+        # 从最旧到最新依次折叠过大观测结果，直至总大小降至 limit 以内
+        for unit_index, unit in enumerate(units):
+            if total <= limit:
+                break
+            if unit_index in protected:
+                continue
+            for msg_idx in unit:
+                msg = working_messages[msg_idx]
+                new_msg, saved = _mask_tool_message(msg)
+                if saved > 0:
+                    working_messages[msg_idx] = new_msg
+                    total -= saved
+                    if total <= limit:
+                        break
+
+        if total <= limit:
+            return working_messages, "", -1
+
+    # Tier 2 (ADR 0010): 丢弃最旧单元并生成结构化 run_digest
     dropped_indices: set[int] = set()
     for unit_index, unit in enumerate(units):
         if total <= limit:
@@ -163,20 +301,17 @@ def summarize_dropped(
         if unit_index in protected:
             continue
         for index in unit:
-            total -= message_chars(messages[index])
+            total -= message_chars(working_messages[index])
         dropped_indices.update(unit)
 
     if not dropped_indices:
-        return list(messages), "", -1
+        return list(working_messages), "", -1
 
-    dropped = [messages[i] for i in sorted(dropped_indices)]
-    kept = [message for i, message in enumerate(messages) if i not in dropped_indices]
+    dropped = [working_messages[i] for i in sorted(dropped_indices)]
+    kept = [message for i, message in enumerate(working_messages) if i not in dropped_indices]
     digest = build_run_digest(dropped)
     if not digest:
         return kept, "", -1
-    # 摘要会取代它所替换的第一条消息。该索引之前的所有消息都会保留（按定义，
-    # 被丢弃单元的第一个索引就是其中最小的索引），因此它在 `kept` 中的位置
-    # 恰好就是该索引。
     position = min(dropped_indices)
     return kept, digest, position
 
@@ -208,9 +343,21 @@ def enforce_hard_limit(messages: list[ModelMessage], limit: int) -> list[ModelMe
             break
     kept = list(enumerate(units))
     while sum(message_chars(message) for _, unit in kept for message in unit) > limit:
+        # 优先淘汰非 user 单元（旧的 assistant 叙述、多余 tool 单元）
         candidate = next(
-            (i for i, (unit_index, _) in enumerate(kept) if unit_index not in protected), None
+            (
+                i
+                for i, (unit_index, unit) in enumerate(kept)
+                if unit_index not in protected and not any(m.role == "user" for m in unit)
+            ),
+            None,
         )
+        if candidate is None:
+            # 其次淘汰除最新用户意图外的更旧 user 单元
+            candidate = next(
+                (i for i, (unit_index, _) in enumerate(kept) if unit_index not in protected),
+                None,
+            )
         if candidate is None:
             break
         kept.pop(candidate)

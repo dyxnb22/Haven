@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, with two rejections. MCP is **deferred**. A model-driven Reviewer
+Accepted, with two rejections (Option A amended by ADR 0039). MCP is **deferred**. A model-driven Reviewer
 subagent is **deferred**. The fallback the plan itself names — a deterministic
 review of the run diff — is **adopted and implemented**.
 
@@ -29,6 +29,13 @@ happen to cover it. Today nothing inspects *what* changed.
   classification and that no side-effecting tool is ever auto-allowed.
 
 ## Option A: read-only MCP client — DEFERRED
+
+> **Amended by ADR 0039 (2026-10-23).** The four unlock conditions below were
+> satisfied and a Hardened MCP Gateway was adopted in ADR 0039: static server
+> configuration under `[mcp.servers.<name>]`, namespace isolation (`mcp.<server>.<tool>`),
+> strict allowlist filtering (`allowed_tools`), fail-closed SHA-256 schema pinning (`pinned_schemas`),
+> single execution channel (`ToolPipeline`), and deterministic policy classification
+> (`read_only_tools` auto-allowed, mutating tools requiring human approval).
 
 MCP would let Haven consume tools from external servers. Evaluated against the
 gate:

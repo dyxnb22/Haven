@@ -1,5 +1,6 @@
 """工具审批卡片的纯渲染逻辑。"""
 
+import json
 import shlex
 from collections.abc import Callable
 
@@ -12,6 +13,7 @@ from haven.contracts.tools import (
     RepoEditArgs,
     RepoExecArgs,
     RepoMoveArgs,
+    TaskStartArgs,
     ToolArgs,
 )
 from haven.domain.exec_policy import ExecClass, classify_argv
@@ -38,13 +40,30 @@ class ApprovalCardRenderer:
             "repo.move": self._card_move,
             "repo.apply_patch": self._card_patch,
             "repo.exec": self._card_exec,
+            "task.start": self._card_task_start,
             "repo.check": self._card_check,
         }
 
     def render(self, tool_name: str, args: ToolArgs, preview: ToolPreview) -> tuple[str, str]:
         """按工具类型生成审批摘要和有界预览；未知工具返回空字符串。"""
+        if tool_name.startswith("mcp."):
+            return self._card_mcp(tool_name, args, preview)
         handler = self.handlers.get(tool_name)
         return handler(args, preview) if handler is not None else ("", "")
+
+    def _card_mcp(self, tool_name: str, args: ToolArgs, preview: ToolPreview) -> tuple[str, str]:
+        parts = tool_name.split(".", 2)
+        server = parts[1] if len(parts) > 1 else "unknown"
+        subtool = parts[2] if len(parts) > 2 else tool_name
+        summary = f"call MCP tool {subtool!r} on server {server!r}"
+        raw = getattr(args, "arguments", {})
+        formatted_args = json.dumps(raw, indent=2, ensure_ascii=False) if raw else "{}"
+        preview_text = (
+            f"MCP Server: {server}\n"
+            f"Tool: {subtool}\n"
+            f"Arguments:\n{_clip(formatted_args, PREVIEW_CHARS)}"
+        )
+        return summary, preview_text
 
     @staticmethod
     def _intent(summary: str) -> str:
@@ -105,6 +124,21 @@ class ApprovalCardRenderer:
                 "above does not describe everything it may do."
             )
         summary = f"run {shlex.join(args.argv)} in {args.cwd}{self._intent(args.summary)}"
+        return summary, "\n".join(lines)
+
+    def _card_task_start(self, args: ToolArgs, preview: ToolPreview) -> tuple[str, str]:
+        if not isinstance(args, TaskStartArgs):
+            return "", ""
+        lines = [f"$ {shlex.join(args.argv)} (background task)", self._sandbox_description()]
+        if classify_argv(args.argv) is ExecClass.SHELL_PASSTHROUGH:
+            lines.append(
+                "WARNING: this interprets an arbitrary script, so the command "
+                "above does not describe everything it may do."
+            )
+        summary = (
+            f"start background task {shlex.join(args.argv)} in {args.cwd}"
+            f"{self._intent(args.description)}"
+        )
         return summary, "\n".join(lines)
 
     def _card_check(self, args: ToolArgs, preview: ToolPreview) -> tuple[str, str]:

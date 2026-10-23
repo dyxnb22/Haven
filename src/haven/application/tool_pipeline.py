@@ -22,7 +22,9 @@ from haven.application.approval_cards import (
 from haven.application.approval_coordinator import ApprovalCoordinator
 from haven.application.approvals import ApprovalResponder
 from haven.application.emitter import EventEmitter
+from haven.application.mcp_client import MCPClientManager
 from haven.application.registry import ToolRegistry, ValidationFailure
+from haven.application.skills import SkillCatalog
 from haven.application.state import RunContext
 from haven.application.tool_execution import (
     ExecuteHandler,
@@ -49,6 +51,7 @@ from haven.contracts.tools import (
 )
 from haven.domain.digest import canonical_json
 from haven.domain.enums import (
+    ApprovalMode,
     PermissionMode,
     PolicyDecision,
     RunStatus,
@@ -95,6 +98,9 @@ class ToolPipeline:
         mode: PermissionMode,
         launcher: SandboxLauncher | None = None,
         scratch_dir: Path | None = None,
+        skills: SkillCatalog | None = None,
+        approval_mode: ApprovalMode = ApprovalMode.ASK,
+        mcp_manager: MCPClientManager | None = None,
     ) -> None:
         self._workspace = workspace
         self._executor = executor
@@ -114,12 +120,16 @@ class ToolPipeline:
             recipes=recipes,
             launcher=launcher,
             scratch_dir=self._scratch_dir,
+            skills=skills,
+            mcp_manager=mcp_manager,
         )
         # 每个工具一行，覆盖两个阶段。单元测试
         # test_every_registered_tool_is_fully_wired 会将这些表与 ARGS_MODELS 固定
         # 对照，因此“新增工具”意味着：参数模型 + 策略类 + 每个阶段在这里各一行；
         # 忘记某一行会使整个测试套件失败，而不是让运行在生产中才失败。
-        self._facts_collector = ToolFactsCollector(workspace, recipes, launcher)
+        self._facts_collector = ToolFactsCollector(
+            workspace, recipes, launcher, mcp_manager=mcp_manager
+        )
         # 兼容现有接线测试；映射的所有权在 collector。
         self._facts_handlers: dict[str, FactsHandler] = self._facts_collector.handlers
         # 用户针对每个工具看到的内容。键的形式与上面两张表相同，但只覆盖
@@ -134,16 +144,30 @@ class ToolPipeline:
             registry=registry,
             renderer=self._card_renderer,
             mode=mode,
+            approval_mode=approval_mode,
         )
         # 兼容现有接线测试；映射的所有权在 renderer。
         self._card_handlers: dict[str, CardHandler] = self._card_renderer.handlers
         # 兼容现有接线测试；映射的所有权在 executor。
         self._execute_handlers: dict[str, ExecuteHandler] = self._tool_executor.handlers
 
+    @property
+    def approval_mode(self) -> ApprovalMode:
+        """当前的审批分级模式（ask / smart / full）。"""
+        return self._approval_coordinator.approval_mode
+
+    def set_approval_mode(self, mode: ApprovalMode) -> None:
+        """动态更新当前的审批分级模式。"""
+        self._approval_coordinator.set_approval_mode(mode)
+
     def replace_scratch_dir(self, scratch_dir: Path) -> None:
         """在连续运行之间替换进程工具使用的独占临时目录。"""
         self._scratch_dir = scratch_dir
         self._tool_executor.replace_scratch_dir(scratch_dir)
+
+    async def close(self) -> None:
+        """释放后台进程等资源。"""
+        await self._tool_executor.close_tasks()
 
     async def execute(self, ctx: RunContext, step: int, call: ToolCallProposal) -> ToolExecution:
         """沿唯一安全流水线处理一个模型工具提议并返回观察结果。"""

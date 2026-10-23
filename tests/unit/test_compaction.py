@@ -42,6 +42,31 @@ class TestFactsSurvive:
         assert "edited" in digest
         assert "src/calc.py" in digest
 
+    def test_extended_mutation_and_outline_tools_are_captured(self) -> None:
+        messages = [
+            tool_message(
+                "repo.apply_patch",
+                '{"status": "ok", "result": {"paths": ["src/a.py", "src/b.py"]}}',
+            ),
+            tool_message("repo.delete", '{"status": "ok", "result": {"path": "src/old.py"}}'),
+            tool_message(
+                "repo.move",
+                '{"status": "ok", "result": {"source_path": "src/x.py", '
+                '"destination_path": "src/y.py"}}',
+            ),
+            tool_message(
+                "repo.outline", '{"status": "ok", "result": {"file": "src/outline_target.py"}}'
+            ),
+        ]
+        digest = build_run_digest(messages)
+        assert "edited" in digest
+        assert "src/a.py" in digest
+        assert "src/b.py" in digest
+        assert "src/old.py (deleted)" in digest
+        assert "src/x.py -> src/y.py" in digest
+        assert "read" in digest
+        assert "src/outline_target.py" in digest
+
     def test_checks_keep_their_recipe_and_exit_code(self) -> None:
         body = '{"status": "ok", "result": {"recipe_id": "verify-calc", "exit_code": 0}}'
         digest = build_run_digest([tool_message("repo.check", body)])

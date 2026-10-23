@@ -34,6 +34,7 @@ import shutil
 import tempfile
 import time
 from collections import deque
+from collections.abc import Sequence
 from pathlib import Path
 
 from haven.application.answer_resolution import (
@@ -52,6 +53,8 @@ from haven.application.answer_resolution import (
 from haven.application.approvals import ApprovalResponder
 from haven.application.context_builder import ContextBuilder
 from haven.application.emitter import EventEmitter
+from haven.application.mcp_client import MCPClientManager
+from haven.application.model_router import ModelRouter
 from haven.application.model_stream import (
     MODEL_RETRY_MAX_DELAY,
     ModelStreamer,
@@ -65,6 +68,8 @@ from haven.application.run_persistence import (
     RunOutcome,
 )
 from haven.application.run_telemetry import RunTelemetry
+from haven.application.skill_grants import grant_notice, grant_table
+from haven.application.skills import Skill, SkillCatalog, resolve_selected_skills
 from haven.application.state import RunContext
 from haven.application.tool_pipeline import ToolPipeline
 from haven.contracts.checkpoint import CheckpointV1
@@ -76,15 +81,23 @@ from haven.contracts.events import (
     SteerQueued,
     StepStarted,
 )
+from haven.contracts.mcp import MCPServerConfig
 from haven.contracts.model import (
     ModelMessage,
     ModelRequest,
     ModelResult,
     ToolCallProposal,
+    ToolSchema,
 )
 from haven.contracts.tools import RecipeSpec, tool_schemas
 from haven.domain.budget import Budget, check_accumulated_budget, check_budget
-from haven.domain.enums import EffectState, PermissionMode, RunStatus, StopReason
+from haven.domain.enums import (
+    ApprovalMode,
+    EffectState,
+    PermissionMode,
+    RunStatus,
+    StopReason,
+)
 from haven.domain.ids import RunId, new_run_id
 from haven.domain.pricing import Pricing
 from haven.domain.stuck import StuckLoopDetector, call_fingerprint
@@ -128,9 +141,12 @@ class RunService:
         git_branch: str = "",
         git_commit: str = "",
         project_guidance: str = "",
+        skills: SkillCatalog | None = None,
         launcher: SandboxLauncher | None = None,
         context_chars_override: int = 0,
         supports_prefix_continuation: bool | None = None,
+        approval_mode: ApprovalMode = ApprovalMode.ASK,
+        mcp_servers: tuple[MCPServerConfig, ...] = (),
     ) -> None:
         self._model = model
         self._streamer = ModelStreamer(emitter)
@@ -165,7 +181,12 @@ class RunService:
         self._git_branch = git_branch
         self._git_commit = git_commit
         self._project_guidance = project_guidance
+        self._skills = skills if skills is not None else SkillCatalog()
+        # 启动时发现的技能。目录进每一次上下文，正文只在用户显式选中后进
+        # （ADR 0031）；这里只存发现结果，不做选择——选择属于每一次 run。
         self._recipes = recipes
+        self._mcp_servers = mcp_servers
+        self._mcp_manager = MCPClientManager(mcp_servers)
         self._registry = ToolRegistry()
         self._launcher = launcher
         # Steering：运行活跃时接受用户输入，但只在轮次边界投递，避免工具通道
@@ -187,6 +208,9 @@ class RunService:
             mode=mode,
             launcher=launcher,
             scratch_dir=self._scratch_dir,
+            skills=self._skills,
+            approval_mode=approval_mode,
+            mcp_manager=self._mcp_manager,
         )
         self._answers = AnswerResolver(
             emitter=emitter,
@@ -197,33 +221,67 @@ class RunService:
             checkpoint=self._checkpoint,
         )
 
+    @property
+    def approval_mode(self) -> ApprovalMode:
+        """当前的审批分级模式（ask / smart / full）。"""
+        return self._pipeline.approval_mode
+
+    def set_approval_mode(self, mode: ApprovalMode) -> None:
+        """动态更新当前的审批分级模式。"""
+        self._pipeline.set_approval_mode(mode)
+
     # -- 入口 -----------------------------------------------------------------
 
-    async def run(self, goal: str) -> RunOutcome:
-        """创建运行并执行主循环，最终结果由证据门禁裁定。"""
+    async def run(
+        self,
+        goal: str,
+        *,
+        skill_names: Sequence[str] = (),
+        approval_mode: ApprovalMode | None = None,
+    ) -> RunOutcome:
+        """创建运行并执行主循环，最终结果由证据门禁裁定。
+
+        技能在这里解析，而不是在调用方：选中一个不在目录里的名字会让这次运行
+        拒绝启动，而不是静默少一段上下文（ADR 0031）。
+        """
+        if approval_mode is not None:
+            self.set_approval_mode(approval_mode)
         goal = goal.strip()
         if not (3 <= len(goal) <= 4000):
             raise ValueError("goal must be between 3 and 4000 characters")
+        selected = resolve_selected_skills(self._skills.skills, skill_names)
 
         ctx = RunContext(
             run_id=new_run_id(),
             goal=goal,
             mode=self._mode,
             budget=self._budget,
+            **grant_table(selected),
         )
         await self._announce_run(ctx, goal)
-        return await self._drive(ctx)
+        await self._announce_grants(ctx, selected)
+        return await self._drive(ctx, selected_skills=selected)
 
-    async def continue_run(self, previous_run_id: str, follow_up: str) -> RunOutcome:
+    async def continue_run(
+        self,
+        previous_run_id: str,
+        follow_up: str,
+        *,
+        skill_names: Sequence[str] = (),
+        approval_mode: ApprovalMode | None = None,
+    ) -> RunOutcome:
         """启动继承此前运行 transcript 的后续轮次。
 
         之前的对话会被带入，使模型拥有上下文，但这是一次全新的 Run：新的 ID、新的
         预算和新的证据账本，因此后续轮次的成功只根据其自身编辑来判断。会话的头部目标
         保持稳定（有利于提示缓存），后续内容作为 user 消息接入。
         """
+        if approval_mode is not None:
+            self.set_approval_mode(approval_mode)
         follow_up = follow_up.strip()
         if not (3 <= len(follow_up) <= 4000):
             raise ValueError("follow-up must be between 3 and 4000 characters")
+        selected = resolve_selected_skills(self._skills.skills, skill_names)
 
         checkpoint = await self._store.load_checkpoint(previous_run_id)
         if checkpoint is None:
@@ -252,13 +310,27 @@ class RunService:
             transcript=transcript,
             plan=checkpoint.plan,
             files_read=dict(checkpoint.files_read),
+            **grant_table(selected),
         )
         await self._announce_run(ctx, checkpoint.goal, parent_run_id=previous_run_id)
+        await self._announce_grants(ctx, selected)
         await self._emitter.emit(
             ctx.run_id,
             Notice(run_id=ctx.run_id, level="info", message=f"continuing session: {follow_up}"),
         )
-        return await self._drive(ctx)
+        return await self._drive(ctx, selected_skills=selected)
+
+    async def _announce_grants(self, ctx: RunContext, selected: tuple[Skill, ...]) -> None:
+        """把被选中技能请求的常驻授权写进 journal（ADR 0032）。
+
+        授权必须在运行开始前被说出来：一个刚 clone 的仓库给自己授予写权限，这件事
+        必须出现在轨迹里，而不是只发生在策略内部。没有技能请求授权时什么都不写。
+        """
+        notice = grant_notice(selected)
+        if notice:
+            await self._emitter.emit(
+                ctx.run_id, Notice(run_id=ctx.run_id, level="warning", message=notice)
+            )
 
     async def _announce_run(self, ctx: RunContext, goal: str, *, parent_run_id: str = "") -> None:
         await self._store.create_run(
@@ -286,7 +358,12 @@ class RunService:
         )
 
     async def resume(self, ctx: RunContext) -> RunOutcome:
-        """继续由 RecoveryService 构建的已恢复运行上下文。"""
+        """继续由 RecoveryService 构建的已恢复运行上下文。
+
+        恢复的运行重新发现技能目录，但不恢复被选中的正文：选择没有进 checkpoint，
+        因此这里只能得到目录。这是 v1 明确的取舍——把选择写进 checkpoint 会让
+        磁盘上的技能改动与已检查点头部不一致，而那正是检查点要避免的（ADR 0031）。
+        """
         await self._emitter.emit(
             ctx.run_id,
             Notice(run_id=ctx.run_id, level="info", message="run resumed from checkpoint"),
@@ -299,10 +376,21 @@ class RunService:
         return self._active_run_id
 
     async def close(self) -> None:
-        """释放尚未被运行生命周期删除的临时目录；重复调用保持安全。"""
-        if self._active_run_id is None and self._scratch_ready:
-            shutil.rmtree(self._scratch_dir, ignore_errors=True)
-            self._scratch_ready = False
+        """释放后台进程与尚未被运行生命周期删除的临时目录；重复调用保持安全。"""
+        try:
+            await self._pipeline.close()
+        finally:
+            try:
+                await self._mcp_manager.close_all()
+            finally:
+                try:
+                    closer = getattr(self._model, "aclose", None)
+                    if callable(closer):
+                        await closer()
+                finally:
+                    if self._active_run_id is None and self._scratch_ready:
+                        shutil.rmtree(self._scratch_dir, ignore_errors=True)
+                        self._scratch_ready = False
 
     async def steer(self, text: str) -> bool:
         """为活跃运行排队用户输入，并在下一轮边界投递。
@@ -329,9 +417,85 @@ class RunService:
             drained.append(self._steer_queue.popleft())
         return drained
 
+    async def _call_model_step(
+        self,
+        ctx: RunContext,
+        step: int,
+        builder: ContextBuilder,
+        envelope_digest: str,
+        answer_final_text: str,
+    ) -> tuple[ModelRequest, ModelResult, str] | RunOutcome:
+        """构建上下文、记录遥测并向模型发起流式请求，对 context_overflow 进行有界恢复。"""
+        overflow_retries = 0
+        while True:
+            request, segments = builder.build(ctx.transcript, ctx.usage, ctx.plan)
+            envelope_digest = await self._telemetry.record_envelope(
+                ctx, step, request, envelope_digest
+            )
+            await self._emitter.emit(
+                ctx.run_id,
+                ContextBuilt(
+                    run_id=ctx.run_id,
+                    step=step,
+                    segments=segments,
+                    total_bytes=sum(s.size_bytes for s in segments),
+                ),
+            )
+
+            try:
+                ctx.refresh_wall_time(time.monotonic())
+                remaining = max(
+                    0.0,
+                    ctx.budget.max_wall_time_seconds - ctx.usage.wall_time_seconds,
+                )
+                async with asyncio.timeout(remaining):
+                    result = await self._stream_model(ctx, step, request)
+                return request, result, envelope_digest
+            except TimeoutError:
+                ctx.refresh_wall_time(time.monotonic())
+                return await self._finish(
+                    ctx,
+                    RunStatus.STOPPED,
+                    StopReason.WALL_TIME_EXHAUSTED,
+                    answer_final_text,
+                )
+            except ProviderError as exc:
+                if (
+                    exc.code == "context_overflow"
+                    and overflow_retries < MAX_CONTEXT_OVERFLOW_RETRIES
+                ):
+                    overflow_retries += 1
+                    new_budget = builder.reduce_budget(CONTEXT_OVERFLOW_SHRINK)
+                    await self._emitter.emit(
+                        ctx.run_id,
+                        Notice(
+                            run_id=ctx.run_id,
+                            level="warning",
+                            message=(
+                                "context overflow; forcing compaction "
+                                f"(budget -> {new_budget} chars), retry "
+                                f"{overflow_retries}/{MAX_CONTEXT_OVERFLOW_RETRIES}"
+                            ),
+                        ),
+                    )
+                    continue
+                await self._emitter.emit(
+                    ctx.run_id,
+                    Notice(
+                        run_id=ctx.run_id,
+                        level="error",
+                        message=f"provider error ({exc.code}): {exc}",
+                    ),
+                )
+                return await self._finish(
+                    ctx, RunStatus.FAILED, StopReason.PROVIDER_ERROR, answer_final_text
+                )
+
     # -- 循环 ------------------------------------------------------------------
 
-    async def _drive(self, ctx: RunContext) -> RunOutcome:
+    async def _drive(
+        self, ctx: RunContext, *, selected_skills: tuple[Skill, ...] = ()
+    ) -> RunOutcome:
         """轮次循环。编号阶段记录在模块文档字符串中。每个 RunOutcome 都由 `_finish` 生成
         （直接生成，或在 `_handle_tool_calls` 内生成），因此停止原因和证据门禁只有
         一个应用位置。"""
@@ -341,12 +505,27 @@ class RunService:
             self._scratch_dir = Path(tempfile.mkdtemp(prefix="haven-scratch-"))
             self._pipeline.replace_scratch_dir(self._scratch_dir)
             self._scratch_ready = True
+
+        if self._mcp_servers and not self._mcp_manager.tools:
+            mcp_tools = await self._mcp_manager.initialize()
+            self._registry.register_mcp_tools(mcp_tools)
+
+        mcp_schemas = tuple(
+            ToolSchema(
+                name=t.namespaced_name,
+                description=t.description,
+                parameters=t.parameters,
+            )
+            for t in self._mcp_manager.tools
+        )
         builder = ContextBuilder(
             goal=ctx.goal,
-            tools=tool_schemas(),
+            tools=(*tool_schemas(), *mcp_schemas),
             budget=ctx.budget,
             recipe_ids=tuple(self._recipes),
             project_guidance=self._project_guidance,
+            skills=self._skills.skills,
+            selected_skills=selected_skills,
             sandbox_backend=self._launcher.backend if self._launcher is not None else "",
             max_context_chars=self._context_chars,
             reasoning_effort=self._profile.reasoning_effort,
@@ -388,75 +567,19 @@ class RunService:
                         ),
                     )
 
-                # 构建并流式请求，且对提供商上下文溢出进行有界恢复：这里的 400 表示
-                # 字符预算超过了实际 token 窗口，因此要缩小预算（强制进行更多压缩）
-                # 并重建请求，而不是让运行失败。
-                overflow_retries = 0
-                while True:
-                    request, segments = builder.build(ctx.transcript, ctx.usage, ctx.plan)
-                    envelope_digest = await self._telemetry.record_envelope(
-                        ctx, step, request, envelope_digest
-                    )
-                    await self._emitter.emit(
-                        ctx.run_id,
-                        ContextBuilt(
-                            run_id=ctx.run_id,
-                            step=step,
-                            segments=segments,
-                            total_bytes=sum(s.size_bytes for s in segments),
-                        ),
-                    )
+                step_outcome = await self._call_model_step(
+                    ctx, step, builder, envelope_digest, answer.final_text
+                )
+                if isinstance(step_outcome, RunOutcome):
+                    return step_outcome
+                request, result, envelope_digest = step_outcome
 
-                    try:
-                        ctx.refresh_wall_time(time.monotonic())
-                        remaining = max(
-                            0.0,
-                            ctx.budget.max_wall_time_seconds - ctx.usage.wall_time_seconds,
-                        )
-                        async with asyncio.timeout(remaining):
-                            result = await self._stream_model(ctx, step, request)
-                        break
-                    except TimeoutError:
-                        ctx.refresh_wall_time(time.monotonic())
-                        return await self._finish(
-                            ctx,
-                            RunStatus.STOPPED,
-                            StopReason.WALL_TIME_EXHAUSTED,
-                            answer.final_text,
-                        )
-                    except ProviderError as exc:
-                        if (
-                            exc.code == "context_overflow"
-                            and overflow_retries < MAX_CONTEXT_OVERFLOW_RETRIES
-                        ):
-                            overflow_retries += 1
-                            new_budget = builder.reduce_budget(CONTEXT_OVERFLOW_SHRINK)
-                            await self._emitter.emit(
-                                ctx.run_id,
-                                Notice(
-                                    run_id=ctx.run_id,
-                                    level="warning",
-                                    message=(
-                                        "context overflow; forcing compaction "
-                                        f"(budget -> {new_budget} chars), retry "
-                                        f"{overflow_retries}/{MAX_CONTEXT_OVERFLOW_RETRIES}"
-                                    ),
-                                ),
-                            )
-                            continue
-                        await self._emitter.emit(
-                            ctx.run_id,
-                            Notice(
-                                run_id=ctx.run_id,
-                                level="error",
-                                message=f"provider error ({exc.code}): {exc}",
-                            ),
-                        )
-                        return await self._finish(
-                            ctx, RunStatus.FAILED, StopReason.PROVIDER_ERROR, answer.final_text
-                        )
-
-                self._telemetry.charge_usage(ctx, request, result)
+                pricing = None
+                if isinstance(self._model, ModelRouter) and not self._telemetry._pricing.is_known:
+                    model_profile = profile_for(self._model.active_model.model_name)
+                    if model_profile.pricing.is_known:
+                        pricing = model_profile.pricing
+                self._telemetry.charge_usage(ctx, request, result, pricing=pricing)
                 ctx.refresh_wall_time(time.monotonic())
                 await self._emitter.emit(
                     ctx.run_id,
@@ -616,7 +739,12 @@ class RunService:
     # -- 模型流式输出 ------------------------------------------------------------
 
     async def _stream_model(self, ctx: RunContext, step: int, request: ModelRequest) -> ModelResult:
-        return await self._streamer.stream(self._model, ctx, step, request)
+        model = (
+            self._model.select_model(ctx, step)
+            if isinstance(self._model, ModelRouter)
+            else self._model
+        )
+        return await self._streamer.stream(model, ctx, step, request)
 
     # -- 持久化 ------------------------------------------------------------------
 
@@ -632,7 +760,8 @@ class RunService:
         final_text: str,
         gate_reason: str = "",
     ) -> RunOutcome:
-        """唯一出口：持久化终态、检查点并发出 run.finished。"""
+        """唯一出口：清理后台任务、持久化终态、检查点并发出 run.finished。"""
+        await self._pipeline.close()
         ctx.refresh_wall_time(time.monotonic())
         return await self._finalizer.finish(ctx, status, stop_reason, final_text, gate_reason)
 

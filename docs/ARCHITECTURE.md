@@ -106,8 +106,9 @@ reconstructs the same screen (Trace drives the same presenter reducer).
 
 ## Tool surface
 
-Twelve tools, deliberately: enough to complete a real repository task, small
-enough that every one has an explicit policy classification. A unit test asserts
+Twenty-one compiled-in tools, plus dynamically namespaced external MCP tools:
+enough to complete complex real-world repository tasks, with every tool strictly
+classified by deterministic policy. A unit test asserts
 that the registry and the policy's tool sets stay in sync and that no
 side-effecting tool is ever auto-allowed, so adding a tool cannot create an
 unclassified path. `repo.exec` is the single, explicitly pinned exception: a
@@ -127,9 +128,18 @@ that exactly one class enjoys that exception.
 | `repo.exec` | exec | ask | deny | argv array only (no shell string), OS sandbox with the workspace read-only, no network, `$HOME` unreadable; output is never evidence |
 | `repo.list` | read-only | allow | allow | workspace-confined, entry cap |
 | `repo.move` | effect | ask | deny | rename/move; fails if the destination exists, so it never silently overwrites |
+| `repo.outline` | read-only | allow | allow | regular source files, extracts structural AST outline (classes, functions, methods, imports) without reading whole body (ADR 0035) |
 | `repo.read` | read-only | allow | allow | regular UTF-8 files, line and byte caps; records the digest that later binds an edit |
 | `repo.search` | read-only | allow | allow | ripgrep when available (honours `.gitignore`), Python fallback; result, line, and byte caps |
+| `repo.symbol` | read-only | allow | allow | workspace source files, locates definitions and references with line previews (ADR 0035) |
+| `skill.read` | read-only | allow | allow | a discovered skill's own directory only: relative paths, symlinks refused, byte cap; companion manifest discovery (ADR 0032, 0034) |
+| `task.logs` | read-only | allow | allow | reads bounded tail lines from background task stdout/stderr ring buffer (ADR 0037) |
 | `task.plan` | state | allow | allow | touches only run state; no path, no external effect |
+| `task.start` | exec | ask | deny | managed long-running process in OS sandbox; non-blocking ring buffer; auto-cleaned (ADR 0037) |
+| `task.status` | read-only | allow | allow | inspects running status and exit code of a task in this run's job pool (ADR 0037) |
+| `task.stop` | state | allow | allow | graceful SIGTERM/SIGKILL termination of a managed background task (ADR 0037) |
+| `web.fetch` | read-only | allow | allow | read-only web fetch converted to markdown, byte-capped, SSRF protected (ADR 0038) |
+| `web.search` | read-only | allow | allow | read-only web documentation search, bounded results, untrusted data framing (ADR 0038) |
 
 *Decisions are computed by calling `evaluate_policy` itself, for a benign, well-formed proposal; a hard deny (outside the workspace, a protected path, no sandbox) overrides them in every mode.*
 
@@ -178,7 +188,7 @@ flowchart TD
     FACTS --> POL{"<b>Deterministic policy</b><br/>pure(mode, facts)"}
     POL -->|deny| E3["error: denied"]
     POL -->|allow<br/>read-only tools| TICKET
-    POL -->|ask<br/>edit / check| APR{"<b>Exact approval</b><br/>digest-bound, single-use"}
+    POL -->|ask<br/>edit / check| APR{"<b>Exact approval</b><br/>digest-bound, single-use<br/>tiered modes: ask · smart · full"}
     APR -->|reject| E4["error: approval_rejected"]
     APR -->|approve| TOC{"Re-verify preimage<br/>TOCTOU guard"}
     TOC -->|file drifted| E5["error: stale_preimage"]
@@ -208,8 +218,9 @@ Invariants:
   `repo.check` may still run under the local-trust assumption (ADR 0009/0013).
 - Approvals bind workspace + tool + canonical args + preimage + preview digests;
   any drift invalidates them, and each is consumed at most once (a conditional
-  SQL `UPDATE`).
-- Policy `deny` can never be turned into `allow` by user text or repo content.
+  SQL `UPDATE`). In interactive sessions, approvals follow tiered modes (ADR 0033:
+  `ask`, `smart`, `full`).
+- Policy `deny` can never be turned into `allow` by user text, repo content, or approval modes.
 - A run that wrote files needs a diff **and** a passing check recorded after the
   last write before it may be reported as succeeded.
 

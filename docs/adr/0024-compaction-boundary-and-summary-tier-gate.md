@@ -1,7 +1,7 @@
 # ADR 0024: the compaction boundary — what is measured, what is not, and the gate for a summary tier
 
 Date: 2026-08-13
-Status: Accepted (documents a deliberate non-decision; builds nothing)
+Status: Accepted (documents a deliberate non-decision; amended by ADR 0036)
 
 ## Context
 
@@ -76,6 +76,12 @@ unexamined default.
    auto-fix) rarely produces this; an open-ended daily-driver session would.
 
 ## Decision
+
+> **Amended by ADR 0036 (2026-10-22).** Multi-tier deterministic compaction and
+> observation masking were adopted in ADR 0036: Tier 1 transparently folds bulky
+> tool outputs (`fold_text` / `mask_bulky_observations`), Tier 2 provides the
+> structural `run_digest`, and Tier 3 enforces the hard clamp with prioritized
+> preservation of user steering and system rules over tool outputs.
 
 **Build nothing now.** The benefit gate this project applies to every
 architecture (ADR 0007, ADR 0023) is not met: zero measured failures are

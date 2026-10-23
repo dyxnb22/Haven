@@ -10,7 +10,8 @@
 事实）、approvals（流水线与人工/自动策略之间的 broker）、registry（静态工具查找和
 严格验证）、recovery_service（崩溃恢复和用户 rewind）、replay_service（日志投影）、
 maintenance（haven gc：清理运行和构件）、profiles（按模型的默认值）、emitter（持久化
-并分发事件）、state（每次运行可变的 RunContext）。
+并分发事件）、state（每次运行可变的 RunContext）、skills（声明式提示片段的发现与
+失败即关闭解析）。
 
 此层只了解 domain、ports 和 contracts，绝不依赖具体 adapter；bootstrap.py 负责注入它们。
 """
@@ -31,6 +32,16 @@ from haven.application.run_service import (
     RunService,
     build_run_context_from_checkpoint,
 )
+from haven.application.skills import (
+    Skill,
+    SkillCatalog,
+    SkillError,
+    SkillRefusal,
+    SkillSelectionError,
+    discover_skills,
+    render_catalog,
+    resolve_selected_skills,
+)
 from haven.application.state import RunContext
 from haven.application.tool_pipeline import ToolExecution, ToolPipeline
 
@@ -49,10 +60,18 @@ __all__ = [
     "RunContext",
     "RunOutcome",
     "RunService",
+    "Skill",
+    "SkillCatalog",
+    "SkillError",
+    "SkillRefusal",
+    "SkillSelectionError",
     "ToolExecution",
     "ToolPipeline",
     "ToolRegistry",
     "ValidationFailure",
     "build_run_context_from_checkpoint",
+    "discover_skills",
     "profile_for",
+    "render_catalog",
+    "resolve_selected_skills",
 ]

@@ -21,6 +21,8 @@ All model-proposed file and process actions flow through one pipeline:
 7. Executor runs only from `ExecutionTicket`
 8. Structured `ToolResult`, evidence, and trace events
 
+> **Amended by ADR 0033 (2026-10-22).** Step 5 (exact approval) is extended with tiered approval modes (`ask`, `smart`, `full`). In `smart` mode, low/medium-risk actions auto-approve, and in `full` mode all in-workspace actions auto-approve, while the single execution channel, ticket issuance, and digest-bound invariants are strictly preserved.
+
 Invariants:
 
 - Executor never accepts raw model JSON

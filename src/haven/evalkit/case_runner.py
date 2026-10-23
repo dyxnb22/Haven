@@ -18,6 +18,7 @@ from haven.application.approvals import AutoApprover
 from haven.application.emitter import EventEmitter
 from haven.application.recovery_service import RecoveryService
 from haven.application.run_service import RunOutcome, RunService
+from haven.application.skills import discover_skills, resolve_selected_skills
 from haven.bootstrap import select_launcher
 from haven.contracts.checkpoint import (
     BudgetSnapshot,
@@ -156,6 +157,11 @@ async def run_agent_case(
     )
     budget = build_budget(case)
     launcher = select_launcher()
+    # 用户级根指向一个不存在的位置：评测只应演练仓库自带的技能，绝不读开发者的
+    # 真实配置。选择在这里解析，因此一个未知名字会让案例立刻失败而不是静默跳过。
+    catalog = discover_skills(user_root=repo / "no-user-skills", project_root=repo)
+    selected = resolve_selected_skills(catalog.skills, case.skills)
+    selected_names = [skill.name for skill in selected]
     recipes = discovered_recipes(repo) if case.discover else materialize_recipes(case.recipes)
     service = RunService(
         model=model,
@@ -169,9 +175,10 @@ async def run_agent_case(
         budget=budget,
         launcher=launcher,
         context_chars_override=case.max_context_chars,
+        skills=catalog,
     )
     try:
-        outcome = await service.run(case.goal)
+        outcome = await service.run(case.goal, skill_names=selected_names)
     finally:
         await model.aclose()
         if events_path is not None:

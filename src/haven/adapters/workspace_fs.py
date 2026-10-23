@@ -272,10 +272,16 @@ class FsWorkspace:
         *,
         occurrence: int | None = None,
         replace_all: bool = False,
+        skip_syntax_check: bool = False,
     ) -> EditPreview:
         """将编辑请求转发给带前像校验的 WorkspaceEditor。"""
         return await self._editor.preview_edit(
-            path, old, new, occurrence=occurrence, replace_all=replace_all
+            path,
+            old,
+            new,
+            occurrence=occurrence,
+            replace_all=replace_all,
+            skip_syntax_check=skip_syntax_check,
         )
 
     async def apply_edit(
@@ -287,6 +293,7 @@ class FsWorkspace:
         *,
         occurrence: int | None = None,
         replace_all: bool = False,
+        skip_syntax_check: bool = False,
     ) -> EditOutcome:
         """将已审批编辑转发给 WorkspaceEditor 执行。"""
         return await self._editor.apply_edit(
@@ -296,15 +303,20 @@ class FsWorkspace:
             expected_preimage,
             occurrence=occurrence,
             replace_all=replace_all,
+            skip_syntax_check=skip_syntax_check,
         )
 
-    async def preview_create(self, path: str, content: str) -> EditPreview:
+    async def preview_create(
+        self, path: str, content: str, *, skip_syntax_check: bool = False
+    ) -> EditPreview:
         """转发新文件创建预览。"""
-        return await self._editor.preview_create(path, content)
+        return await self._editor.preview_create(path, content, skip_syntax_check=skip_syntax_check)
 
-    async def apply_create(self, path: str, content: str) -> EditOutcome:
+    async def apply_create(
+        self, path: str, content: str, *, skip_syntax_check: bool = False
+    ) -> EditOutcome:
         """转发新文件创建并保留运行级原始内容。"""
-        return await self._editor.apply_create(path, content)
+        return await self._editor.apply_create(path, content, skip_syntax_check=skip_syntax_check)
 
     async def preview_delete(self, path: str) -> EditPreview:
         """转发文件删除预览。"""
@@ -325,14 +337,22 @@ class FsWorkspace:
         return await self._editor.apply_move(src, dest, expected_preimage)
 
     async def preview_patch(
-        self, ops: tuple[PatchOpSpec, ...], files_read: dict[str, str]
+        self,
+        ops: tuple[PatchOpSpec, ...],
+        files_read: dict[str, str],
+        *,
+        skip_syntax_check: bool = False,
     ) -> PatchPreview:
         """转发多文件补丁规划，所有路径仍由本门面统一授权。"""
-        return await self._editor.preview_patch(ops, files_read)
+        return await self._editor.preview_patch(
+            ops, files_read, skip_syntax_check=skip_syntax_check
+        )
 
-    async def apply_patch(self, plan: PatchPreview) -> tuple[EditOutcome, ...]:
+    async def apply_patch(
+        self, plan: PatchPreview, *, skip_syntax_check: bool = False
+    ) -> tuple[EditOutcome, ...]:
         """转发原子补丁提交并保留回滚错误语义。"""
-        return await self._editor.apply_patch(plan)
+        return await self._editor.apply_patch(plan, skip_syntax_check=skip_syntax_check)
 
     async def run_diff(self) -> RunDiff:
         """返回运行级累计差异。"""

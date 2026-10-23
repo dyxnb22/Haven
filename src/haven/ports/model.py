@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Literal, Protocol
+from typing import Literal, Protocol, runtime_checkable
 
 from haven.contracts.model import ModelEvent, ModelRequest
 
@@ -41,6 +41,7 @@ class ProviderError(Exception):
         self.retry_after_s = retry_after_s
 
 
+@runtime_checkable
 class ModelPort(Protocol):
     """为一次请求流式产生与提供商无关的模型事件。"""
 

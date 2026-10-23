@@ -79,16 +79,32 @@ class MutationToolExecutor:
         )
         try:
             if isinstance(args, RepoCreateArgs):
-                outcome = await self._workspace.apply_create(args.path, args.content)
+                if args.skip_syntax_check:
+                    outcome = await self._workspace.apply_create(
+                        args.path, args.content, skip_syntax_check=True
+                    )
+                else:
+                    outcome = await self._workspace.apply_create(args.path, args.content)
             else:
-                outcome = await self._workspace.apply_edit(
-                    args.path,
-                    args.old_string,
-                    args.new_string,
-                    preview.preimage_digest,
-                    occurrence=args.occurrence,
-                    replace_all=args.replace_all,
-                )
+                if args.skip_syntax_check:
+                    outcome = await self._workspace.apply_edit(
+                        args.path,
+                        args.old_string,
+                        args.new_string,
+                        preview.preimage_digest,
+                        occurrence=args.occurrence,
+                        replace_all=args.replace_all,
+                        skip_syntax_check=True,
+                    )
+                else:
+                    outcome = await self._workspace.apply_edit(
+                        args.path,
+                        args.old_string,
+                        args.new_string,
+                        preview.preimage_digest,
+                        occurrence=args.occurrence,
+                        replace_all=args.replace_all,
+                    )
         except WorkspaceError as exc:
             await self._store.update_execution_state(ctx.run_id, call.call_id, EffectState.FAILED)
             return ToolExecution(error_result(call, map_workspace_error(exc), str(exc)))
@@ -309,7 +325,10 @@ class MutationToolExecutor:
                 )
 
         try:
-            outcomes = await self._workspace.apply_patch(preview)
+            if args.skip_syntax_check:
+                outcomes = await self._workspace.apply_patch(preview, skip_syntax_check=True)
+            else:
+                outcomes = await self._workspace.apply_patch(preview)
         except WorkspaceError as exc:
             await mark_all(EffectState.FAILED)
             return ToolExecution(error_result(call, map_workspace_error(exc), str(exc)))

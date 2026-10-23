@@ -77,6 +77,8 @@ class EvalCase(StrictModel):
     max_context_chars: int = 0
     #: 覆盖默认预算的字段和值。
     budget: dict[str, int | float] = Field(default_factory=dict)
+    #: 本案例要加载的已发现技能名；用于评测注入场景（ADR 0031）。
+    skills: list[str] = Field(default_factory=list)
     #: 按 id 注册的离线验证配方。
     recipes: dict[str, RecipeDef] = Field(default_factory=dict)
     #: 每一轮离线模型返回的消息/工具调用序列。

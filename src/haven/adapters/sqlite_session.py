@@ -25,7 +25,7 @@ from haven.domain.digest import sha256_bytes, sha256_text
 from haven.domain.enums import ApprovalDecision, EffectState, RunStatus
 from haven.ports.session import ArtifactError, ExecutionRecord, RunRecord
 
-DB_SCHEMA_VERSION = 3
+DB_SCHEMA_VERSION = 4
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -84,6 +84,9 @@ CREATE TABLE IF NOT EXISTS executions (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (run_id, call_id)
 );
+CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_approvals_run_id ON approvals(run_id);
+CREATE INDEX IF NOT EXISTS idx_executions_tool_name ON executions(tool_name);
 """
 
 #: 原地迁移，按存储版本依次应用。每个条目将 schema 从 `version` 迁移到
@@ -105,6 +108,11 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
         "FROM executions",
         "DROP TABLE executions",
         "ALTER TABLE executions_v3 RENAME TO executions",
+    ),
+    3: (
+        "CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_approvals_run_id ON approvals(run_id)",
+        "CREATE INDEX IF NOT EXISTS idx_executions_tool_name ON executions(tool_name)",
     ),
 }
 

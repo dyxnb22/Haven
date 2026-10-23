@@ -66,10 +66,14 @@ read/edit/create/diff/check/answer，再加大约三轮修复—验证。第一�
 打开 `context_builder.py`，先看布局：
 
 ```text
-稳定头部：系统规则 · AGENTS.md 指导 · Task: {goal}
+稳定头部：系统规则 · 技能目录 · AGENTS.md 指导 · 选中的技能正文 · Task: {goal}
            transcript（追加记录）
 易变尾部：task plan · run status（步数/工具计数器）
 ```
+
+技能目录（有哪些技能、各自的 digest）常驻头部，因为正是它让渐进披露成立；
+技能正文只有用户显式选择后才进入。两者都是不可信数据——技能是提示片段，
+不是工具，它提到的脚本不会因此变成受信工具（ADR 0031）。
 
 这里有三个关键设计：
 

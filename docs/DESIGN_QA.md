@@ -55,13 +55,13 @@ not edit them by hand.
 
 | Metric | Value |
 |---|---|
-| Automated tests | 885 |
+| Automated tests | 1095 |
 | Line coverage (`src/`) | 89% |
-| Source / test size | ~16.6k / ~11.9k lines |
-| Typed modules (`mypy --strict`) | 102 |
-| Architecture decision records | 30 |
-| Offline eval | 39/39 passed, 0 security violations |
-| Eval categories | security 16 · task 10 · robustness 6 · injection 3 · budget 2 · recovery 2 |
+| Source / test size | ~19.9k / ~15.3k lines |
+| Typed modules (`mypy --strict`) | 111 |
+| Architecture decision records | 39 |
+| Offline eval | 40/40 passed, 0 security violations |
+| Eval categories | security 16 · task 10 · robustness 6 · injection 4 · budget 2 · recovery 2 |
 | Live real-repo suite (deepseek-v4-flash) | 75/79 after fixes (31/31 + 9/9 + 5/5 + 20/20 + 9/13 + 1/1); 0 security violations — as-found runs and root causes in docs/EVAL_LIVE.md |
 | Same-version full rerun | 61/65 in one uninterrupted run (failure attribution in docs/EVAL_LIVE.md) |
 
@@ -74,7 +74,7 @@ Additional live measurements that are not repository counts:
 | Head-to-head vs opencode | 12/12 vs 10/12, same model, neutral grader | `evals/headtohead/` |
 | Prompt-cache hit | 86–93%, at the structural ceiling | miss decomposition in `EVAL_LIVE.md` |
 | Cost per real task | ~$0.0016–0.003 | live suite: 65 cases for $0.18 |
-| Tools | 12 | `ARGS_MODELS`, pinned to the policy set by a test |
+| Tools | 13 | `ARGS_MODELS`, pinned to the policy set by a test |
 
 Two framing notes to have ready:
 
@@ -123,13 +123,16 @@ a change in that window fails closed with `stale_preimage`.
 
 **Follow-up: "isn't that approval fatigue?"**
 Yes, and fatigue is a security cost, not just a UX one: a human trained to
-press `a` on identical cards stops reading cards. That is why ADR 0025 exists
-and why it is drawn narrowly — approving one `repo.check` covers
-*byte-identical* re-runs of that check for the rest of that run only. It is
-digest-scoped, run-scoped, memory-only (a resumed run asks again), disclosed
-on the card at consent time, never armed by a rejection, and every skipped
-ask still mints and consumes its own approval row so the journal stays 1:1.
-Writes and exec always re-ask.
+press `a` on identical cards stops reading cards. That is why Haven provides
+tiered approval modes (ADR 0033: `ask`, `smart`, `full`) alongside identical-check
+standing approval (ADR 0025) and skill grants (ADR 0032). In `smart` mode ("Approve for me"),
+routine low- and medium-risk operations (standard single-file edits and test checks)
+are auto-approved without prompting, while high-risk actions (file deletions, moves,
+multi-file patches, shell passthroughs) continue to require explicit human review.
+In `full` mode, all legal in-workspace actions are auto-approved for unattended execution.
+Importantly, policy-layer DENY (workspace escapes, `.git` protection, unconfined exec)
+can never be auto-approved, and every auto-approval still mints and consumes its own
+single-use approval row in SQLite so the journal stays 1:1.
 
 **Follow-up: "what if the model proposes an edit and the user approves a
 different one?"**
@@ -264,7 +267,7 @@ confirmed; neither → `EFFECT_UNKNOWN`, which blocks resume until
 case — the copy-landed-but-source-remains window is genuinely undecidable, so
 it is classified unknown rather than guessed.
 
-### 3.8 Why no MCP, no subagents, no planner, no LSP?
+### 3.8 Why no unconstrained MCP, no subagents, no planner, no LSP daemon?
 
 **Short.** Because I measured what actually fails, and none of them fix it.
 
@@ -273,11 +276,17 @@ distribution, and the head-to-head was attributed. The dominant failure is
 **budget-tail non-convergence** — the model does not stop in time — with
 oracle-gaming second (prevented at execution, not by planning) and exactly
 **≈1** case of a genuine semantic-localization ceiling. The read-only LSP had
-a pre-registered gate of ≥5 such failures. One is not five, so it was not
-built. A planner does not fix "hunts too long"; the step budget already
-bounds that. Subagents do not shorten a convergence tail on a single
-localized task. MCP breaks the invariant that every tool is compiled in and
-provably classified, and improves no metric I measure.
+a pre-registered gate of ≥5 such failures. One is not five, so an external
+language server daemon was not built; instead, lightweight pure-memory AST
+symbol navigation (`repo.outline`, `repo.symbol`) was adopted in ADR 0035 to
+deliver definition and reference extraction without daemon complexity.
+A planner does not fix "hunts too long"; the step budget already bounds that.
+Subagents do not shorten a convergence tail on a single localized task.
+Naive dynamic MCP was rejected (ADR 0007) because runtime-discovered tools
+break compiled-in classification; when MCP was later unlocked (ADR 0039), it
+was adopted only under a **Hardened Gateway** with static TOML declaration,
+namespace isolation (`mcp.<server>.<tool>`), allowlist filtering, and
+fail-closed SHA-256 schema pinning to defend against schema drift.
 
 **Follow-up: "isn't that just rationalizing a smaller scope?"**
 It would be, if the gates were written after the fact. They weren't: ADR 0007
@@ -446,7 +455,7 @@ post-freeze backlog. Ordered, with the reason each would hold this position:
 4. **Per-run context objects** in `RunService`, only if the product shape
    moves toward concurrency.
 
-What I would *not* do: add MCP, subagents, or a planner. Every gate says no,
+What I would *not* do: add unconstrained runtime MCP, subagents, or a planner. Every gate says no,
 and breaking my own benefit gate to lengthen a feature list would discard the
 most defensible thing about the project.
 
@@ -463,7 +472,7 @@ most defensible thing about the project.
 | What does the model see? | `src/haven/application/context_builder.py` |
 | How do writes actually land? | `src/haven/adapters/workspace_fs.py` |
 | Threat model and limits | `docs/SECURITY.md` |
-| Every decision, with rollback | `docs/adr/` (26) |
+| Every decision, with rollback | `docs/adr/` (39) |
 | What was measured live | `docs/EVAL_LIVE.md` |
 | What went wrong and why | `docs/POSTMORTEM.md` |
 | Orientation and reading order | `src/haven/__init__.py` |

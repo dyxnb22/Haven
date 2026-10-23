@@ -44,6 +44,11 @@ prevent. Revisit if a future tier (larger repos, deeper call graphs) pushes
 semantic-localization failures past the threshold; the tier-4/5 attribution
 format already isolates them.
 
+> **Note (2026-10-22).** While the heavyweight external LSP daemon remains rejected
+> per the verdict above, lightweight pure-memory AST symbol navigation (`repo.outline`,
+> `repo.symbol`) was adopted in ADR 0035 to provide fast structural outline and symbol
+> reference resolution without an external daemon.
+
 *Amended 2026-08-14 — the scope of this verdict, stated plainly.* The corpus's
 hardest tier is defined by `evals/real/repos.lock` as "larger repositories
 (**10k+ source lines**)": click, jinja, pygments, rich. That is the same order

@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from haven import __version__
@@ -144,6 +145,20 @@ def test_doctor_reports_environment(tmp_path: Path) -> None:
     assert "workspace:" in result.stdout
 
 
+def test_doctor_detects_git_in_subdirectory(tmp_path: Path) -> None:
+    """在仓库子目录下执行 doctor 时，不应误报 git repo: not a repo。"""
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    sub = repo / "src" / "pkg"
+    sub.mkdir(parents=True)
+    result = runner.invoke(app, ["doctor", "--workspace", str(sub)])
+    assert "[ok ] git repo: found" in result.stdout
+    assert result.exit_code == 0
+
+
 def test_doctor_creates_no_data_directory(tmp_path: Path) -> None:
     """`doctor` 声明自己没有副作用，因此不得创建数据目录。"""
     import os
@@ -166,6 +181,8 @@ def test_config_explain_shows_sources(tmp_path: Path) -> None:
     # 秘密绝不会以值的形式打印
     assert "provider.api_key" in result.stdout
     assert "[env" in result.stdout or "present" in result.stdout or "missing" in result.stdout
+    assert "runtime.worktree" in result.stdout
+    assert "router.enabled" in result.stdout
 
 
 def test_config_explain_rejects_bad_action(tmp_path: Path) -> None:
@@ -311,6 +328,66 @@ def test_debug_context_requires_goal_or_run() -> None:
     assert result.exit_code == 2
 
 
+def _write_user_skill(name: str, description: str) -> None:
+    """写入用户级技能根目录；conftest 已把 HAVEN_CONFIG_DIR 指向临时目录。"""
+    from haven.config import user_skills_dir
+
+    directory = user_skills_dir() / name
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\n\n{name} 的正文。\n",
+        encoding="utf-8",
+    )
+
+
+def test_debug_context_lists_the_skill_catalog_as_untrusted() -> None:
+    _write_user_skill("demo", "先写失败测试")
+    result = runner.invoke(app, ["debug-context", "do a thing", "--workspace", "."])
+    assert result.exit_code == 0
+    assert "skill_catalog" in result.stdout
+    assert "untrusted" in result.stdout
+    # 目录出现，正文不出现：没有 --skill 就没有正文。
+    assert "demo 的正文" not in result.stdout
+
+
+def test_debug_context_with_a_selected_skill_shows_its_body() -> None:
+    _write_user_skill("demo", "先写失败测试")
+    result = runner.invoke(
+        app, ["debug-context", "do a thing", "--workspace", ".", "--skill", "demo"]
+    )
+    assert result.exit_code == 0
+    assert "skill:demo" in result.stdout
+    assert "demo 的正文" not in result.stdout  # 片段表只报来源，不打印正文
+    assert "skill bodies" in result.stdout  # “未包含”一节说明了加载规则
+
+
+def test_debug_context_show_prompt_excludes_skill_text() -> None:
+    """与 AGENTS.md 同样的边界：技能文本是不可信 user 消息，不是 system 提示词。"""
+    _write_user_skill("demo", "SNEAKY-INJECTED-RULE")
+    result = runner.invoke(
+        app,
+        ["debug-context", "do a thing", "--workspace", ".", "--skill", "demo", "--show-prompt"],
+    )
+    assert result.exit_code == 0
+    assert "You are Haven" in result.stdout
+    assert "SNEAKY-INJECTED-RULE" not in result.stdout
+
+
+def test_debug_context_rejects_an_unknown_skill() -> None:
+    result = runner.invoke(app, ["debug-context", "do a thing", "--skill", "nope"])
+    assert result.exit_code == 2  # EXIT_USAGE
+    assert "unknown skill 'nope'" in result.stdout
+
+
+def test_headless_run_rejects_an_unknown_skill(monkeypatch: pytest.MonkeyPatch) -> None:
+    """选择在 turn loop 之前解析，因此运行拒绝启动而不是静默少一段上下文。
+    这里只需要越过 build_services 的密钥检查——抛错发生在任何模型调用之前。"""
+    monkeypatch.setenv("HAVEN_API_KEY", "sk-test")
+    result = runner.invoke(app, ["run", "do stuff", "--skill", "nope"])
+    assert result.exit_code == 2  # EXIT_USAGE
+    assert "unknown skill 'nope'" in result.stdout
+
+
 def test_debug_context_unknown_run() -> None:
     result = runner.invoke(app, ["debug-context", "--run", "run-nope"])
     assert result.exit_code == 2
@@ -327,3 +404,93 @@ def test_eval_live_without_key_is_refused() -> None:
     result = runner.invoke(app, ["eval", "--live", "--yes"])
     assert result.exit_code == 2
     assert "API key" in result.stdout
+
+
+def test_doctor_reports_a_refused_skill(tmp_path: Path) -> None:
+    """失败即关闭必须可见：否则用户只会以为技能放错了地方。"""
+    from haven.config import user_skills_dir
+
+    directory = user_skills_dir() / "broken"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "SKILL.md").write_text("---\nname: broken\n---\n\n没有 description\n")
+    result = runner.invoke(app, ["doctor", "--workspace", str(tmp_path)])
+    assert "skills: 0 loaded, 1 refused" in result.stdout
+    assert "skills/broken/SKILL.md" in result.stdout
+    assert "missing 'description'" in result.stdout
+    assert result.exit_code == 2  # EXIT_USAGE：有失败项
+
+
+def test_skills_list_names_every_discovered_skill(tmp_path: Path) -> None:
+    """v1 里这是唯一能从命令行看到技能名字的地方；看不到名字就没法 --skill。"""
+    from haven.config import user_skills_dir
+
+    for name in ("write-tests", "deploy"):
+        directory = user_skills_dir() / name
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: {name} 的描述\n---\n\n正文\n", encoding="utf-8"
+        )
+    (tmp_path / ".haven" / "skills" / "team").mkdir(parents=True)
+    (tmp_path / ".haven" / "skills" / "team" / "SKILL.md").write_text(
+        "---\nname: team\ndescription: 仓库约定\nallowed-tools: repo.check\n---\n\n正文\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["skills", "list", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "write-tests [user]" in result.stdout
+    assert "deploy [user]" in result.stdout
+    assert "team [project]" in result.stdout
+    # 授权被明确列出，因为它是用户需要知道的事。
+    assert "standing approval requested: repo.check" in result.stdout
+
+
+def test_skills_list_reports_refusals(tmp_path: Path) -> None:
+    """失败即关闭必须可见，否则用户只会以为技能放错了地方。"""
+    from haven.config import user_skills_dir
+
+    directory = user_skills_dir() / "broken"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "SKILL.md").write_text("---\nname: broken\n---\n\n没有 description\n")
+    result = runner.invoke(app, ["skills", "list", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "1 skill file(s) refused" in result.stdout
+    assert "skills/broken/SKILL.md" in result.stdout
+    assert "missing 'description'" in result.stdout
+
+
+def test_skills_rejects_an_unknown_action() -> None:
+    result = runner.invoke(app, ["skills", "frobnicate"])
+    assert result.exit_code == 2
+
+
+def test_doctor_names_the_loaded_skills(tmp_path: Path) -> None:
+    """只报数量的 doctor 让用户无法判断自己该 --skill 什么。"""
+    from haven.config import user_skills_dir
+
+    directory = user_skills_dir() / "demo"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "SKILL.md").write_text(
+        "---\nname: demo\ndescription: d\n---\n\n正文\n", encoding="utf-8"
+    )
+    result = runner.invoke(app, ["doctor", "--workspace", str(tmp_path)])
+    assert "skills: 1 loaded (demo)" in result.stdout
+
+
+def test_config_explain_reports_the_skill_roots_and_the_kill_switch() -> None:
+    result = runner.invoke(app, ["config", "explain"])
+    assert "skills.user_dir" in result.stdout
+    assert "skills.project_dir" in result.stdout
+    assert "skills.standing_approval" in result.stdout
+    assert "HAVEN_SKILL_GRANTS" in result.stdout
+
+
+def test_mcp_list_empty(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["mcp", "list", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "Registered MCP Servers" in result.stdout
+
+
+def test_mcp_unknown_action(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["mcp", "unknown_action", "--workspace", str(tmp_path)])
+    assert result.exit_code == 2
+    assert "unknown action" in result.stdout
