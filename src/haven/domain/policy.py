@@ -32,7 +32,15 @@ READ_ONLY_TOOLS = frozenset(
 
 #: 会对文件或进程产生副作用的工具。
 EFFECT_TOOLS = frozenset(
-    {"repo.edit", "repo.create", "repo.delete", "repo.move", "repo.apply_patch", "repo.check"}
+    {
+        "repo.edit",
+        "repo.create",
+        "repo.delete",
+        "repo.move",
+        "repo.apply_patch",
+        "repo.check",
+        "recipe.propose",
+    }
 )
 
 #: 只修改当前运行自身内存状态的工具。它们既不接触磁盘，也不接触运行范围
@@ -136,6 +144,9 @@ def evaluate_policy(mode: PermissionMode, facts: ToolFacts) -> PolicyOutcome:
         if not facts.recipe_registered:
             return PolicyOutcome(PolicyDecision.DENY, "unregistered_recipe", RiskLevel.HIGH)
         return PolicyOutcome(PolicyDecision.ASK, "check_requires_approval", RiskLevel.MEDIUM)
+
+    if facts.tool_name == "recipe.propose":
+        return PolicyOutcome(PolicyDecision.ASK, "propose_recipe_requires_approval", RiskLevel.HIGH)
 
     if facts.tool_name == "repo.create":
         return PolicyOutcome(PolicyDecision.ASK, "create_requires_approval", RiskLevel.MEDIUM)

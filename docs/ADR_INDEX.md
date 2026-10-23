@@ -7,7 +7,7 @@ changes and separates them from evaluation verdicts.
 ## Load-bearing guarantees
 
 - Proposal and success boundaries: [0002](adr/0002-tool-execution-boundary.md),
-  [0003](adr/0003-evidence-gate.md), and
+  [0003](adr/0003-evidence-gate.md) (extended with ephemeral reproducers in [0043](adr/0043-ephemeral-reproducer-and-dynamic-verification-oracles.md)), and
   [0004](adr/0004-durable-execution-and-recovery.md), tightened by
   [0030](adr/0030-exact-effect-attribution.md), with tiered approvals in
   [0033](adr/0033-tiered-approval-modes.md).

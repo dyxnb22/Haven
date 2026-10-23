@@ -16,7 +16,7 @@ from haven.contracts.mcp import MCPToolArgs
 from haven.contracts.model import ToolSchema
 from haven.domain.enums import ToolErrorCode, ToolStatus
 
-TOOL_VERSION = "7"
+TOOL_VERSION = "8"
 
 
 class RepoListArgs(StrictModel):
@@ -271,6 +271,40 @@ class RepoCheckArgs(StrictModel):
     recipe_id: str = Field(min_length=1, max_length=100, description="已注册的 recipe ID。")
 
 
+class RecipeProposeArgs(StrictModel):
+    """提议并注册一个临时的验证配方（例如最小复现脚本或定制测试命令）。"""
+
+    recipe_id: str = Field(
+        min_length=1,
+        max_length=100,
+        pattern=r"^[a-zA-Z0-9_\-\.]+$",
+        description="要注册的临时 recipe ID，仅由字母、数字、下划线、短横线和点组成。",
+    )
+    argv: tuple[str, ...] = Field(
+        min_length=1,
+        max_length=64,
+        description="在受控沙箱中执行的程序与参数列表；不会解释 shell 语法。",
+    )
+    timeout_seconds: float = Field(
+        default=60.0,
+        ge=0.1,
+        le=600.0,
+        description="最长墙上时钟运行时间，单位为秒。",
+    )
+    description: str = Field(
+        default="",
+        max_length=300,
+        description="该临时复现配方的验证目的说明。",
+    )
+
+    @field_validator("argv")
+    @classmethod
+    def _bound_item_length(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(len(item) > 4096 for item in value):
+            raise ValueError("each argv item must be at most 4096 characters")
+        return value
+
+
 class TaskStartArgs(StrictModel):
     """在操作系统沙箱中启动受控的后台任务（如开发服务器或耗时构建）。"""
 
@@ -340,6 +374,7 @@ ToolArgs = (
     | RepoExecArgs
     | RepoDiffArgs
     | RepoCheckArgs
+    | RecipeProposeArgs
     | TaskPlanArgs
     | TaskStartArgs
     | TaskStatusArgs
@@ -365,6 +400,7 @@ ARGS_MODELS: dict[str, type[ToolArgs]] = {
     "repo.exec": RepoExecArgs,
     "repo.diff": RepoDiffArgs,
     "repo.check": RepoCheckArgs,
+    "recipe.propose": RecipeProposeArgs,
     "task.plan": TaskPlanArgs,
     "task.start": TaskStartArgs,
     "task.status": TaskStatusArgs,
@@ -440,6 +476,12 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "repo.check": (
         "Run a registered verification recipe (such as the project's tests). "
         "Requires user approval. Only registered recipe ids are accepted."
+    ),
+    "recipe.propose": (
+        "Propose and register an EPHEMERAL verification recipe (such as a minimal "
+        "reproduction script or custom test command) for this run. Requires user approval. "
+        "Once registered, you can invoke it with repo.check(recipe_id=...) to prove failure (Red) "
+        "before fixing code and prove success (Green) after fixing code."
     ),
     "task.plan": (
         "Record or update your ordered plan for this task. Call it once early on a "
@@ -520,6 +562,10 @@ class RecipeSpec(StrictModel):
     allow_network: bool = Field(
         default=False,
         description="此用户编写的检查是否可以访问网络。",
+    )
+    ephemeral: bool = Field(
+        default=False,
+        description="是否为当前运行中由模型提议并经审批的临时验证配方（ADR 0043）。",
     )
     #: 此配方除所有配方默认获得的解释器前缀外，还可以读取的额外根目录。工具链
     #: 会把依赖缓存放在 $HOME（`~/.m2`、`~/.gradle`）下，而沙箱默认会隐藏它。

@@ -74,6 +74,10 @@ CONSTRAINTS: dict[str, str] = {
         "registered recipe ids only, fixed argv, scrubbed env, timeout, bounded output; "
         "workspace-writable and user config may opt into network"
     ),
+    "recipe.propose": (
+        "ephemeral verification oracle proposal, bounded argv and timeout, no network, "
+        "explicit approval in smart mode (ADR 0043)"
+    ),
     "repo.exec": (
         "argv array only (no shell string), OS sandbox with the workspace read-only, no network, "
         "`$HOME` unreadable; output is never evidence"

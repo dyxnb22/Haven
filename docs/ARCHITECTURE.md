@@ -119,6 +119,7 @@ that exactly one class enjoys that exception.
 
 | Tool | Class | Interactive | Read-only | Key constraints |
 |---|---|---|---|---|
+| `recipe.propose` | effect | ask | deny | ephemeral verification oracle proposal, bounded argv and timeout, no network, explicit approval in smart mode (ADR 0043) |
 | `repo.apply_patch` | effect | ask | deny | multi-file transaction: simulated first, one approval binds every file's preimage, applied atomically with journaled rollback (ADR 0019) |
 | `repo.check` | effect | ask | deny | registered recipe ids only, fixed argv, scrubbed env, timeout, bounded output; workspace-writable and user config may opt into network |
 | `repo.create` | effect | ask | deny | new paths only — fails on anything that exists, so it can never blank a file |

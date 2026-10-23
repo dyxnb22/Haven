@@ -145,6 +145,11 @@ class ContextBuilder:
         self._max_context_chars = max(MIN_CONTEXT_CHARS, int(self._max_context_chars * factor))
         return self._max_context_chars
 
+    def register_recipe(self, recipe_id: str) -> None:
+        """动态增加一个可用的检查配方标识（例如模型提议的临时配方，ADR 0043）。"""
+        if recipe_id not in self._recipes:
+            self._recipes = (*self._recipes, recipe_id)
+
     def _build_tail(self, plan: tuple[PlanStep, ...], usage: BudgetUsage) -> list[_Selected]:
         """易变尾部：计划（如果有）和实时运行状态行始终放在最后，
         从而不会移动可缓存前缀（ADR 0008）。"""
@@ -212,12 +217,14 @@ class ContextBuilder:
                 f"- Registered check recipes you may use: {', '.join(self._recipes)}."
             )
         else:
-            # 告诉模型运行不存在的检查，会在它进行任何编辑后立即把它送入
-            # 无法取胜的循环。
+            # 告诉模型当前未配置固定检查，但可以通过 recipe.propose 提议复现配方来进行 TDD 验证。
             verification_rule = (
-                "- NO check recipes are registered for this workspace, so a change "
-                "cannot be verified here. Prefer answering from reading the code. "
-                "If you do change a file, say plainly that it is unverified."
+                "- NO check recipes are registered for this workspace yet. "
+                "If you need to edit files to fix an issue or implement a feature, "
+                "you can first write a reproducer test script, propose an ephemeral "
+                "verification recipe using recipe.propose, run repo.check to verify the "
+                "failure (Red), edit the code, and re-run repo.check to verify the fix (Green).\n"
+                "- Changes without passing verification evidence will fail the Evidence Gate."
             )
         if self._sandbox_backend:
             exec_rule = (

@@ -97,6 +97,7 @@ from haven.domain.enums import (
     PermissionMode,
     RunStatus,
     StopReason,
+    ToolStatus,
 )
 from haven.domain.ids import RunId, new_run_id
 from haven.domain.pricing import Pricing
@@ -612,7 +613,9 @@ class RunService:
 
                 if result.tool_calls:
                     answer.reset_partial()
-                    stopped = await self._handle_tool_calls(ctx, step, result.tool_calls, stuck)
+                    stopped = await self._handle_tool_calls(
+                        ctx, step, result.tool_calls, stuck, builder=builder
+                    )
                     await self._checkpoint(ctx)
                     if stopped is not None:
                         return stopped
@@ -672,6 +675,7 @@ class RunService:
         step: int,
         calls: tuple[ToolCallProposal, ...],
         stuck: StuckLoopDetector,
+        builder: ContextBuilder | None = None,
     ) -> RunOutcome | None:
         """严格按顺序通过流水线执行一轮中的工具调用。
 
@@ -690,6 +694,14 @@ class RunService:
             execution = await self._pipeline.execute(ctx, step, call)
             ctx.refresh_wall_time(time.monotonic())
             result = execution.result
+            if (
+                call.tool_name == "recipe.propose"
+                and result.status is ToolStatus.OK
+                and builder is not None
+            ):
+                for r_id, r_spec in self._pipeline._recipes.items():
+                    self._recipes[r_id] = r_spec
+                    builder.register_recipe(r_id)
             ctx.transcript.append(
                 ModelMessage(
                     role="tool",

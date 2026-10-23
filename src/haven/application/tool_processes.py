@@ -24,6 +24,7 @@ from haven.application.tool_execution_types import (
 from haven.contracts.events import EvidenceRecorded, Notice
 from haven.contracts.model import ToolCallProposal
 from haven.contracts.tools import (
+    RecipeProposeArgs,
     RecipeSpec,
     RepoCheckArgs,
     RepoExecArgs,
@@ -71,6 +72,7 @@ class ProcessToolExecutor:
         self.handlers: dict[str, ExecuteHandler] = {
             "repo.exec": self.execute_exec,
             "repo.check": self.execute_check,
+            "recipe.propose": self.execute_recipe_propose,
             "task.start": self.execute_task_start,
             "task.status": self.execute_task_status,
             "task.logs": self.execute_task_logs,
@@ -266,6 +268,50 @@ class ProcessToolExecutor:
                 check_payload["diagnostics"] = [d.to_dict() for d in check_diags]
                 check_payload["summary"] = format_diagnostics_summary(check_diags)
         return ToolExecution(ok_result(call, check_payload, truncated=outcome.truncated))
+
+    async def execute_recipe_propose(
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: ToolArgs,
+        ticket_digest: str,
+        preview: ToolPreview,
+    ) -> ToolExecution:
+        """提议并动态注册一个临时的验证配方，使其可供 repo.check 调用。"""
+        assert isinstance(args, RecipeProposeArgs)
+        recipe = RecipeSpec(
+            id=args.recipe_id,
+            argv=args.argv,
+            timeout_seconds=args.timeout_seconds,
+            allow_network=False,
+            ephemeral=True,
+        )
+        self._recipes[args.recipe_id] = recipe
+        await self._emitter.emit(
+            ctx.run_id,
+            Notice(
+                run_id=ctx.run_id,
+                level="info",
+                message=f"ephemeral recipe '{args.recipe_id}' registered: argv={list(args.argv)}",
+            ),
+        )
+        return ToolExecution(
+            ok_result(
+                call,
+                {
+                    "registered": True,
+                    "recipe_id": args.recipe_id,
+                    "argv": list(args.argv),
+                    "timeout_seconds": args.timeout_seconds,
+                    "message": (
+                        f"Ephemeral recipe {args.recipe_id!r} registered.\n"
+                        f"Run `repo.check(recipe_id={args.recipe_id!r})` to verify.\n"
+                        "TDD guideline: Run check first to confirm failure (Red), "
+                        "then re-run after edits to prove success (Green)."
+                    ),
+                },
+            )
+        )
 
     async def execute_task_start(
         self,

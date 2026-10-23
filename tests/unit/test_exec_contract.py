@@ -15,8 +15,15 @@ class TestRegistration:
         # 随工具集增长而递增："1" 表示 exec 之前，"2" 加入 repo.exec，
         # "3" 加入 repo.delete 和 repo.move，"4" 加入 repo.apply_patch，
         # "5" 加入 skill.read，"6" 加入 repo.outline 和 repo.symbol，
-        # "7" 加入 task.* 后台任务与 web.* 文档查询。
-        assert TOOL_VERSION == "7"
+        # "7" 加入 task.* 后台任务与 web.* 文档查询，
+        # "8" 加入 recipe.propose 自合成临时复现配方（ADR 0043）。
+        assert TOOL_VERSION == "8"
+
+    def test_recipe_propose_is_registered(self) -> None:
+        from haven.contracts.tools import RecipeProposeArgs
+
+        assert ARGS_MODELS["recipe.propose"] is RecipeProposeArgs
+        assert "recipe.propose" in {schema.name for schema in tool_schemas()}
 
     def test_schema_is_published_to_the_model(self) -> None:
         assert "repo.exec" in {schema.name for schema in tool_schemas()}

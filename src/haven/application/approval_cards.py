@@ -5,6 +5,7 @@ import shlex
 from collections.abc import Callable
 
 from haven.contracts.tools import (
+    RecipeProposeArgs,
     RecipeSpec,
     RepoApplyPatchArgs,
     RepoCheckArgs,
@@ -42,6 +43,7 @@ class ApprovalCardRenderer:
             "repo.exec": self._card_exec,
             "task.start": self._card_task_start,
             "repo.check": self._card_check,
+            "recipe.propose": self._card_recipe_propose,
         }
 
     def render(self, tool_name: str, args: ToolArgs, preview: ToolPreview) -> tuple[str, str]:
@@ -158,6 +160,20 @@ class ApprovalCardRenderer:
             f"additional readable roots: {roots}",
         ]
         return summary, "\n".join(preview_lines)
+
+    def _card_recipe_propose(self, args: ToolArgs, preview: ToolPreview) -> tuple[str, str]:
+        if not isinstance(args, RecipeProposeArgs):
+            return "", ""
+        summary = f"register ephemeral verification recipe {args.recipe_id!r}"
+        lines = [
+            "$ " + shlex.join(args.argv),
+            f"recipe id: {args.recipe_id}",
+            f"timeout: {args.timeout_seconds}s",
+            "recipe permissions: workspace writable, no network",
+        ]
+        if args.description:
+            lines.append(f"description: {args.description}")
+        return summary, "\n".join(lines)
 
 
 def _clip(text: str, limit: int) -> str:

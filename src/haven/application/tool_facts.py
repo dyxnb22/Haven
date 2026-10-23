@@ -13,6 +13,7 @@ from haven.contracts.tools import (
     PatchDeleteOp,
     PatchEditOp,
     PatchMoveOp,
+    RecipeProposeArgs,
     RecipeSpec,
     RepoApplyPatchArgs,
     RepoCheckArgs,
@@ -70,6 +71,7 @@ class ToolFactsCollector:
             "repo.apply_patch": self._facts_patch,
             "repo.exec": self._facts_exec,
             "repo.check": self._facts_check,
+            "recipe.propose": self._facts_recipe_propose,
             "repo.diff": self._facts_stateless,
             "task.plan": self._facts_stateless,
             "task.start": self._facts_task_start,
@@ -327,6 +329,29 @@ class ToolFactsCollector:
             tool_name=call.tool_name,
             recipe_registered=args.recipe_id in self._recipes,
         ), None
+
+    async def _facts_recipe_propose(
+        self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
+    ) -> tuple[ToolFacts, ToolPreview]:
+        assert isinstance(args, RecipeProposeArgs)
+        within = True
+        touches_protected = False
+        for item in args.argv:
+            if item.startswith("..") or "/../" in item or "\\..\\" in item:
+                within = False
+            if not item.startswith("/"):
+                facts = self._workspace.path_facts(item)
+                if facts.is_protected:
+                    touches_protected = True
+        return (
+            ToolFacts(
+                tool_name=call.tool_name,
+                within_workspace=within,
+                touches_protected_path=touches_protected,
+                sandbox_available=self._launcher is not None and self._launcher.available(),
+            ),
+            None,
+        )
 
     async def _facts_stateless(
         self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs

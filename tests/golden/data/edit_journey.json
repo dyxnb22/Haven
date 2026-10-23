@@ -32,6 +32,7 @@
       "repo.exec",
       "repo.diff",
       "repo.check",
+      "recipe.propose",
       "task.plan",
       "task.start",
       "task.status",
