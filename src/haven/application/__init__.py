@@ -27,11 +27,13 @@ from haven.application.recovery_service import (
 )
 from haven.application.registry import ToolRegistry, ValidationFailure
 from haven.application.replay_service import ReplayService
+from haven.application.run_actor import RunActor
 from haven.application.run_service import (
     RunOutcome,
     RunService,
     build_run_context_from_checkpoint,
 )
+from haven.application.runtime import HavenRuntime
 from haven.application.skills import (
     Skill,
     SkillCatalog,
@@ -52,11 +54,13 @@ __all__ = [
     "ContextBuilder",
     "EffectFinding",
     "EventEmitter",
+    "HavenRuntime",
     "ModelProfile",
     "QueueApprovalBroker",
     "RecoveryReport",
     "RecoveryService",
     "ReplayService",
+    "RunActor",
     "RunContext",
     "RunOutcome",
     "RunService",

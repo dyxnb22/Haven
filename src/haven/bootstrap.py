@@ -36,6 +36,7 @@ from haven.application.recovery_service import RecoveryService
 from haven.application.replay_service import ReplayService
 from haven.application.run_persistence import RunOutcome
 from haven.application.run_service import RunService
+from haven.application.runtime import HavenRuntime
 from haven.application.skills import SkillCatalog, discover_skills, resolve_selected_skills
 from haven.config import (
     ResolvedConfig,
@@ -108,6 +109,17 @@ class AppServices:
         if self.ephemeral_worktree is not None and outcome.status is RunStatus.SUCCEEDED:
             return await reconcile_worktree_to_main(self.ephemeral_worktree)
         return []
+
+    @property
+    def runtime(self) -> HavenRuntime:
+        """统一应用运行时门面。"""
+        return HavenRuntime(
+            run_service=self.run_service,
+            store=self.store,
+            emitter=self.emitter,
+            approvals=self.run_service._approvals,  # noqa: SLF001
+            recovery=self.recovery,
+        )
 
     async def close(self) -> None:
         """关闭模型与存储后释放租约；任一步失败都不会跳过后续清理。"""

@@ -47,7 +47,6 @@ from haven.application.answer_resolution import (
     MAX_OUTPUT_CONTINUATIONS as MAX_OUTPUT_CONTINUATIONS,
 )
 from haven.application.answer_resolution import (
-    AnswerAssembly,
     AnswerResolver,
 )
 from haven.application.approvals import ApprovalResponder
@@ -62,6 +61,7 @@ from haven.application.model_stream import (
 from haven.application.model_stream import retry_delay as _retry_delay
 from haven.application.profiles import profile_for
 from haven.application.registry import ToolRegistry
+from haven.application.run_actor import RunActor
 from haven.application.run_persistence import (
     CheckpointManager,
     RunFinalizer,
@@ -75,11 +75,8 @@ from haven.application.tool_pipeline import ToolPipeline
 from haven.contracts.checkpoint import CheckpointV1
 from haven.contracts.events import (
     ContextBuilt,
-    ModelCompleted,
     Notice,
     RunCreated,
-    SteerQueued,
-    StepStarted,
 )
 from haven.contracts.mcp import MCPServerConfig
 from haven.contracts.model import (
@@ -87,13 +84,11 @@ from haven.contracts.model import (
     ModelRequest,
     ModelResult,
     ToolCallProposal,
-    ToolSchema,
 )
-from haven.contracts.tools import RecipeSpec, tool_schemas
-from haven.domain.budget import Budget, check_accumulated_budget, check_budget
+from haven.contracts.tools import RecipeSpec
+from haven.domain.budget import Budget
 from haven.domain.enums import (
     ApprovalMode,
-    EffectState,
     PermissionMode,
     RunStatus,
     StopReason,
@@ -120,7 +115,14 @@ CONTEXT_OVERFLOW_SHRINK = 0.6
 #: 默认行为。实测：8 次在线运行中有 3 次在收到任何 token 前遇到 ConnectError，
 #: 31 个真实仓库案例中另有 2 个后来因一次适配器仍判定为不可重试的错误而失败——
 #: 这个循环的效果取决于该分类是否准确。
-__all__ = ["MODEL_RETRY_MAX_DELAY", "RunOutcome", "RunService", "_retry_delay"]
+__all__ = [
+    "MODEL_RETRY_MAX_DELAY",
+    "RunActor",
+    "RunOutcome",
+    "RunService",
+    "_retry_delay",
+    "build_run_context_from_checkpoint",
+]
 
 
 class RunService:
@@ -152,8 +154,10 @@ class RunService:
         self._model = model
         self._streamer = ModelStreamer(emitter)
         self._workspace = workspace
+        self._executor = executor
         self._store = store
         self._emitter = emitter
+        self._approvals = approvals
         self._mode = mode
         self._budget = budget
         # 每个模型的默认值；未知模型继承 Haven 的历史行为，而不是使用根据
@@ -190,9 +194,9 @@ class RunService:
         self._mcp_manager = MCPClientManager(mcp_servers)
         self._registry = ToolRegistry()
         self._launcher = launcher
-        # Steering：运行活跃时接受用户输入，但只在轮次边界投递，避免工具通道
-        # 在副作用进行中被打断。到达时写入日志（持久化），由循环取出处理。
-        self._steer_queue: deque[str] = deque()
+        self._actors: dict[str, RunActor] = {}
+        self._tasks: dict[str, asyncio.Task[RunOutcome]] = {}
+        self._empty_steer_queue: deque[str] = deque()
         self._active_run_id: str | None = None
         # 每个运行一个独占临时目录，运行结束时删除。它使必须写入某处的沙箱工具
         # 不需要获得工作区之外的写权限。
@@ -223,6 +227,15 @@ class RunService:
         )
 
     @property
+    def _steer_queue(self) -> deque[str]:
+        """向后兼容属性：返回当前活跃 actor 的转向队列。"""
+        if self._active_run_id is not None:
+            actor = self._actors.get(self._active_run_id)
+            if actor is not None:
+                return actor.steer_queue
+        return self._empty_steer_queue
+
+    @property
     def approval_mode(self) -> ApprovalMode:
         """当前的审批分级模式（ask / smart / full）。"""
         return self._pipeline.approval_mode
@@ -230,6 +243,8 @@ class RunService:
     def set_approval_mode(self, mode: ApprovalMode) -> None:
         """动态更新当前的审批分级模式。"""
         self._pipeline.set_approval_mode(mode)
+        for actor in self._actors.values():
+            actor.set_approval_mode(mode)
 
     # -- 入口 -----------------------------------------------------------------
 
@@ -379,6 +394,9 @@ class RunService:
     async def close(self) -> None:
         """释放后台进程与尚未被运行生命周期删除的临时目录；重复调用保持安全。"""
         try:
+            for actor in list(self._actors.values()):
+                await actor.close()
+            self._actors.clear()
             await self._pipeline.close()
         finally:
             try:
@@ -393,29 +411,34 @@ class RunService:
                         shutil.rmtree(self._scratch_dir, ignore_errors=True)
                         self._scratch_ready = False
 
-    async def steer(self, text: str) -> bool:
+    async def steer(self, text: str, *, run_id: str | None = None) -> bool:
         """为活跃运行排队用户输入，并在下一轮边界投递。
 
         当前模型调用和正在执行的工具都不会被打断；文本会在下一次模型请求前变成 user
         消息。没有活跃运行时返回 False（调用方应改为启动运行或后续轮次）。排队文本
         会立即写入日志，因此可以跨越崩溃保留。
         """
-        text = text.strip()
-        if not text or self._active_run_id is None:
+        target_id = run_id or self._active_run_id
+        if target_id is None:
             return False
-        if len(text) > 4000:
-            raise ValueError("steering text must be at most 4000 characters")
-        self._steer_queue.append(text)
-        await self._emitter.emit(
-            self._active_run_id,
-            SteerQueued(run_id=self._active_run_id, text=text),
-        )
-        return True
+        actor = self._actors.get(target_id)
+        if actor is not None:
+            return await actor.steer(text)
+        return False
+
+    async def cancel(self, run_id: str) -> bool:
+        """尝试取消指定运行的异步执行任务。"""
+        task = self._tasks.get(run_id)
+        if task is not None and not task.done():
+            task.cancel()
+            return True
+        return False
 
     def _drain_steering(self) -> list[str]:
         drained: list[str] = []
-        while self._steer_queue:
-            drained.append(self._steer_queue.popleft())
+        queue = self._steer_queue
+        while queue:
+            drained.append(queue.popleft())
         return drained
 
     async def _call_model_step(
@@ -494,180 +517,66 @@ class RunService:
 
     # -- 循环 ------------------------------------------------------------------
 
+    def _create_actor(
+        self,
+        ctx: RunContext,
+        *,
+        selected_skills: tuple[Skill, ...] = (),
+        scratch_dir: Path | None = None,
+    ) -> RunActor:
+        """为单次运行构建自治隔离的 RunActor 实例。"""
+        return RunActor(
+            ctx=ctx,
+            model=self._model,
+            streamer=self._streamer,
+            workspace=self._workspace,
+            executor=self._executor,
+            store=self._store,
+            emitter=self._emitter,
+            approvals=self._approvals,
+            recipes=self._recipes,
+            mode=self._mode,
+            profile=self._profile,
+            context_chars=self._context_chars,
+            supports_prefix=self._supports_prefix,
+            pricing=self._pricing,
+            telemetry=self._telemetry,
+            checkpoints=self._checkpoints,
+            finalizer=self._finalizer,
+            skills=self._skills,
+            selected_skills=selected_skills,
+            launcher=self._launcher,
+            approval_mode=self.approval_mode,
+            mcp_manager=self._mcp_manager,
+            registry=self._registry,
+            project_guidance=self._project_guidance,
+            scratch_dir=scratch_dir,
+            mcp_servers=self._mcp_servers,
+        )
+
     async def _drive(
         self, ctx: RunContext, *, selected_skills: tuple[Skill, ...] = ()
     ) -> RunOutcome:
-        """轮次循环。编号阶段记录在模块文档字符串中。每个 RunOutcome 都由 `_finish` 生成
-        （直接生成，或在 `_handle_tool_calls` 内生成），因此停止原因和证据门禁只有
-        一个应用位置。"""
-        if not self._scratch_ready:
-            # 绝不复用已删除目录的名字：本机另一个进程可能在两轮之间抢占旧路径
-            # 或把它换成符号链接。mkdtemp 原子创建一个仅属于本轮的新目录。
-            self._scratch_dir = Path(tempfile.mkdtemp(prefix="haven-scratch-"))
-            self._pipeline.replace_scratch_dir(self._scratch_dir)
+        """轮次循环，委托给自治 RunActor 隔离执行。"""
+        if not self._scratch_ready or not self._scratch_dir.exists():
+            self._scratch_dir = Path(tempfile.mkdtemp(prefix=f"haven-scratch-{ctx.run_id[:8]}-"))
             self._scratch_ready = True
 
-        if self._mcp_servers and not self._mcp_manager.tools:
-            mcp_tools = await self._mcp_manager.initialize()
-            self._registry.register_mcp_tools(mcp_tools)
-
-        mcp_schemas = tuple(
-            ToolSchema(
-                name=t.namespaced_name,
-                description=t.description,
-                parameters=t.parameters,
-            )
-            for t in self._mcp_manager.tools
+        actor = self._create_actor(
+            ctx, selected_skills=selected_skills, scratch_dir=self._scratch_dir
         )
-        builder = ContextBuilder(
-            goal=ctx.goal,
-            tools=(*tool_schemas(), *mcp_schemas),
-            budget=ctx.budget,
-            recipe_ids=tuple(self._recipes),
-            project_guidance=self._project_guidance,
-            skills=self._skills.skills,
-            selected_skills=selected_skills,
-            sandbox_backend=self._launcher.backend if self._launcher is not None else "",
-            max_context_chars=self._context_chars,
-            reasoning_effort=self._profile.reasoning_effort,
-        )
-        stuck = StuckLoopDetector()
-        # 最近一次记录的 request envelope 摘要，因此未变化的 envelope 不会
-        # 每一步都重复写日志。
-        envelope_digest = ""
-        ctx.start_timing(time.monotonic())
-        # 输出截断和空回复的恢复状态（截断答案绝不能被静默接受为完整答案）。
-        answer = AnswerAssembly()
-
+        self._actors[ctx.run_id] = actor
         self._active_run_id = ctx.run_id
-        self._steer_queue.clear()
+        self._pipeline.replace_scratch_dir(self._scratch_dir)
         try:
-            while True:
-                ctx.refresh_wall_time(time.monotonic())
-                if stop := check_budget(ctx.budget, ctx.usage):
-                    return await self._finish(ctx, RunStatus.STOPPED, stop, answer.final_text)
-
-                ctx.usage = ctx.usage.charge_step()
-                step = ctx.usage.steps
-                if ctx.status is RunStatus.CREATED:
-                    ctx.move_to(RunStatus.RUNNING_MODEL)
-                await self._emitter.emit(ctx.run_id, StepStarted(run_id=ctx.run_id, step=step))
-
-                # 轮次边界：排队中的 steering 会在下一次模型请求前变成普通 user
-                # 消息——绝不在流式输出或工具调用中途插入。
-                for steered in self._drain_steering():
-                    ctx.transcript.append(
-                        ModelMessage(role="user", content=f"User update: {steered}")
-                    )
-                    await self._emitter.emit(
-                        ctx.run_id,
-                        Notice(
-                            run_id=ctx.run_id,
-                            level="info",
-                            message=f"steering delivered: {steered[:160]}",
-                        ),
-                    )
-
-                step_outcome = await self._call_model_step(
-                    ctx, step, builder, envelope_digest, answer.final_text
-                )
-                if isinstance(step_outcome, RunOutcome):
-                    return step_outcome
-                request, result, envelope_digest = step_outcome
-
-                pricing = None
-                if isinstance(self._model, ModelRouter) and not self._telemetry._pricing.is_known:
-                    model_profile = profile_for(self._model.active_model.model_name)
-                    if model_profile.pricing.is_known:
-                        pricing = model_profile.pricing
-                self._telemetry.charge_usage(ctx, request, result, pricing=pricing)
-                ctx.refresh_wall_time(time.monotonic())
-                await self._emitter.emit(
-                    ctx.run_id,
-                    ModelCompleted(
-                        run_id=ctx.run_id,
-                        step=step,
-                        text=result.text,
-                        tool_call_count=len(result.tool_calls),
-                        input_tokens=result.usage.input_tokens,
-                        output_tokens=result.usage.output_tokens,
-                        usage_estimated=result.usage.estimated,
-                        ttft_ms=result.ttft_ms,
-                        duration_ms=result.duration_ms,
-                        finish_reason=result.finish_reason,
-                        reasoning_tokens=result.usage.reasoning_tokens,
-                        cached_input_tokens=result.usage.cached_input_tokens,
-                    ),
-                )
-                ctx.transcript.append(
-                    ModelMessage(
-                        role="assistant",
-                        content=result.text,
-                        tool_calls=result.tool_calls,
-                        provider_reasoning=result.provider_reasoning,
-                    )
-                )
-
-                if stop := check_accumulated_budget(ctx.budget, ctx.usage):
-                    return await self._finish(ctx, RunStatus.STOPPED, stop, answer.final_text)
-
-                if result.tool_calls:
-                    answer.reset_partial()
-                    stopped = await self._handle_tool_calls(
-                        ctx, step, result.tool_calls, stuck, builder=builder
-                    )
-                    await self._checkpoint(ctx)
-                    if stopped is not None:
-                        return stopped
-                    continue
-
-                # 没有工具调用：该回复是候选最终答案。
-                # 先有界地恢复截断或空回复，再由 Evidence Gate 决定——模型的声明
-                # 永远不能代替门禁判断。
-                recovered = await self._answers.recover_incomplete_reply(ctx, result, answer)
-                if isinstance(recovered, RunOutcome):
-                    return recovered
-                if recovered:
-                    continue
-                outcome = await self._answers.finish_with_gate(ctx, result, answer)
-                if outcome is not None:
-                    return outcome
-        except asyncio.CancelledError:
-            executions = await self._store.load_executions(ctx.run_id)
-            started = [
-                record for record in executions if record.effect_state is EffectState.STARTED
-            ]
-            # 取消可以落在 STARTED 持久化之后、具体执行器的异常处理之前（例如
-            # 进程前快照或异步数据库边界）。终态收口负责把所有这类悬空记录显式
-            # 归一为未知影响，不能只让 run 行说 unknown 而明细仍声称“正在执行”。
-            for record in started:
-                await self._store.update_execution_state(
-                    ctx.run_id, record.call_id, EffectState.EFFECT_UNKNOWN
-                )
-            uncertain = bool(started) or any(
-                record.effect_state is EffectState.EFFECT_UNKNOWN for record in executions
-            )
-            if uncertain:
-                await self._finish(
-                    ctx,
-                    RunStatus.EFFECT_UNKNOWN,
-                    StopReason.EFFECT_UNKNOWN,
-                    answer.final_text,
-                )
-            else:
-                await self._finish(
-                    ctx, RunStatus.CANCELLED, StopReason.CANCELLED, answer.final_text
-                )
-            raise
+            return await actor.drive()
         finally:
-            self._active_run_id = None
-            if self._steer_queue:
-                # 未投递的 steering 不能泄漏到后续运行；排队事件会留在日志中
-                # 作为记录。
-                self._steer_queue.clear()
-            if self._scratch_ready:
+            self._actors.pop(ctx.run_id, None)
+            if self._active_run_id == ctx.run_id:
+                self._active_run_id = None
+            if self._scratch_ready and self._scratch_dir.exists():
                 shutil.rmtree(self._scratch_dir, ignore_errors=True)
-                self._scratch_ready = False
+            self._scratch_ready = False
 
     async def _handle_tool_calls(
         self,
@@ -683,6 +592,9 @@ class RunService:
         则将观察结果交还模型。这里有意采用串行执行：并行副作用会使审批、preimage
         固定值和日志顺序产生歧义。
         """
+        actor = self._actors.get(ctx.run_id)
+        if actor is not None:
+            return await actor.handle_tool_calls(step, calls, stuck, builder=builder)
         for call in calls:
             if ctx.usage.tool_calls >= ctx.budget.max_tool_calls:
                 return await self._finish(
