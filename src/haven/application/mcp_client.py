@@ -180,6 +180,19 @@ class MCPClient:
             "raw": result_payload,
         }
 
+    async def read_resource(self, uri: str, timeout: float = DEFAULT_MCP_TIMEOUT) -> dict[str, Any]:
+        """从外部受控 MCP Server 读取指定 URI 的资源内容（ADR 规划书 Phase P4）。"""
+        res = await self._send_request(
+            "resources/read",
+            {"uri": uri},
+            timeout=timeout,
+        )
+        if "error" in res:
+            err = res["error"]
+            raise MCPError(f"server {self.config.name} failed to read resource {uri}: {err}")
+        result = res.get("result")
+        return result if isinstance(result, dict) else {}
+
     async def _send_request(
         self, method: str, params: dict[str, Any], timeout: float = DEFAULT_MCP_TIMEOUT
     ) -> dict[str, Any]:

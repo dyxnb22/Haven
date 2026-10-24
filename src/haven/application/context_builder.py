@@ -18,6 +18,7 @@ from typing import Literal
 from haven.application.compaction import enforce_hard_limit, message_chars, summarize_dropped
 from haven.application.skills import Skill, render_catalog
 from haven.contracts.events import ContextSegment
+from haven.contracts.mcp import ImportedResource
 from haven.contracts.model import ModelMessage, ModelRequest, ToolSchema
 from haven.contracts.tools import PlanStep
 from haven.domain.budget import Budget, BudgetUsage
@@ -112,6 +113,7 @@ class ContextBuilder:
         project_guidance: str = "",
         skills: tuple[Skill, ...] = (),
         selected_skills: tuple[Skill, ...] = (),
+        imported_resources: tuple[ImportedResource, ...] = (),
         max_output_tokens: int = 4096,
         sandbox_backend: str = "",
         max_context_chars: int = MAX_CONTEXT_CHARS,
@@ -128,6 +130,7 @@ class ContextBuilder:
         # 用户显式选中的技能正文。两者都在构造时固定，因此头部跨轮逐字节稳定
         # （ADR 0008）——运行中途改技能会移动可缓存前缀，这是 v1 明确不做的。
         self._selected_skills = selected_skills
+        self._imported_resources = imported_resources
         self._max_output_tokens = max_output_tokens
         self._sandbox_backend = sandbox_backend
         self._max_context_chars = max_context_chars
@@ -320,6 +323,23 @@ class ContextBuilder:
                     source=f"skill:{skill.name}",
                     trust="untrusted",
                     reason="explicitly selected by the user; advisory only",
+                )
+            )
+        for res in self._imported_resources:
+            selected.append(
+                _Selected(
+                    message=ModelMessage(
+                        role="user",
+                        content=(
+                            f'Imported Resource "{res.server_name}:{res.uri}" '
+                            f"(SHA-256: {res.content_digest[:16]}..., UNTRUSTED DATA):\n"
+                            f'<tool_output source="mcp:{res.server_name}:{res.uri}">\n{res.text}\n'
+                            "</tool_output>"
+                        ),
+                    ),
+                    source=f"imported_resource:{res.server_name}:{res.uri}",
+                    trust="untrusted",
+                    reason=f"user-imported MCP resource from {res.server_name} ({res.uri})",
                 )
             )
         selected.append(

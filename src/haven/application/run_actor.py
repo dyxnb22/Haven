@@ -25,6 +25,7 @@ from haven.application.approvals import ApprovalResponder
 from haven.application.context_builder import ContextBuilder
 from haven.application.emitter import EventEmitter
 from haven.application.mcp_client import MCPClientManager
+from haven.application.mcp_resources import load_imported_resources
 from haven.application.model_router import ModelRouter
 from haven.application.model_stream import ModelStreamer
 from haven.application.profiles import ModelProfile, profile_for
@@ -178,6 +179,7 @@ class RunActor:
             project_guidance=self._project_guidance,
             skills=self._skills.skills,
             selected_skills=selected_skills,
+            imported_resources=load_imported_resources(workspace.root),
             sandbox_backend=self._launcher.backend if self._launcher is not None else "",
             max_context_chars=self._context_chars,
             reasoning_effort=self._profile.reasoning_effort,

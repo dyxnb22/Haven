@@ -19,6 +19,7 @@ from haven.interfaces.cli_support.common import (
     EXIT_TOOL,
     EXIT_USAGE,
 )
+from haven.interfaces.cli_support.context_commands import context
 from haven.interfaces.cli_support.diagnostic_commands import (
     debug_context,
     doctor,
@@ -133,6 +134,7 @@ app.command()(init)
 app.command("config")(config_explain)
 app.command("skills")(skills)
 app.command("mcp")(mcp)
+app.command("context")(context)
 app.command("debug-context")(debug_context)
 app.command("verify-provider")(verify_provider)
 app.command("eval")(eval_command)

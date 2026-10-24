@@ -76,3 +76,46 @@ class MCPServerConfig:
     read_only_tools: tuple[str, ...] = ()
     #: 绑定的 Schema 指纹哈希 (tool_name -> sha256)；用于防范 Schema 漂移
     pinned_schemas: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class ImportedResource:
+    """由用户显式从受控 MCP Server 导入的外部上下文资源（规划书 Phase P4）。"""
+
+    server_name: str
+    uri: str
+    fetched_at: str
+    content_digest: str
+    mime_type: str = "text/plain"
+    text: str = ""
+    truncated: bool = False
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        server_name: str,
+        uri: str,
+        text: str,
+        mime_type: str = "text/plain",
+        fetched_at: str | None = None,
+        max_bytes: int = 64 * 1024,
+    ) -> ImportedResource:
+        import datetime
+
+        now_iso = fetched_at or datetime.datetime.now(datetime.UTC).isoformat()
+        digest = sha256_text(text)
+        truncated = False
+        text_bytes = text.encode("utf-8")
+        if len(text_bytes) > max_bytes:
+            truncated = True
+            text = text_bytes[:max_bytes].decode("utf-8", errors="ignore")
+        return cls(
+            server_name=server_name,
+            uri=uri,
+            fetched_at=now_iso,
+            content_digest=digest,
+            mime_type=mime_type,
+            text=text,
+            truncated=truncated,
+        )

@@ -30,6 +30,7 @@ from haven.adapters.worktree import (
 from haven.application.approvals import ApprovalResponder
 from haven.application.context_builder import ContextBuilder
 from haven.application.emitter import EventEmitter
+from haven.application.mcp_resources import load_imported_resources
 from haven.application.model_router import ModelRouter
 from haven.application.profiles import profile_for
 from haven.application.recovery_service import RecoveryService
@@ -510,6 +511,7 @@ async def build_context_preview(
         project_guidance=guidance,
         skills=skills.skills,
         selected_skills=resolve_selected_skills(skills.skills, skill_names),
+        imported_resources=load_imported_resources(workspace_root),
     )
     request, segments = builder.build([], BudgetUsage())
     return request, segments, config

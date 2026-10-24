@@ -50,6 +50,12 @@ from haven.contracts.events import (
     ToolCompleted,
     ToolProposed,
 )
+from haven.contracts.mcp import (
+    ImportedResource,
+    MCPServerConfig,
+    MCPToolArgs,
+    MCPToolSchema,
+)
 from haven.contracts.model import (
     ModelEvent,
     ModelMessage,
@@ -109,6 +115,10 @@ __all__ = [
     "EvidenceRecorded",
     "EvidenceSnapshot",
     "ExecutionStarted",
+    "ImportedResource",
+    "MCPServerConfig",
+    "MCPToolArgs",
+    "MCPToolSchema",
     "ModelCompleted",
     "ModelEvent",
     "ModelMessage",
