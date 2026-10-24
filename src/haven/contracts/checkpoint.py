@@ -268,6 +268,11 @@ class CheckpointV1(StrictModel):
         default_factory=dict,
         description="路径 -> 本次运行首次编辑前文件内容的构件摘要",
     )
+    #: 本次运行冻结的能力快照摘要（ADR 规划书 P2）。
+    catalog_digest: str = Field(
+        default="",
+        description="能力快照摘要，用于恢复时校验能力与 schema 漂移",
+    )
 
     def checksum(self) -> str:
         """对当前快照的规范 JSON 求摘要，用于持久化完整性校验。"""

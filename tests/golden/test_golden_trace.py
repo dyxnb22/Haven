@@ -33,6 +33,7 @@ _VOLATILE = {
     "approval_id",
     "request_digest",
     "ticket_digest",
+    "catalog_digest",
     # 设计上保持不透明：它让运行时能够察觉 envelope 发生变化，但不会说明
     # “什么”发生了变化。`system_prompt_chars` 特意保留在 golden 中，因此
     # prompt 编辑会显示为 diff。

@@ -72,6 +72,7 @@ from haven.application.skill_grants import grant_notice, grant_table
 from haven.application.skills import Skill, SkillCatalog, resolve_selected_skills
 from haven.application.state import RunContext
 from haven.application.tool_pipeline import ToolPipeline
+from haven.contracts.capability import build_capability_snapshot
 from haven.contracts.checkpoint import CheckpointV1
 from haven.contracts.events import (
     ContextBuilt,
@@ -266,12 +267,15 @@ class RunService:
         if not (3 <= len(goal) <= 4000):
             raise ValueError("goal must be between 3 and 4000 characters")
         selected = resolve_selected_skills(self._skills.skills, skill_names)
+        snapshot = build_capability_snapshot(self._mcp_manager.tools if self._mcp_manager else ())
 
         ctx = RunContext(
             run_id=new_run_id(),
             goal=goal,
             mode=self._mode,
             budget=self._budget,
+            catalog_digest=snapshot.catalog_digest,
+            capabilities=snapshot,
             **grant_table(selected),
         )
         await self._announce_run(ctx, goal)
@@ -311,6 +315,20 @@ class RunService:
                 "continue it from the same workspace"
             )
 
+        current_snapshot = build_capability_snapshot(
+            self._mcp_manager.tools if self._mcp_manager else ()
+        )
+        if (
+            checkpoint.catalog_digest
+            and checkpoint.catalog_digest != current_snapshot.catalog_digest
+        ):
+            saved_d = checkpoint.catalog_digest[:12]
+            curr_d = current_snapshot.catalog_digest[:12]
+            raise ValueError(
+                f"capability catalog changed since checkpoint (saved {saved_d}, "
+                f"current {curr_d}); start a new run instead"
+            )
+
         # 后续轮次是新的 turn：它的运行 diff 必须只显示自身的改动，因此要重置
         # 上一轮的运行范围原始内容（在新进程中无害，但在会话复用的长期 TUI
         # 工作区中是必需的）。
@@ -326,6 +344,8 @@ class RunService:
             transcript=transcript,
             plan=checkpoint.plan,
             files_read=dict(checkpoint.files_read),
+            catalog_digest=current_snapshot.catalog_digest,
+            capabilities=current_snapshot,
             **grant_table(selected),
         )
         await self._announce_run(ctx, checkpoint.goal, parent_run_id=previous_run_id)
@@ -370,6 +390,7 @@ class RunService:
                 max_steps=self._budget.max_steps,
                 sandbox_backend=(self._launcher.backend if self._launcher is not None else "none"),
                 parent_run_id=parent_run_id,
+                catalog_digest=ctx.catalog_digest,
             ),
         )
 
@@ -380,6 +401,19 @@ class RunService:
         因此这里只能得到目录。这是 v1 明确的取舍——把选择写进 checkpoint 会让
         磁盘上的技能改动与已检查点头部不一致，而那正是检查点要避免的（ADR 0031）。
         """
+        current_snapshot = build_capability_snapshot(
+            self._mcp_manager.tools if self._mcp_manager else ()
+        )
+        if ctx.catalog_digest and ctx.catalog_digest != current_snapshot.catalog_digest:
+            saved_d = ctx.catalog_digest[:12]
+            curr_d = current_snapshot.catalog_digest[:12]
+            raise ValueError(
+                f"capability catalog changed since checkpoint (saved {saved_d}, "
+                f"current {curr_d}); start a new run instead"
+            )
+        ctx.catalog_digest = current_snapshot.catalog_digest
+        ctx.capabilities = current_snapshot
+
         await self._emitter.emit(
             ctx.run_id,
             Notice(run_id=ctx.run_id, level="info", message="run resumed from checkpoint"),
@@ -705,6 +739,7 @@ def build_run_context_from_checkpoint(
         files_read=dict(checkpoint.files_read),
         plan=checkpoint.plan,
         last_seq=checkpoint.last_seq,
+        catalog_digest=checkpoint.catalog_digest,
     )
     # 恢复后的运行从模型轮次继续。
     ctx.status = RunStatus.RUNNING_MODEL

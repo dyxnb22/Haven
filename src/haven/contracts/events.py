@@ -45,6 +45,8 @@ class RunCreated(StrictModel):
     sandbox_backend: str = ""
     #: 如果这是会话后续轮次（Phase 2），则表示它所延续的运行。
     parent_run_id: str = ""
+    #: 本次运行冻结的能力快照摘要（ADR 规划书 P2）。
+    catalog_digest: str = ""
 
 
 class StepStarted(StrictModel):

@@ -11,6 +11,12 @@
 """
 
 from haven.contracts.base import StrictModel
+from haven.contracts.capability import (
+    CapabilitySnapshot,
+    CapabilitySpec,
+    build_capability_snapshot,
+    builtin_capabilities,
+)
 from haven.contracts.checkpoint import (
     CHECKPOINT_SCHEMA_VERSION,
     BudgetSnapshot,
@@ -92,6 +98,8 @@ __all__ = [
     "ApprovalRequested",
     "AssistantDelta",
     "BudgetSnapshot",
+    "CapabilitySnapshot",
+    "CapabilitySpec",
     "CheckpointV1",
     "ContextBuilt",
     "ContextSegment",
@@ -139,5 +147,7 @@ __all__ = [
     "Usage",
     "UsageReport",
     "UsageSnapshot",
+    "build_capability_snapshot",
+    "builtin_capabilities",
     "tool_schemas",
 ]

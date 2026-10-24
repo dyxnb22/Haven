@@ -80,6 +80,7 @@ class CheckpointManager:
             files_read=dict(ctx.files_read),
             plan=ctx.plan,
             original_artifacts=original_artifacts,
+            catalog_digest=ctx.catalog_digest,
         )
         await self._store.save_checkpoint(checkpoint)
 

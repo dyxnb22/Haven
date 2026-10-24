@@ -34,6 +34,7 @@ from haven.application.run_telemetry import RunTelemetry
 from haven.application.skills import Skill, SkillCatalog
 from haven.application.state import RunContext
 from haven.application.tool_pipeline import ToolPipeline
+from haven.contracts.capability import CapabilitySnapshot, build_capability_snapshot
 from haven.contracts.events import (
     ContextBuilt,
     ModelCompleted,
@@ -47,9 +48,8 @@ from haven.contracts.model import (
     ModelRequest,
     ModelResult,
     ToolCallProposal,
-    ToolSchema,
 )
-from haven.contracts.tools import RecipeSpec, tool_schemas
+from haven.contracts.tools import RecipeSpec
 from haven.domain.budget import check_accumulated_budget, check_budget
 from haven.domain.enums import (
     ApprovalMode,
@@ -164,21 +164,15 @@ class RunActor:
             checkpoint=self.checkpoint,
         )
 
-        mcp_schemas = (
-            tuple(
-                ToolSchema(
-                    name=t.namespaced_name,
-                    description=t.description,
-                    parameters=t.parameters,
-                )
-                for t in self._mcp_manager.tools
-            )
-            if self._mcp_manager
-            else ()
-        )
+        mcp_tools = self._mcp_manager.tools if self._mcp_manager else ()
+        self._snapshot = build_capability_snapshot(mcp_tools)
+        if not self._ctx.catalog_digest:
+            self._ctx.catalog_digest = self._snapshot.catalog_digest
+        self._ctx.capabilities = self._snapshot
+
         self._builder = ContextBuilder(
             goal=ctx.goal,
-            tools=(*tool_schemas(), *mcp_schemas),
+            tools=self._snapshot.to_tool_schemas(),
             budget=ctx.budget,
             recipe_ids=tuple(self._recipes),
             project_guidance=self._project_guidance,
@@ -198,6 +192,16 @@ class RunActor:
     def ctx(self) -> RunContext:
         """本次执行绑定的 RunContext。"""
         return self._ctx
+
+    @property
+    def capabilities(self) -> CapabilitySnapshot:
+        """本次执行冻结的能力快照。"""
+        return self._snapshot
+
+    @property
+    def catalog_digest(self) -> str:
+        """本次执行冻结的能力快照摘要。"""
+        return self._snapshot.catalog_digest
 
     @property
     def run_id(self) -> str:

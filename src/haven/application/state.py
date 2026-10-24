@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from haven.contracts.capability import CapabilitySnapshot
 from haven.contracts.model import ModelMessage
 from haven.contracts.tools import PlanStep
 from haven.domain.budget import Budget, BudgetUsage
@@ -56,6 +57,9 @@ class RunContext:
     nudges: int = 0
     #: 最后写入事件的序号，用于恢复时继续单调递增的事件流。
     last_seq: int = 0
+    #: 本次运行冻结的能力快照与摘要（ADR 规划书 P2）。
+    catalog_digest: str = ""
+    capabilities: CapabilitySnapshot | None = None
     #: 以下两项仅用于当前进程的单调时钟，不写入检查点；恢复时会从 usage 中
     #: 已保存的累计墙钟重新起算。
     _timing_started_at: float | None = field(default=None, repr=False)
