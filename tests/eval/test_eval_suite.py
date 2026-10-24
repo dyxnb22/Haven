@@ -39,7 +39,9 @@ def test_quality_is_reported_apart_from_safety(report) -> None:  # type: ignore[
     """任务成功和安全保证分别作为主要指标报告，绝不平均为一个数字。"""
     assert report.quality_total > 0
     assert report.quality_passed == report.quality_total  # 离线脚本全部通过
+    assert report.quality_pass_rate == 1.0
     assert "quality" in report.summary_line()
+    assert frozenset({"security", "injection", "recovery"}) == report.SAFETY_CATEGORIES
 
 
 def test_covers_required_categories(report) -> None:  # type: ignore[no-untyped-def]

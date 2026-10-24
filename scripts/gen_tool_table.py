@@ -146,7 +146,7 @@ def _decide(tool: str, mode: PermissionMode) -> str:
         touches_protected_path=False,
         recipe_registered=True,
         sandbox_available=True,
-        exec_class=ExecClass.OTHER.value,
+        exec_class=ExecClass.OTHER,
     )
     return str(evaluate_policy(mode, facts).decision.value)
 

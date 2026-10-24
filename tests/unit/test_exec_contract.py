@@ -32,6 +32,14 @@ class TestRegistration:
         schema = next(s for s in tool_schemas() if s.name == "repo.exec")
         assert "repo.check" in schema.description
 
+    def test_tool_schemas_filters_by_allowed_tools(self) -> None:
+        filtered = tool_schemas(allowed_tools=("repo.list", "repo.read"))
+        assert {s.name for s in filtered} == {"repo.list", "repo.read"}
+
+    def test_tool_schemas_prunes_property_titles(self) -> None:
+        schema = next(s for s in tool_schemas() if s.name == "repo.list")
+        assert "title" not in schema.parameters.get("properties", {}).get("path", {})
+
 
 class TestValidation:
     def test_argv_is_required_and_non_empty(self) -> None:

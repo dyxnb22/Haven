@@ -37,8 +37,6 @@ DEFAULT_API_KEY_ENV = "HAVEN_API_KEY"
 class ConfigError(Exception):
     """用户配置无效或无法读取时的错误。"""
 
-    pass
-
 
 @dataclass(frozen=True, slots=True)
 class ProviderConfig:

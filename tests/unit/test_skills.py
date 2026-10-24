@@ -258,7 +258,7 @@ class TestSelection:
         )
         with pytest.raises(SkillSelectionError, match=f"at most {MAX_SELECTED_SKILLS}"):
             resolve_selected_skills(
-                catalog, [f"s{index}" for index in range(MAX_SELECTED_SKILLS + 2)]
+                catalog.skills, [f"s{index}" for index in range(MAX_SELECTED_SKILLS + 2)]
             )
 
     def test_repeated_names_are_deduplicated(self) -> None:

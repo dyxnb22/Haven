@@ -38,10 +38,34 @@ class MCPClient:
         self._request_id = 0
         self._tools: dict[str, MCPToolSchema] = {}
         self._drifted_tools: set[str] = set()
+        self._stderr_task: asyncio.Task[None] | None = None
+        self._stderr_lines: list[str] = []
 
     @property
     def is_running(self) -> bool:
         return self._process is not None and self._process.returncode is None
+
+    @property
+    def last_stderr(self) -> str:
+        """返回最近保留的 stderr 诊断行。"""
+        return "\n".join(self._stderr_lines)
+
+    async def _drain_stderr(self) -> None:
+        """异步消费并排空 stderr 管道，防止管道缓冲区写满导致进程死锁挂起。"""
+        if self._process is None or self._process.stderr is None:
+            return
+        while True:
+            try:
+                line = await self._process.stderr.readline()
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="replace").strip()
+                if text:
+                    self._stderr_lines.append(text)
+                    if len(self._stderr_lines) > 50:
+                        self._stderr_lines.pop(0)
+            except (asyncio.CancelledError, OSError):
+                break
 
     async def start(self) -> None:
         """启动外部进程并完成标准 MCP 握手协议 (initialize -> initialized)。"""
@@ -56,6 +80,9 @@ class MCPClient:
             stderr=asyncio.subprocess.PIPE,
             env=env,
         )
+
+        if self._process.stderr is not None:
+            self._stderr_task = asyncio.create_task(self._drain_stderr())
 
         # 1. 发送 initialize 请求
         init_res = await self._send_request(
@@ -208,7 +235,13 @@ class MCPClient:
         await self._process.stdin.drain()
 
     async def close(self) -> None:
-        """优雅关闭子进程。"""
+        """优雅关闭子进程并取消 stderr 监控任务。"""
+        if self._stderr_task is not None:
+            self._stderr_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._stderr_task
+            self._stderr_task = None
+
         if self._process is None or not self.is_running:
             return
         with contextlib.suppress(ProcessLookupError, OSError):

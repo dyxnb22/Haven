@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from haven.adapters.providers.scripted import ScriptedModel
@@ -79,6 +81,15 @@ async def test_from_json_fixture() -> None:
     assert len(events) == 3
     assert isinstance(events[1], ToolCallReady)
     assert events[1].call.tool_name == "repo.read"
+
+
+async def test_from_file_fixture(tmp_path: Path) -> None:
+    path = tmp_path / "scripted.json"
+    path.write_text('{"turns": [[{"kind": "finished", "finish_reason": "stop"}]]}')
+    model = ScriptedModel.from_file(path)
+    events = await collect(model)
+    assert len(events) == 1
+    assert isinstance(events[0], StreamFinished)
 
 
 async def test_records_requests_for_assertions() -> None:

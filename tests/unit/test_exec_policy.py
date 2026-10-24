@@ -1,6 +1,6 @@
 """命令分类：决定审批摩擦，而不是能力。"""
 
-from haven.domain.exec_policy import ExecClass, classify_argv
+from haven.domain.exec_policy import ExecClass, classify_argv, split_pipeline
 
 
 class TestSafeRead:
@@ -132,3 +132,49 @@ class TestFallback:
 
     def test_empty_argv_is_other(self) -> None:
         assert classify_argv(()) is ExecClass.OTHER
+
+
+class TestPipeline:
+    def test_split_pipeline_valid(self) -> None:
+        assert split_pipeline(("git", "log", "|", "head", "-n", "2")) == (
+            ("git", "log"),
+            ("head", "-n", "2"),
+        )
+        assert split_pipeline(("cat", "a", "|", "grep", "b", "|", "wc", "-l")) == (
+            ("cat", "a"),
+            ("grep", "b"),
+            ("wc", "-l"),
+        )
+
+    def test_split_pipeline_rejects_forbidden_operators(self) -> None:
+        assert split_pipeline(("cat", "a", ">", "out")) is None
+        assert split_pipeline(("cat", "a", ">>", "out")) is None
+        assert split_pipeline(("cat", "a", "<", "in")) is None
+        assert split_pipeline(("cat", "a", ";", "rm", "b")) is None
+        assert split_pipeline(("cat", "a", "&&", "rm", "b")) is None
+        assert split_pipeline(("cat", "a", "||", "rm", "b")) is None
+
+    def test_split_pipeline_rejects_malformed_pipes(self) -> None:
+        assert split_pipeline(("|", "ls")) is None
+        assert split_pipeline(("ls", "|")) is None
+        assert split_pipeline(("ls", "|", "|", "head")) is None
+
+    def test_safe_read_pipeline(self) -> None:
+        safe_pipelines = (
+            ("git", "log", "-n", "5", "|", "head", "-n", "2"),
+            ("ls", "-la", "|", "grep", "py", "|", "wc", "-l"),
+            ("cat", "file.txt", "|", "sort", "|", "uniq"),
+            ("tail", "-n", "10", "log.txt", "|", "cut", "-d", " ", "-f", "1"),
+        )
+        for pipe in safe_pipelines:
+            assert classify_argv(pipe) is ExecClass.SAFE_READ, pipe
+
+    def test_pipeline_with_outside_operands_is_other(self) -> None:
+        assert classify_argv(("ls", "|", "cat", "/etc/passwd")) is ExecClass.OTHER
+        assert classify_argv(("git", "log", "|", "grep", "../secret")) is ExecClass.OTHER
+
+    def test_pipeline_with_shell_passthrough_is_passthrough(self) -> None:
+        assert classify_argv(("ls", "|", "bash", "-c", "echo 1")) is ExecClass.SHELL_PASSTHROUGH
+
+    def test_pipeline_with_writing_command_is_other(self) -> None:
+        assert classify_argv(("git", "log", "|", "git", "push")) is ExecClass.OTHER

@@ -206,7 +206,7 @@ class ProcessToolExecutor:
             )
         )
         try:
-            outcome = await self._executor.run_recipe(recipe, self._workspace.root)
+            outcome = await self._executor.run_recipe(recipe, self._workspace.root, args.args)
             after = await self.capture_snapshot()
             tampered = await self.record_process_writes(ctx, call.tool_name, before, after)
         except BaseException:
@@ -225,13 +225,14 @@ class ProcessToolExecutor:
                     f"{', '.join(tampered)}; the check does not count as verification",
                 )
             )
+        target = f"{recipe.id} {' '.join(args.args)}" if args.args else recipe.id
         envelope = await self._emitter.emit(
             ctx.run_id,
             EvidenceRecorded(
                 run_id=ctx.run_id,
                 evidence_kind="check",
                 summary=(
-                    f"{recipe.id}: exit={outcome.exit_code} in {outcome.duration_ms}ms"
+                    f"{target}: exit={outcome.exit_code} in {outcome.duration_ms}ms"
                     + (" (timed out)" if outcome.timed_out else "")
                 ),
             ),
@@ -260,6 +261,8 @@ class ProcessToolExecutor:
             "stdout_tail": clip(outcome.stdout_tail, 4000),
             "stderr_tail": clip(outcome.stderr_tail, 2000),
         }
+        if args.args:
+            check_payload["args"] = list(args.args)
         if outcome.exit_code != 0:
             check_diags = extract_diagnostics(
                 recipe.id, outcome.stdout_tail, outcome.stderr_tail, outcome.exit_code

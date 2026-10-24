@@ -35,7 +35,7 @@ class TestEphemeralReproducerTDD:
             [tool("c3", "repo.diff"), finish("tool_calls")],
             [text("I fixed the bug."), finish()],
         ]
-        # 初始化时不挂载任何已注册配方 (recipes={})
+        # 初始化时不挂载任何已注册配方（传入空字典 recipes）
         h = Harness(repo, turns, recipes={})
         outcome = await h.service.run("Fix the addition bug")
 

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
 from haven.application.approval_cards import ApprovalCardRenderer
-from haven.contracts.tools import RecipeProposeArgs
+from haven.contracts.tools import RecipeProposeArgs, RecipeSpec, RepoCheckArgs
 from haven.domain.enums import PermissionMode, PolicyDecision, RiskLevel
 from haven.domain.policy import ToolFacts, evaluate_policy
 
@@ -82,3 +84,107 @@ class TestApprovalCardRendering:
         assert "reproduce.py" in preview
         assert "45.0s" in preview
         assert "asserts bug reproduction" in preview
+
+    def test_repo_check_card_renders_extra_args(self) -> None:
+        recipe = RecipeSpec(id="test", argv=("pytest", "-q"))
+        renderer = ApprovalCardRenderer(
+            recipes={"test": recipe}, sandbox_description=lambda: "sandboxed"
+        )
+        args = RepoCheckArgs(recipe_id="test", args=("tests/test_foo.py",))
+        summary, preview = renderer.render("repo.check", args, None)
+        assert "tests/test_foo.py" in summary
+        assert "pytest -q tests/test_foo.py" in preview
+
+
+class TestRepoCheckArgs:
+    def test_repo_check_args_valid(self) -> None:
+        args = RepoCheckArgs(recipe_id="test", args=("tests/test_foo.py", "-k", "bar"))
+        assert args.recipe_id == "test"
+        assert args.args == ("tests/test_foo.py", "-k", "bar")
+
+    def test_repo_check_args_empty_item_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            RepoCheckArgs(recipe_id="test", args=("",))
+
+    def test_repo_check_args_too_long_item_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            RepoCheckArgs(recipe_id="test", args=("a" * 1025,))
+
+
+class TestRepoCheckFacts:
+    async def test_repo_check_facts_safe_args(self, tmp_path: Path) -> None:
+        from haven.adapters.workspace_fs import FsWorkspace
+        from haven.application.state import RunContext
+        from haven.application.tool_facts import ToolFactsCollector
+        from haven.contracts.model import ToolCallProposal
+        from haven.domain.budget import Budget
+        from haven.domain.ids import RunId
+
+        fs = FsWorkspace(tmp_path)
+        collector = ToolFactsCollector(
+            workspace=fs,
+            recipes={"test": RecipeSpec(id="test", argv=("pytest",))},
+            launcher=None,
+        )
+        ctx = RunContext(
+            run_id=RunId("run-1"),
+            goal="test",
+            mode=PermissionMode.INTERACTIVE,
+            budget=Budget(),
+        )
+        proposal = ToolCallProposal(call_id="c1", tool_name="repo.check", arguments_json="{}")
+        args = RepoCheckArgs(recipe_id="test", args=("tests/test_foo.py", "-k", "bar"))
+        facts, _ = await collector.collect(ctx, proposal, args)
+        assert facts.within_workspace is True
+        assert facts.touches_protected_path is False
+        assert facts.recipe_registered is True
+
+    async def test_repo_check_facts_traversal_denied(self, tmp_path: Path) -> None:
+        from haven.adapters.workspace_fs import FsWorkspace
+        from haven.application.state import RunContext
+        from haven.application.tool_facts import ToolFactsCollector
+        from haven.contracts.model import ToolCallProposal
+        from haven.domain.budget import Budget
+        from haven.domain.ids import RunId
+
+        fs = FsWorkspace(tmp_path)
+        collector = ToolFactsCollector(
+            workspace=fs,
+            recipes={"test": RecipeSpec(id="test", argv=("pytest",))},
+            launcher=None,
+        )
+        ctx = RunContext(
+            run_id=RunId("run-1"),
+            goal="test",
+            mode=PermissionMode.INTERACTIVE,
+            budget=Budget(),
+        )
+        proposal = ToolCallProposal(call_id="c1", tool_name="repo.check", arguments_json="{}")
+        args = RepoCheckArgs(recipe_id="test", args=("../outside.py",))
+        facts, _ = await collector.collect(ctx, proposal, args)
+        assert facts.within_workspace is False
+
+    async def test_repo_check_facts_protected_path_denied(self, tmp_path: Path) -> None:
+        from haven.adapters.workspace_fs import FsWorkspace
+        from haven.application.state import RunContext
+        from haven.application.tool_facts import ToolFactsCollector
+        from haven.contracts.model import ToolCallProposal
+        from haven.domain.budget import Budget
+        from haven.domain.ids import RunId
+
+        fs = FsWorkspace(tmp_path)
+        collector = ToolFactsCollector(
+            workspace=fs,
+            recipes={"test": RecipeSpec(id="test", argv=("pytest",))},
+            launcher=None,
+        )
+        ctx = RunContext(
+            run_id=RunId("run-1"),
+            goal="test",
+            mode=PermissionMode.INTERACTIVE,
+            budget=Budget(),
+        )
+        proposal = ToolCallProposal(call_id="c1", tool_name="repo.check", arguments_json="{}")
+        args = RepoCheckArgs(recipe_id="test", args=(".git/config",))
+        facts, _ = await collector.collect(ctx, proposal, args)
+        assert facts.touches_protected_path is True

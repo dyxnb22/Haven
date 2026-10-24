@@ -9,6 +9,7 @@ from haven.contracts.tools import PlanStep
 from haven.domain.budget import Budget
 from haven.domain.enums import PermissionMode
 from haven.domain.evidence import EditEvidence
+from haven.domain.ids import RunId
 from haven.ports.model import ModelPort
 
 
@@ -31,7 +32,7 @@ class TestModelRouter:
         router = ModelRouter(fast_model=fast, deep_model=deep)
 
         ctx = RunContext(
-            run_id="run-1",
+            run_id=RunId("run-1"),
             goal="Search and read files",
             mode=PermissionMode.INTERACTIVE,
             budget=Budget(),
@@ -46,7 +47,7 @@ class TestModelRouter:
         router = ModelRouter(fast_model=fast, deep_model=deep)
 
         ctx = RunContext(
-            run_id="run-2",
+            run_id=RunId("run-2"),
             goal="Refactor calculator",
             mode=PermissionMode.INTERACTIVE,
             budget=Budget(),
@@ -72,7 +73,7 @@ class TestModelRouter:
         router = ModelRouter(fast_model=fast, deep_model=deep)
 
         ctx = RunContext(
-            run_id="run-plan",
+            run_id=RunId("run-plan"),
             goal="Implement feature",
             mode=PermissionMode.INTERACTIVE,
             budget=Budget(),
@@ -95,7 +96,7 @@ class TestModelRouter:
         router = ModelRouter(fast_model=fast, deep_model=deep, always_deep=True)
 
         ctx = RunContext(
-            run_id="run-3",
+            run_id=RunId("run-3"),
             goal="Search files",
             mode=PermissionMode.INTERACTIVE,
             budget=Budget(),
@@ -109,7 +110,7 @@ class TestModelRouter:
         router = ModelRouter(fast_model=fast, deep_model=deep)
 
         ctx = RunContext(
-            run_id="run-4",
+            run_id=RunId("run-4"),
             goal="Read code",
             mode=PermissionMode.INTERACTIVE,
             budget=Budget(),

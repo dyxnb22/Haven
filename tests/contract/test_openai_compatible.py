@@ -105,7 +105,7 @@ async def test_cached_input_tokens_parsed_from_either_wire_shape(usage_payload: 
     assert usage.usage.cached_input_tokens == 80
 
 
-async def test_no_cache_field_means_zero(events_body: bytes | None = None) -> None:
+async def test_no_cache_field_means_zero() -> None:
     body = (
         chunk({"content": "hi"})
         + chunk({}, finish="stop")

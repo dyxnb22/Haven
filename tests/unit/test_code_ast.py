@@ -64,6 +64,11 @@ def get_user(id: int) -> User | None:
     assert fn["returns"] == "User | None"
     assert "id: int" in fn["args"][0]
 
+    # .pyi 存根文件同样使用 Python AST 解析
+    outline_pyi = outline_source("def stub() -> int: ...", "stub.pyi")
+    assert outline_pyi["language"] == "python"
+    assert outline_pyi["functions"][0]["name"] == "stub"
+
 
 def test_outline_markdown_extracts_headers() -> None:
     md = """# Title
@@ -205,3 +210,34 @@ func HandleRequest() {}
     assert ("struct", "ServerConfig") in go_kinds
     assert ("function", "Start") in go_kinds
     assert ("function", "HandleRequest") in go_kinds
+    # 分组列表断言
+    assert any(c["name"] == "ServerConfig" for c in go_outline["classes"])
+    assert any(f["name"] == "Start" for f in go_outline["functions"])
+
+
+def test_outline_binary_file_handled_gracefully() -> None:
+    binary_content = "some text\x00with null bytes\x01\x02"
+    outline = outline_source(binary_content, "image.png")
+    assert outline["language"] == "binary"
+    assert "error" in outline
+    assert outline["symbols"] == []
+
+
+def test_find_symbol_occurrences_multilanguage(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "service.ts").write_text(
+        "export class AuthService {\n  login() {}\n}\nconst auth = new AuthService();\n",
+        encoding="utf-8",
+    )
+    (src / "server.go").write_text(
+        "package main\n\nfunc StartServer() {}\nfunc main() {\n  StartServer()\n}\n",
+        encoding="utf-8",
+    )
+    res_ts = find_symbol_occurrences(tmp_path, "AuthService")
+    assert res_ts["total_definitions"] >= 1
+    assert any(d["path"] == "src/service.ts" for d in res_ts["definitions"])
+
+    res_go = find_symbol_occurrences(tmp_path, "StartServer")
+    assert res_go["total_definitions"] >= 1
+    assert any(d["path"] == "src/server.go" for d in res_go["definitions"])

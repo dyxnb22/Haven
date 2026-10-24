@@ -1,10 +1,10 @@
 """repo.create：只创建新文件，保证原子性，并归因到本次运行的差异。"""
 
+import os
 from pathlib import Path
 
 import pytest
 
-from haven.adapters import workspace_editor
 from haven.adapters.workspace_fs import MAX_CREATE_BYTES, FsWorkspace
 from haven.domain.digest import sha256_text
 from haven.ports.workspace import WorkspaceError
@@ -102,13 +102,13 @@ class TestCreateSecurity:
         self, workspace: FsWorkspace, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         target = workspace.root / "raced.txt"
-        real_link = workspace_editor.os.link
+        real_link = os.link
 
         def racing_link(src: str, dest: str | Path) -> None:
             Path(dest).write_text("concurrent owner\n")
             real_link(src, dest)
 
-        monkeypatch.setattr(workspace_editor.os, "link", racing_link)
+        monkeypatch.setattr(os, "link", racing_link)
         with pytest.raises(WorkspaceError) as exc:
             await workspace.apply_create("raced.txt", "haven content\n")
         assert exc.value.code == "stale_preimage"

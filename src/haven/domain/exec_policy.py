@@ -36,6 +36,10 @@ _SAFE_PREFIXES: frozenset[tuple[str, ...]] = frozenset(
         ("head",),
         ("tail",),
         ("wc",),
+        ("sort",),
+        ("uniq",),
+        ("cut",),
+        ("tr",),
         ("rg",),
         ("grep",),
         ("git", "status"),
@@ -100,9 +104,44 @@ def _operands_escape_workspace(operands: tuple[str, ...]) -> bool:
     return any(_operand_escapes_workspace(item) for item in operands)
 
 
+def split_pipeline(argv: tuple[str, ...]) -> tuple[tuple[str, ...], ...] | None:
+    """如果 argv 包含顶层管道符号 '|'，将其拆分为子命令段元组。
+
+    若管道语法不合法（如首尾为空、连续管道、或含有禁止的重定向/控制符号），返回 None。
+    """
+    if "|" not in argv:
+        return None
+    forbidden = frozenset({">", ">>", "<", ";", "&&", "||", "&"})
+    segments: list[tuple[str, ...]] = []
+    current: list[str] = []
+    for item in argv:
+        if item in forbidden or item.startswith(("> ", ">> ", "< ")):
+            return None
+        if item == "|":
+            if not current:
+                return None
+            segments.append(tuple(current))
+            current = []
+        else:
+            current.append(item)
+    if not current:
+        return None
+    segments.append(tuple(current))
+    return tuple(segments)
+
+
 def classify_argv(argv: tuple[str, ...]) -> ExecClass:
     """对一条提议命令进行分类。这是纯函数，并且对所有输入都有定义。"""
     if not argv:
+        return ExecClass.OTHER
+
+    pipeline = split_pipeline(argv)
+    if pipeline is not None and len(pipeline) > 1:
+        classes = [classify_argv(seg) for seg in pipeline]
+        if any(c == ExecClass.SHELL_PASSTHROUGH for c in classes):
+            return ExecClass.SHELL_PASSTHROUGH
+        if all(c == ExecClass.SAFE_READ for c in classes):
+            return ExecClass.SAFE_READ
         return ExecClass.OTHER
 
     program = _program(argv[0])

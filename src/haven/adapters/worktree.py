@@ -152,7 +152,7 @@ async def cleanup_ephemeral_worktree(worktree: EphemeralWorktree) -> None:
         pass
 
     if worktree.worktree_path.exists():
-        shutil.rmtree(worktree.worktree_path, ignore_errors=True)
+        await asyncio.to_thread(shutil.rmtree, worktree.worktree_path, ignore_errors=True)
 
     try:
         proc_prune = await asyncio.create_subprocess_exec(

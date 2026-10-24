@@ -19,7 +19,6 @@ from haven.application.tool_execution_types import (
 from haven.application.tool_execution_types import (
     clip,
     error_result,
-    map_workspace_error,
     ok_result,
     summarize_payload,
 )
@@ -34,11 +33,6 @@ from haven.ports.executor import ExecutorPort
 from haven.ports.sandbox import SandboxLauncher
 from haven.ports.session import SessionStorePort
 from haven.ports.workspace import WorkspacePort
-
-# 兼容别名：历史上有调用方从本模块导入这些辅助函数。
-_clip = clip
-_error = error_result
-_map_ws_code = map_workspace_error
 
 
 class ToolExecutor:

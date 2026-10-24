@@ -78,8 +78,10 @@ class ExecOutcome:
 class ExecutorPort(Protocol):
     """执行已由策略批准的验证配方或沙箱命令。"""
 
-    async def run_recipe(self, recipe: RecipeSpec, workspace_root: Path) -> CheckOutcome:
-        """在配方声明的超时、网络和可读根目录限制下运行检查。"""
+    async def run_recipe(
+        self, recipe: RecipeSpec, workspace_root: Path, extra_args: tuple[str, ...] = ()
+    ) -> CheckOutcome:
+        """在配方声明的超时、网络和可读根目录限制下运行检查，支持附加过滤参数。"""
         ...
 
     async def run_exec(self, spec: ExecSpec) -> ExecOutcome:

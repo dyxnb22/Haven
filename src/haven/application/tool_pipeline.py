@@ -29,11 +29,15 @@ from haven.application.state import RunContext
 from haven.application.tool_execution import (
     ExecuteHandler,
     ToolExecutor,
-    _clip,
-    _error,
-    _map_ws_code,
 )
-from haven.application.tool_execution import ToolExecution as ToolExecution
+from haven.application.tool_execution import (
+    ToolExecution as ToolExecution,
+)
+from haven.application.tool_execution_types import (
+    clip,
+    error_result,
+    map_workspace_error,
+)
 from haven.application.tool_facts import FactsHandler, ToolFactsCollector
 from haven.contracts.events import (
     ExecutionStarted,
@@ -179,7 +183,7 @@ class ToolPipeline:
                 step=step,
                 call_id=call.call_id,
                 tool_name=call.tool_name,
-                args_summary=_clip(call.arguments_json, 200),
+                args_summary=clip(call.arguments_json, 200),
             ),
         )
 
@@ -191,13 +195,17 @@ class ToolPipeline:
                 if validated.code == "unknown_tool"
                 else ToolErrorCode.INVALID_ARGUMENTS
             )
-            return await self._finish(ctx, call, _error(call, code, validated.message), started)
+            return await self._finish(
+                ctx, call, error_result(call, code, validated.message), started
+            )
 
         # 3. 程序收集的工作区事实（绝不由模型控制）。
         try:
             facts, preview = await self._collect_facts(ctx, call, validated)
         except WorkspaceError as exc:
-            return await self._finish(ctx, call, _error(call, _map_ws_code(exc), str(exc)), started)
+            return await self._finish(
+                ctx, call, error_result(call, map_workspace_error(exc), str(exc)), started
+            )
 
         # 4. 确定性策略。
         outcome = evaluate_policy(self._mode, facts)
@@ -215,7 +223,9 @@ class ToolPipeline:
             return await self._finish(
                 ctx,
                 call,
-                _error(call, ToolErrorCode.DENIED, f"denied by policy: {outcome.reason_code}"),
+                error_result(
+                    call, ToolErrorCode.DENIED, f"denied by policy: {outcome.reason_code}"
+                ),
                 started,
             )
 
@@ -231,7 +241,7 @@ class ToolPipeline:
                 return await self._finish(
                     ctx,
                     call,
-                    _error(call, ToolErrorCode.APPROVAL_REJECTED, message),
+                    error_result(call, ToolErrorCode.APPROVAL_REJECTED, message),
                     started,
                 )
             # 在用户作出决定后重新验证 preimage（TOCTOU 防护）。所有在审批时
@@ -249,7 +259,7 @@ class ToolPipeline:
                     return await self._finish(
                         ctx,
                         call,
-                        _error(
+                        error_result(
                             call,
                             ToolErrorCode.STALE_PREIMAGE,
                             "file changed between approval and execution",
@@ -271,7 +281,7 @@ class ToolPipeline:
                     return await self._finish(
                         ctx,
                         call,
-                        _error(
+                        error_result(
                             call,
                             ToolErrorCode.STALE_PREIMAGE,
                             "file(s) changed between approval and execution: "
@@ -310,7 +320,9 @@ class ToolPipeline:
                 ctx, call, validated, ticket.ticket_digest, preview
             )
         except WorkspaceError as exc:
-            return await self._finish(ctx, call, _error(call, _map_ws_code(exc), str(exc)), started)
+            return await self._finish(
+                ctx, call, error_result(call, map_workspace_error(exc), str(exc)), started
+            )
         return await self._finish(ctx, call, execution.result, started, execution.effect_unknown)
 
     # -- 事实 -------------------------------------------------------------------

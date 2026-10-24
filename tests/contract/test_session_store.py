@@ -3,7 +3,6 @@
 import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -23,6 +22,7 @@ from haven.ports.session import ExecutionRecord, SessionStorePort
 
 @pytest.fixture(params=["sqlite", "memory"])
 async def store(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncIterator[SessionStorePort]:
+    s: SessionStorePort
     if request.param == "sqlite":
         s = await SqliteSessionStore.open(tmp_path / "haven.db", tmp_path / "artifacts")
     else:
@@ -243,7 +243,7 @@ async def test_artifact_roundtrip(store: SessionStorePort) -> None:
     assert await store.get_artifact(digest) == b"large diff content"
     assert await store.get_artifact("missing" * 8) is None
     if isinstance(store, SqliteSessionStore):
-        (store._artifacts_dir / digest).write_bytes(b"corrupt")  # type: ignore[attr-defined]  # noqa: SLF001
+        (store._artifacts_dir / digest).write_bytes(b"corrupt")  # noqa: SLF001
         with pytest.raises(StoreError, match="digest verification"):
             await store.get_artifact(digest)
         # put is self-healing for a corrupted content-addressed object.
@@ -324,7 +324,7 @@ class TestSqliteSpecific:
             await store.save_checkpoint(checkpoint(last_seq=seq))
         await store.save_checkpoint(checkpoint(run_id="other-run", last_seq=3))
 
-        cursor = await store._db.execute(  # type: ignore[attr-defined]  # noqa: SLF001
+        cursor = await store._db.execute(  # noqa: SLF001
             "SELECT run_id, seq FROM checkpoints ORDER BY run_id, seq"
         )
         rows = [(str(r["run_id"]), int(r["seq"])) for r in await cursor.fetchall()]
@@ -337,11 +337,11 @@ class TestSqliteSpecific:
         await store.create_run("run-1", "/tmp/ws", "d", "goal", "interactive")
         await store.append_event("run-1", StepStarted(run_id="run-1", step=1))
         # 篡改日志
-        await store._db.execute(  # type: ignore[attr-defined]  # noqa: SLF001
+        await store._db.execute(  # noqa: SLF001
             "UPDATE events SET payload_json = ? WHERE run_id = 'run-1'",
             ('{"kind": "step.started", "run_id": "run-1", "step": 99}',),
         )
-        await store._db.commit()  # type: ignore[attr-defined]  # noqa: SLF001
+        await store._db.commit()  # noqa: SLF001
         with pytest.raises(StoreError, match="digest"):
             await store.load_events("run-1")
         await store.close()
@@ -349,8 +349,8 @@ class TestSqliteSpecific:
     async def test_schema_version_mismatch_fails_closed(self, tmp_path: Path) -> None:
         db, art = tmp_path / "haven.db", tmp_path / "artifacts"
         store = await SqliteSessionStore.open(db, art)
-        await store._db.execute("UPDATE schema_meta SET version = 999")  # type: ignore[attr-defined]  # noqa: SLF001
-        await store._db.commit()  # type: ignore[attr-defined]  # noqa: SLF001
+        await store._db.execute("UPDATE schema_meta SET version = 999")  # noqa: SLF001
+        await store._db.commit()  # noqa: SLF001
         await store.close()
 
         with pytest.raises(StoreError, match="schema"):
@@ -399,12 +399,12 @@ class TestSqliteSpecific:
         store = await SqliteSessionStore.open(db_path, art)
         records = await store.load_executions("run-1")
         assert records[0].dest_path == ""
-        cursor = await store._db.execute("SELECT version FROM schema_meta")  # type: ignore[attr-defined]  # noqa: SLF001
+        cursor = await store._db.execute("SELECT version FROM schema_meta")  # noqa: SLF001
         row = await cursor.fetchone()
         assert row is not None and int(row["version"]) == DB_SCHEMA_VERSION
 
         # 验证索引迁移成功建立
-        idx_cursor = await store._db.execute(  # type: ignore[attr-defined]  # noqa: SLF001
+        idx_cursor = await store._db.execute(  # noqa: SLF001
             "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_runs_created_at'"
         )
         assert await idx_cursor.fetchone() is not None
@@ -412,5 +412,29 @@ class TestSqliteSpecific:
         await store.close()
 
 
-def _unused(*args: Any) -> None:  # pragma: no cover
-    pass
+async def test_sqlite_put_artifact_handles_exdev(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import errno
+    import os
+
+    store = await SqliteSessionStore.open(tmp_path / "haven.db", tmp_path / "artifacts")
+    data = b"hello cross-device"
+
+    called = []
+
+    def mock_replace(src: str | os.PathLike[str], dst: str | os.PathLike[str]) -> None:
+        called.append(True)
+        err = OSError()
+        err.errno = errno.EXDEV
+        raise err
+
+    monkeypatch.setattr(os, "replace", mock_replace)
+    try:
+        digest = await store.put_artifact(data)
+        assert len(digest) == 64
+        assert len(called) == 1
+        read_back = await store.get_artifact(digest)
+        assert read_back == data
+    finally:
+        await store.close()

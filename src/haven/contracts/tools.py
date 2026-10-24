@@ -221,8 +221,8 @@ class RepoExecArgs(StrictModel):
         min_length=1,
         max_length=64,
         description=(
-            '程序和参数必须分开传入，例如 ["pytest", "-q"]。这不是 shell 命令行：'
-            "不会解释管道、通配符或重定向。"
+            '程序和参数必须分开传入，例如 ["pytest", "-q"]。支持受控只读管道 "|"，'
+            '例如 ["git", "log", "|", "head", "-n", "5"]。不会解释通配符或重定向。'
         ),
     )
     cwd: str = Field(default=".", description="相对于工作区根目录的工作目录。")
@@ -269,6 +269,21 @@ class RepoCheckArgs(StrictModel):
     """运行已注册的验证配方（例如项目的测试命令）。"""
 
     recipe_id: str = Field(min_length=1, max_length=100, description="已注册的 recipe ID。")
+    args: tuple[str, ...] = Field(
+        default=(),
+        max_length=16,
+        description=(
+            "可选的追加命令行参数，用于限定测试路径或测试用例过滤"
+            "（例如 ['tests/test_foo.py', '-k', 'test_bar']）。"
+        ),
+    )
+
+    @field_validator("args")
+    @classmethod
+    def _bound_args(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not item or len(item) > 1024 for item in value):
+            raise ValueError("each arg item must be non-empty and at most 1024 characters")
+        return value
 
 
 class RecipeProposeArgs(StrictModel):
@@ -475,6 +490,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "repo.diff": "Show the accumulated diff of the changes made in this run.",
     "repo.check": (
         "Run a registered verification recipe (such as the project's tests). "
+        "Accepts optional extra arguments for test file/case filtering. "
         "Requires user approval. Only registered recipe ids are accepted."
     ),
     "recipe.propose": (
@@ -585,12 +601,27 @@ class RecipeSpec(StrictModel):
         return value
 
 
-def tool_schemas() -> tuple[ToolSchema, ...]:
-    """根据参数模型构建面向提供商的工具模式列表。"""
+def _clean_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """修剪 JSON Schema 中的冗余元数据（如属性级 title），节省模型 Prompt Token。"""
+    schema.pop("title", None)
+    if "properties" in schema and isinstance(schema["properties"], dict):
+        for prop in schema["properties"].values():
+            if isinstance(prop, dict):
+                prop.pop("title", None)
+    if "$defs" in schema and isinstance(schema["$defs"], dict):
+        for sub in schema["$defs"].values():
+            if isinstance(sub, dict):
+                _clean_schema(sub)
+    return schema
+
+
+def tool_schemas(allowed_tools: tuple[str, ...] | None = None) -> tuple[ToolSchema, ...]:
+    """根据参数模型构建面向提供商的工具模式列表。支持按工具名称列表过滤。"""
     schemas = []
     for name, model in ARGS_MODELS.items():
-        schema = model.model_json_schema()
-        schema.pop("title", None)
+        if allowed_tools is not None and name not in allowed_tools:
+            continue
+        schema = _clean_schema(model.model_json_schema())
         schemas.append(
             ToolSchema(
                 name=name,

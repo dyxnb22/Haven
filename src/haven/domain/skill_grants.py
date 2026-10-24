@@ -15,6 +15,10 @@ import os
 _DISABLED_VALUES = frozenset({"0", "false", "no"})
 
 
-def grants_enabled() -> bool:
-    """技能请求的常驻授权是否生效。"""
-    return os.environ.get("HAVEN_SKILL_GRANTS", "1").strip().lower() not in _DISABLED_VALUES
+def grants_enabled(env_value: str | None = None) -> bool:
+    """技能请求的常驻授权是否生效。
+
+    允许传入 ``env_value`` 保持领域逻辑的纯函数可测性；未显式传入时回退读取环境变量。
+    """
+    raw = os.environ.get("HAVEN_SKILL_GRANTS", "1") if env_value is None else env_value
+    return raw.strip().lower() not in _DISABLED_VALUES

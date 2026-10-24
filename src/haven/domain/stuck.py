@@ -41,6 +41,10 @@ class StuckLoopDetector:
     #: 与 _last_fingerprint 连续匹配的观测次数。
     _repeat_count: int = field(default=0, repr=False)
 
+    def __post_init__(self) -> None:
+        if self.threshold < 1:
+            raise ValueError("stuck loop threshold must be at least 1")
+
     def observe(self, fingerprint: str) -> bool:
         """记录一次观测；循环卡死时返回 True。"""
         if fingerprint == self._last_fingerprint:

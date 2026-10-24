@@ -69,7 +69,7 @@ def _normalize_line(line: str) -> str:
     return line.rstrip(" \t\r\n")
 
 
-def _find_normalized_occurrence(text: str, old: str) -> tuple[int, int] | None | str:
+def _find_normalized_occurrence(text: str, old: str) -> tuple[int, int] | str | None:
     """尝试忽略行尾空白与换行符差异的安全容错匹配。
 
     若找到唯一匹配区间，返回 (start_char_idx, end_char_idx)；

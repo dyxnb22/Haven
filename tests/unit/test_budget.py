@@ -101,3 +101,17 @@ def test_project_budget_can_only_tighten() -> None:
     merged = user.tightened(project)
     assert merged.max_steps == 12  # 项目配置不能提高上限
     assert merged.max_cost_usd == 0.5  # 项目配置可以降低上限
+
+
+def test_token_charge_rejects_negative_or_nan() -> None:
+    usage = BudgetUsage()
+    with pytest.raises(ValueError, match="non-negative and finite"):
+        usage.charge_tokens(-1, 10, 0.01, estimated=False)
+    with pytest.raises(ValueError, match="non-negative and finite"):
+        usage.charge_tokens(10, -1, 0.01, estimated=False)
+    with pytest.raises(ValueError, match="non-negative and finite"):
+        usage.charge_tokens(10, 10, -0.01, estimated=False)
+    with pytest.raises(ValueError, match="non-negative and finite"):
+        usage.charge_tokens(10, 10, 0.01, estimated=False, cached_input_tokens=-5)
+    with pytest.raises(ValueError, match="non-negative and finite"):
+        usage.charge_tokens(10, 10, float("nan"), estimated=False)

@@ -10,7 +10,6 @@ from __future__ import annotations
 import ast
 import os
 import re
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -64,20 +63,6 @@ SCANNED_EXTENSIONS = frozenset(
 )
 #: 符号合法标识符规则。
 _IDENTIFIER_PATTERN = re.compile(r"\A[a-zA-Z_][a-zA-Z0-9_]*\Z")
-
-
-@dataclass(frozen=True, slots=True)
-class SymbolOccurrence:
-    """一个符号命中项。"""
-
-    #: 相对文件路径。
-    path: str
-    #: 1-based 行号。
-    line: int
-    #: 命中类型："definition" 或 "reference"。
-    kind: str
-    #: 去除头尾空白后的预览行文本。
-    preview: str
 
 
 def _format_arg(arg: ast.arg) -> str:
@@ -216,6 +201,18 @@ def _outline_markdown(code: str, filename: str) -> dict[str, Any]:
 
 def _outline_fallback(code: str, filename: str) -> dict[str, Any]:
     """针对通用源码文件（TS/JS、Rust、Go、Java、C/C++ 等）的结构化大纲提取。"""
+    if "\x00" in code:
+        return {
+            "file": filename,
+            "language": "binary",
+            "error": "binary file cannot be parsed into code outline",
+            "symbols": [],
+            "classes": [],
+            "functions": [],
+            "interfaces": [],
+            "types": [],
+        }
+
     patterns: list[tuple[str, re.Pattern[str]]] = [
         # TypeScript / JavaScript / Java / C# 类与接口
         (
@@ -236,7 +233,7 @@ def _outline_fallback(code: str, filename: str) -> dict[str, Any]:
             "enum",
             re.compile(r"^\s*(?:export\s+)?(?:const\s+)?enum\s+([A-Za-z0-9_]+)"),
         ),
-        # 函数与箭头函数 / 组件
+        # 函数与箭头函数 / 组件 / 类方法
         (
             "function",
             re.compile(r"^\s*(?:async\s+)?(?:export\s+)?(?:default\s+)?function\s+([A-Za-z0-9_]+)"),
@@ -245,6 +242,13 @@ def _outline_fallback(code: str, filename: str) -> dict[str, Any]:
             "function",
             re.compile(
                 r"^\s*(?:export\s+)?const\s+([A-Za-z0-9_]+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z0-9_]+)\s*=>"
+            ),
+        ),
+        (
+            "function",
+            re.compile(
+                r"^\s*(?:public|private|protected|static|final|native|synchronized|abstract)\s+"
+                r"(?:[A-Za-z0-9_<>\[\],\s]+\s+)+([A-Za-z0-9_]+)\s*\("
             ),
         ),
         # Rust 语法
@@ -304,12 +308,16 @@ def _outline_fallback(code: str, filename: str) -> dict[str, Any]:
         "file": filename,
         "language": "generic",
         "symbols": items,
+        "classes": [s for s in items if s["kind"] in ("class", "struct")],
+        "functions": [s for s in items if s["kind"] in ("function", "def", "method")],
+        "interfaces": [s for s in items if s["kind"] in ("interface", "trait")],
+        "types": [s for s in items if s["kind"] in ("type", "enum")],
     }
 
 
 def outline_source(code: str, filename: str = "") -> dict[str, Any]:
     """解析给定代码并生成分层的大纲字典。"""
-    if filename.endswith(".py") or filename.endswith(".pyi"):
+    if filename.endswith((".py", ".pyi")):
         return _outline_python(code, filename)
     if filename.endswith(".md"):
         return _outline_markdown(code, filename)
@@ -343,8 +351,10 @@ def find_symbol_occurrences(
         rf"^\s*(?:export\s+)?(?:default\s+)?(?:public|private|protected\s+)?(?:abstract\s+)?"
         rf"(?:class|interface|type|fn|function|def|struct|enum|trait)\s+{re.escape(symbol_name)}\b|"
         rf"^\s*(?:const|let|var)\s+{re.escape(symbol_name)}\s*[:=]|"
-        rf"^\s*type\s+{re.escape(symbol_name)}\s+(?:struct|interface|\w+)|"
-        rf"^\s*func\s+(?:\([^)]+\)\s+)?{re.escape(symbol_name)}\s*\("
+        rf"^\s*type\s+{re.escape(symbol_name)}\b|"
+        rf"^\s*func\s+(?:\([^)]+\)\s+)?{re.escape(symbol_name)}\s*\(|"
+        rf"^\s*(?:async\s+)?{re.escape(symbol_name)}\s*\([^)]*\)\s*(?::\s*[^{{]+)?\s*\{{|"
+        rf"^\s*(?:pub(?:\([^)]+\))?\s+)?(?:async\s+)?fn\s+{re.escape(symbol_name)}\b"
     )
 
     definitions: list[dict[str, Any]] = []

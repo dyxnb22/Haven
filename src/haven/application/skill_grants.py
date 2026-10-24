@@ -25,7 +25,7 @@ from collections.abc import Sequence
 from typing import TypedDict
 
 from haven.application.skills import Skill
-from haven.domain.skill_grants import grants_enabled
+from haven.domain.skill_grants import grants_enabled as grants_enabled
 
 
 class GrantFields(TypedDict):

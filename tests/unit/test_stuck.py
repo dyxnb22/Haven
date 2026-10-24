@@ -1,5 +1,7 @@
 import inspect
 
+import pytest
+
 from haven.domain import StuckLoopDetector, call_fingerprint
 
 
@@ -43,3 +45,10 @@ def test_detection_requires_adjacency() -> None:
     a = call_fingerprint("repo.read", '{"path":"a"}', "A")
     b = call_fingerprint("repo.read", '{"path":"b"}', "B")
     assert [detector.observe(fp) for fp in (a, b, a, b, a, b)] == [False] * 6
+
+
+def test_invalid_threshold_raises() -> None:
+    with pytest.raises(ValueError, match="threshold must be at least 1"):
+        StuckLoopDetector(threshold=0)
+    with pytest.raises(ValueError, match="threshold must be at least 1"):
+        StuckLoopDetector(threshold=-1)

@@ -265,3 +265,19 @@ class TestPolicyCompleteness:
             is PolicyDecision.ALLOW
         ]
         assert allowed == ["safe_read"]
+
+    def test_tool_facts_exec_class_supports_enum_and_str(self) -> None:
+        from haven.domain.exec_policy import ExecClass
+
+        facts_enum = ToolFacts(
+            tool_name="repo.exec", exec_class=ExecClass.SAFE_READ, sandbox_available=True
+        )
+        facts_str = ToolFacts(tool_name="repo.exec", exec_class="safe_read", sandbox_available=True)
+        assert facts_enum.exec_class is ExecClass.SAFE_READ
+        assert facts_str.exec_class is ExecClass.SAFE_READ
+        assert (
+            evaluate_policy(PermissionMode.INTERACTIVE, facts_enum).decision is PolicyDecision.ALLOW
+        )
+        assert (
+            evaluate_policy(PermissionMode.INTERACTIVE, facts_str).decision is PolicyDecision.ALLOW
+        )

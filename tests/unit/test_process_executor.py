@@ -37,6 +37,14 @@ async def test_successful_command(tmp_path: Path) -> None:
     assert not outcome.timed_out
 
 
+async def test_run_recipe_with_extra_args(tmp_path: Path) -> None:
+    outcome = await ProcessExecutor().run_recipe(
+        recipe("import sys; print(sys.argv[1:])"), tmp_path, extra_args=("-k", "foo")
+    )
+    assert outcome.exit_code == 0
+    assert "['-k', 'foo']" in outcome.stdout_tail
+
+
 async def test_failing_command(tmp_path: Path) -> None:
     outcome = await ProcessExecutor().run_recipe(recipe("import sys; sys.exit(3)"), tmp_path)
     assert outcome.exit_code == 3
@@ -213,3 +221,54 @@ class TestRunExec:
             exec_spec(tmp_path, "import os; print(os.environ['TMPDIR'])")
         )
         assert "scratch" in outcome.stdout_tail
+
+    async def test_run_exec_pipeline(self, tmp_path: Path) -> None:
+        executor = ProcessExecutor()
+        code1 = "import sys; print('apple\\nbanana\\ncherry')"
+        code2 = (
+            "import sys; lines = [l.strip() for l in sys.stdin if 'an' in l];"
+            " print('\\n'.join(lines))"
+        )
+        spec = ExecSpec(
+            argv=(PY, "-c", code1, "|", PY, "-c", code2),
+            cwd=tmp_path,
+            timeout_seconds=10.0,
+            sandbox=SandboxSpec(
+                workspace_root=tmp_path, scratch_dir=tmp_path / "scratch", writable=True
+            ),
+        )
+        outcome = await executor.run_exec(spec)
+        assert outcome.exit_code == 0
+        assert outcome.stdout_tail.strip() == "banana"
+        assert outcome.timed_out is False
+
+    async def test_run_exec_pipeline_early_exit(self, tmp_path: Path) -> None:
+        executor = ProcessExecutor()
+        code1 = "import sys; [print(f'line {i}') for i in range(10000)]"
+        code2 = "import sys; [print(sys.stdin.readline().strip()) for _ in range(2)]"
+        spec = ExecSpec(
+            argv=(PY, "-c", code1, "|", PY, "-c", code2),
+            cwd=tmp_path,
+            timeout_seconds=10.0,
+            sandbox=SandboxSpec(
+                workspace_root=tmp_path, scratch_dir=tmp_path / "scratch", writable=True
+            ),
+        )
+        outcome = await executor.run_exec(spec)
+        assert outcome.exit_code == 0
+        assert "line 0" in outcome.stdout_tail
+        assert "line 1" in outcome.stdout_tail
+
+    async def test_run_exec_pipeline_missing_command_is_result(self, tmp_path: Path) -> None:
+        executor = ProcessExecutor()
+        spec = ExecSpec(
+            argv=(PY, "-c", "print('hi')", "|", "definitely-not-real-prog"),
+            cwd=tmp_path,
+            timeout_seconds=10.0,
+            sandbox=SandboxSpec(
+                workspace_root=tmp_path, scratch_dir=tmp_path / "scratch", writable=True
+            ),
+        )
+        outcome = await executor.run_exec(spec)
+        assert outcome.exit_code == 127
+        assert outcome.timed_out is False

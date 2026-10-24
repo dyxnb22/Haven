@@ -70,7 +70,7 @@ class ToolFacts:
     #: 检查配方是否已在最终配置中注册；None 表示事实尚未收集。
     recipe_registered: bool | None = None
     #: ``repo.exec`` 的确定性执行分类，例如 safe_read 或 shell_passthrough。
-    exec_class: str | None = None
+    exec_class: ExecClass | None = None
     #: 运行时是否有可用的操作系统沙箱；None 与 False 一样采取失败关闭。
     sandbox_available: bool | None = None
     #: 写入前目标内容的摘要，用于绑定审批与执行之间的 preimage。
@@ -81,6 +81,10 @@ class ToolFacts:
     mcp_server: str | None = None
     mcp_read_only: bool = False
     mcp_schema_drift: bool = False
+
+    def __post_init__(self) -> None:
+        if isinstance(self.exec_class, str):
+            object.__setattr__(self, "exec_class", ExecClass(self.exec_class))
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,9 +132,9 @@ def evaluate_policy(mode: PermissionMode, facts: ToolFacts) -> PolicyOutcome:
             return PolicyOutcome(PolicyDecision.DENY, "sandbox_unavailable", RiskLevel.HIGH)
         if mode is PermissionMode.READ_ONLY:
             return PolicyOutcome(PolicyDecision.DENY, "read_only_mode", RiskLevel.MEDIUM)
-        if facts.exec_class == ExecClass.SAFE_READ.value:
+        if facts.exec_class is ExecClass.SAFE_READ:
             return PolicyOutcome(PolicyDecision.ALLOW, "safe_read_exec", RiskLevel.LOW)
-        if facts.exec_class == ExecClass.SHELL_PASSTHROUGH.value:
+        if facts.exec_class is ExecClass.SHELL_PASSTHROUGH:
             return PolicyOutcome(
                 PolicyDecision.ASK, "shell_passthrough_requires_approval", RiskLevel.HIGH
             )

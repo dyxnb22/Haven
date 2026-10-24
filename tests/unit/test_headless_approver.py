@@ -3,13 +3,13 @@
 from haven.application.approvals import HeadlessApprover
 from haven.domain.approval import ApprovalRequest
 from haven.domain.enums import ApprovalDecision, RiskLevel
-from haven.domain.ids import ToolCallId
+from haven.domain.ids import ApprovalId, RunId, ToolCallId
 
 
 def request(tool_name: str) -> ApprovalRequest:
     return ApprovalRequest(
-        approval_id="a1",
-        run_id="r1",
+        approval_id=ApprovalId("a1"),
+        run_id=RunId("r1"),
         call_id=ToolCallId("c1"),
         tool_name=tool_name,
         summary="",

@@ -196,3 +196,14 @@ def test_reducer_is_pure() -> None:
     # 原始状态是冻结的，且未被修改
     assert original.tool_calls == 0
     assert original.timeline == ()
+
+
+def test_steer_queued_flows_to_timeline() -> None:
+    from haven.contracts.events import SteerQueued
+
+    state = reduce(
+        PresenterState(run_id="run-1"),
+        wrap(SteerQueued(run_id="run-1", text="please focus on the parser bug")),
+    )
+    assert state.timeline[-1].kind == "user"
+    assert "queued steering input: please focus on the parser bug" in state.timeline[-1].text

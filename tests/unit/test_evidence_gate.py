@@ -1,3 +1,5 @@
+import pytest
+
 from haven.domain import (
     CheckEvidence,
     DiffEvidence,
@@ -103,3 +105,33 @@ def test_full_evidence_passes() -> None:
     result = evaluate_evidence_gate(ledger)
     assert result.passed
     assert result.reason_code == "evidence_satisfied"
+
+
+def test_evidence_ledger_rejects_negative_or_decreasing_seq() -> None:
+    with pytest.raises(ValueError, match="non-negative"):
+        EvidenceLedger().with_edit(edit(-1))
+    with pytest.raises(ValueError, match="non-negative"):
+        EvidenceLedger().with_check(check(-1))
+    with pytest.raises(ValueError, match="non-negative"):
+        EvidenceLedger().with_diff(diff(-1))
+
+    ledger = EvidenceLedger().with_edit(edit(5)).with_check(check(5)).with_diff(diff(5))
+    with pytest.raises(ValueError, match="monotonically non-decreasing"):
+        ledger.with_edit(edit(4))
+    with pytest.raises(ValueError, match="monotonically non-decreasing"):
+        ledger.with_check(check(4))
+    with pytest.raises(ValueError, match="monotonically non-decreasing"):
+        ledger.with_diff(diff(4))
+
+
+def test_strip_thinking_tags() -> None:
+    from haven.application.answer_resolution import strip_thinking_tags
+
+    raw = "<think>Let me calculate 2+2.\nIt is 4.</think>The result is 4."
+    assert strip_thinking_tags(raw) == "The result is 4."
+
+    raw2 = "<thought>Internal monologue</thought>Summary:\n- done"
+    assert strip_thinking_tags(raw2) == "Summary:\n- done"
+
+    only_thought = "<thinking>only thinking</thinking>"
+    assert strip_thinking_tags(only_thought) == only_thought

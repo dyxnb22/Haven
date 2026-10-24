@@ -105,7 +105,8 @@ def collect_problems() -> list[str]:
         problems.append("README.md: missing CLI command-surface markers")
     else:
         click_app = get_command(app)
-        root_commands = set(click_app.commands)
+        commands = getattr(click_app, "commands", {})
+        root_commands = set(commands)
         documented = set(
             re.findall(r"^haven\s+([a-z][a-z-]*)(?:\s|$)", command_block, re.MULTILINE)
         )

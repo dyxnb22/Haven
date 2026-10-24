@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
@@ -17,6 +18,18 @@ from haven.ports.workspace import WorkspacePort
 MAX_EVIDENCE_NUDGES = 2
 MAX_OUTPUT_CONTINUATIONS = 2
 MAX_EMPTY_REPLIES = 2
+
+_THOUGHT_PATTERN = re.compile(
+    r"<(?:thought|think|thinking)>.*?</(?:thought|think|thinking)>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def strip_thinking_tags(text: str) -> str:
+    """过滤模型文本中非标准的思维链内联标签，避免思考过程污染最终答案。"""
+    cleaned = _THOUGHT_PATTERN.sub("", text).strip()
+    return cleaned if cleaned else text
+
 
 FinishRun = Callable[[RunContext, RunStatus, StopReason, str, str], Awaitable[RunOutcome]]
 SaveCheckpoint = Callable[[RunContext], Awaitable[None]]
@@ -101,7 +114,8 @@ class AnswerResolver:
                 )
             return True
 
-        if not result.text.strip() and not answer.parts:
+        clean_text = strip_thinking_tags(result.text)
+        if not clean_text.strip() and not answer.parts:
             answer.empty_replies += 1
             if answer.empty_replies > MAX_EMPTY_REPLIES:
                 await self._emitter.emit(
@@ -140,7 +154,8 @@ class AnswerResolver:
         self, ctx: RunContext, result: ModelResult, answer: AnswerAssembly
     ) -> RunOutcome | None:
         """拼接答案并执行证据门禁；未通过且可补证据时返回 ``None``。"""
-        answer.final_text = "".join((*answer.parts, result.text))
+        raw_final = "".join((*answer.parts, result.text))
+        answer.final_text = strip_thinking_tags(raw_final)
         answer.parts = []
         answer.continuations = 0
         answer.empty_replies = 0

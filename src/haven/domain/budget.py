@@ -159,6 +159,14 @@ class BudgetUsage:
         cached_input_tokens: int = 0,
     ) -> BudgetUsage:
         """累计 token、缓存命中量和费用，并传播估算标记。"""
+        if (
+            input_tokens < 0
+            or output_tokens < 0
+            or cached_input_tokens < 0
+            or cost_usd < 0
+            or not math.isfinite(cost_usd)
+        ):
+            raise ValueError("token increments and cost must be non-negative and finite")
         return replace(
             self,
             input_tokens=self.input_tokens + input_tokens,

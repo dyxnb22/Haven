@@ -26,6 +26,7 @@ from haven.contracts.events import (
     PolicyDecided,
     RunCreated,
     RunFinished,
+    SteerQueued,
     StepStarted,
     StreamRestarted,
     ToolCompleted,
@@ -324,6 +325,11 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
     if isinstance(event, Notice):
         return _push(
             state, TimelineEntry("notice", f"[{event.level}] {sanitize(event.message, 300)}")
+        )
+
+    if isinstance(event, SteerQueued):
+        return _push(
+            state, TimelineEntry("user", f"queued steering input: {sanitize(event.text, 160)}")
         )
 
     if isinstance(event, RunFinished):

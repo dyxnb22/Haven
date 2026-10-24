@@ -147,14 +147,16 @@ class ApprovalCardRenderer:
         if not isinstance(args, RepoCheckArgs):
             return "", ""
         recipe = self._recipes[args.recipe_id]
+        args_desc = f" with args {list(args.args)!r}" if args.args else ""
         summary = (
-            f"run check recipe {args.recipe_id!r} "
+            f"run check recipe {args.recipe_id!r}{args_desc} "
             "(approving also covers identical re-runs for the rest of this run)"
         )
         network = "allowed" if recipe.allow_network else "denied"
         roots = ", ".join(recipe.readable_roots) if recipe.readable_roots else "none"
+        full_argv = (*recipe.argv, *args.args)
         preview_lines = [
-            "$ " + shlex.join(recipe.argv),
+            "$ " + shlex.join(full_argv),
             "recipe permissions: workspace writable",
             f"network: {network}",
             f"additional readable roots: {roots}",

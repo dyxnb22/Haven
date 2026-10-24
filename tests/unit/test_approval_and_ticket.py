@@ -1,11 +1,17 @@
+import asyncio
+
+from haven.application.approvals import QueueApprovalBroker
 from haven.domain import (
     ApprovalDecision,
     ApprovalId,
     ApprovalRecord,
+    RiskLevel,
+    RunId,
     ToolCallId,
     compute_approval_digest,
     mint_ticket,
 )
+from haven.domain.approval import ApprovalRequest
 
 
 def make_digest(**overrides: str | None) -> str:
@@ -83,3 +89,32 @@ def test_ticket_digest_binds_all_fields() -> None:
         approval_id=None,
     )
     assert ticket_a.ticket_digest != ticket_b.ticket_digest
+
+
+async def test_queue_approval_broker_lifecycle() -> None:
+    broker = QueueApprovalBroker()
+    assert broker.pending_ids == ()
+    assert not broker.resolve("nonexistent", ApprovalDecision.APPROVED)
+
+    req = ApprovalRequest(
+        approval_id=ApprovalId("app-1"),
+        run_id=RunId("run-1"),
+        call_id=ToolCallId("c1"),
+        tool_name="repo.edit",
+        summary="fix bug",
+        risk=RiskLevel.MEDIUM,
+        request_digest="req-digest",
+        preview="diff text",
+    )
+    task = asyncio.create_task(broker.respond(req))
+    await asyncio.sleep(0.01)
+
+    assert "app-1" in broker.pending_ids
+    assert len(broker.pending_ids) == 1
+    assert not broker.resolve("other-id", ApprovalDecision.APPROVED)
+    assert broker.resolve("app-1", ApprovalDecision.APPROVED)
+    assert not broker.resolve("app-1", ApprovalDecision.APPROVED)
+
+    decision = await task
+    assert decision is ApprovalDecision.APPROVED
+    assert broker.pending_ids == ()

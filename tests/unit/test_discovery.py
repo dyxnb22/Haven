@@ -9,10 +9,10 @@ pytest 规则编码了针对五个真实仓库测得的经验（`docs/EVAL_LIVE.
 tests 目录作为结构回退，并为 src 布局修复 `pythonpath=src`。
 """
 
-from haven.domain.discovery import discover_recipes
+from haven.domain.discovery import RecipeCandidate, discover_recipes
 
 
-def pytest_argv(recipes: list) -> tuple[str, ...] | None:  # type: ignore[type-arg]
+def pytest_argv(recipes: list[RecipeCandidate]) -> tuple[str, ...] | None:
     for recipe in recipes:
         if recipe.id == "pytest":
             return recipe.argv

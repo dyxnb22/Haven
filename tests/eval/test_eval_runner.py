@@ -64,7 +64,7 @@ def test_one_crashing_case_does_not_discard_the_rest(tmp_path: Path) -> None:
     def factory() -> ScriptedModel:
         return ScriptedModel([[TextDelta(text="done"), StreamFinished()]])
 
-    runner_module.run_case = flaky_run_case  # type: ignore[assignment]
+    runner_module.run_case = flaky_run_case
     try:
         report = asyncio.run(
             run_suite(
@@ -76,7 +76,7 @@ def test_one_crashing_case_does_not_discard_the_rest(tmp_path: Path) -> None:
             )
         )
     finally:
-        runner_module.run_case = real_run_case  # type: ignore[assignment]
+        runner_module.run_case = real_run_case
 
     assert len(report.results) > 1, "the suite continued past the crash"
     crashed = report.results[0]

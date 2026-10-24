@@ -150,6 +150,7 @@ async def test_mcp_client_handshake_and_filtering() -> None:
 
     client = MCPClient(config)
     assert not client.is_running
+    assert client.last_stderr == ""
 
     try:
         await client.start()
@@ -512,3 +513,44 @@ async def test_run_service_mcp_wiring(tmp_path: Path) -> None:
     finally:
         await run_service.close()
         assert len(run_service._mcp_manager.tools) == 0
+
+
+@pytest.mark.asyncio
+async def test_mcp_client_drains_stderr_properly(tmp_path: Path) -> None:
+    import asyncio
+
+    script = (
+        "import sys, json\n"
+        "sys.stderr.write('debug warning log line 1\\n')\n"
+        "sys.stderr.flush()\n"
+        "for line in sys.stdin:\n"
+        "    req = json.loads(line.strip())\n"
+        "    if req.get('method') == 'initialize':\n"
+        "        payload = {\n"
+        "            'jsonrpc': '2.0',\n"
+        "            'id': req.get('id'),\n"
+        "            'result': {\n"
+        "                'protocolVersion': '2024-11-05',\n"
+        "                'capabilities': {},\n"
+        "                'serverInfo': {'name': 'test', 'version': '1'}\n"
+        "            }\n"
+        "        }\n"
+        "        sys.stdout.write(json.dumps(payload) + '\\n')\n"
+        "        sys.stdout.flush()\n"
+    )
+    srv_file = tmp_path / "stderr_srv.py"
+    srv_file.write_text(script)
+    cfg = MCPServerConfig(
+        name="stderr_srv",
+        command=sys.executable,
+        args=(str(srv_file),),
+        allowed_tools=(),
+    )
+    client = MCPClient(cfg)
+    try:
+        await client.start()
+        # 等待后台任务排空 stderr
+        await asyncio.sleep(0.1)
+        assert "debug warning log line 1" in client.last_stderr
+    finally:
+        await client.close()

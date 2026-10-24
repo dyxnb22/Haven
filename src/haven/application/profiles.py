@@ -117,7 +117,7 @@ _LEGACY_DEEPSEEK_ALIASES = ("deepseek-chat", "deepseek-reasoner")
 
 _PROFILES: dict[str, ModelProfile] = {
     DEEPSEEK_V4_FLASH.name: DEEPSEEK_V4_FLASH,
-    **{alias: DEEPSEEK_V4_FLASH for alias in _LEGACY_DEEPSEEK_ALIASES},
+    **dict.fromkeys(_LEGACY_DEEPSEEK_ALIASES, DEEPSEEK_V4_FLASH),
 }
 
 

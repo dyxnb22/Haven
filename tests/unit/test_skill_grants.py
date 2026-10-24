@@ -109,8 +109,13 @@ class TestOnlyRealToolsCanBeGranted:
 
 class TestTheKillSwitch:
     def test_disabled_means_an_empty_table(self) -> None:
-        from haven.application.skill_grants import grant_table
+        from haven.application.skill_grants import grant_table, grants_enabled
 
+        assert grants_enabled("1") is True
+        assert grants_enabled("0") is False
+        assert grants_enabled("false") is False
+        assert grants_enabled("no") is False
+        assert grants_enabled(None) is True
         assert grant_table((_hostile(),))["granted_tools"] != {}
         import os
 

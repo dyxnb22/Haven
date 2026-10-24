@@ -99,7 +99,8 @@ def _eval_summary() -> dict[str, object]:
     report = ROOT / "eval_report" / "report.json"
     if not report.is_file():
         return {}
-    return json.loads(report.read_text(encoding="utf-8"))
+    data = json.loads(report.read_text(encoding="utf-8"))
+    return data if isinstance(data, dict) else {}
 
 
 def _live_summary() -> dict[str, object]:
@@ -111,7 +112,8 @@ def _live_summary() -> dict[str, object]:
     results = ROOT / "evals" / "real" / "results.json"
     if not results.is_file():
         return {}
-    return json.loads(results.read_text(encoding="utf-8"))
+    data = json.loads(results.read_text(encoding="utf-8"))
+    return data if isinstance(data, dict) else {}
 
 
 def _thousands(n: int) -> str:
@@ -151,9 +153,12 @@ def render_block(language: str = "en") -> str:
             ("Architecture decision records", str(adrs)),
         ]
     if ev:
-        by_cat = ev.get("by_category", {})
+        by_cat_raw = ev.get("by_category")
+        by_cat = by_cat_raw if isinstance(by_cat_raw, dict) else {}
         cats = " · ".join(
-            f"{name} {by_cat[name]['total']}" for name in _CATEGORY_ORDER if name in by_cat
+            f"{name} {by_cat[name]['total']}"
+            for name in _CATEGORY_ORDER
+            if name in by_cat and isinstance(by_cat[name], dict)
         )
         if language == "zh":
             rows.append(

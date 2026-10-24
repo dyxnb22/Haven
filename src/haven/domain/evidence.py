@@ -70,14 +70,33 @@ class EvidenceLedger:
 
     def with_edit(self, edit: EditEvidence) -> EvidenceLedger:
         """追加一条文件编辑证据并返回新的不可变账本。"""
+        if edit.seq < 0:
+            raise ValueError(f"evidence seq must be non-negative: {edit.seq}")
+        if self.edits and edit.seq < self.edits[-1].seq:
+            raise ValueError(
+                f"edits seq must be monotonically non-decreasing: {edit.seq} < {self.edits[-1].seq}"
+            )
         return replace(self, edits=(*self.edits, edit))
 
     def with_check(self, check: CheckEvidence) -> EvidenceLedger:
         """追加一条检查证据并返回新的不可变账本。"""
+        if check.seq < 0:
+            raise ValueError(f"evidence seq must be non-negative: {check.seq}")
+        if self.checks and check.seq < self.checks[-1].seq:
+            raise ValueError(
+                f"checks seq must be monotonically non-decreasing: "
+                f"{check.seq} < {self.checks[-1].seq}"
+            )
         return replace(self, checks=(*self.checks, check))
 
     def with_diff(self, diff: DiffEvidence) -> EvidenceLedger:
         """追加一条差异证据并返回新的不可变账本。"""
+        if diff.seq < 0:
+            raise ValueError(f"evidence seq must be non-negative: {diff.seq}")
+        if self.diffs and diff.seq < self.diffs[-1].seq:
+            raise ValueError(
+                f"diffs seq must be monotonically non-decreasing: {diff.seq} < {self.diffs[-1].seq}"
+            )
         return replace(self, diffs=(*self.diffs, diff))
 
     @property

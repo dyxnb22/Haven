@@ -7,7 +7,9 @@ Schema 迁移采用失败即拒绝策略：遇到未知 schema 版本时直接�
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
+import shutil
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -119,8 +121,6 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
 
 class StoreError(ArtifactError):
     """持久化层无法完成事务时抛出的稳定错误。"""
-
-    pass
 
 
 def _now() -> str:
@@ -411,7 +411,14 @@ class SqliteSessionStore:
                 staged.write(content)
                 staged.flush()
                 os.fsync(staged.fileno())
-            os.replace(staged_name, target)
+            try:
+                os.replace(staged_name, target)
+            except OSError as exc:
+                if exc.errno == errno.EXDEV:
+                    shutil.copy2(staged_name, target)
+                    Path(staged_name).unlink(missing_ok=True)
+                else:
+                    raise
         finally:
             Path(staged_name).unlink(missing_ok=True)
         return digest

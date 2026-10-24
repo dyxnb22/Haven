@@ -106,3 +106,15 @@ class TestPolicyAsymmetry:
         )
         assert outcome.decision is PolicyDecision.ASK
         assert outcome.reason_code == "check_requires_approval"
+
+    async def test_exec_denied_end_to_end_without_launcher(self, tmp_path: Path) -> None:
+        turns = [
+            [tool("c1", "repo.exec", argv=("ls", "-la")), finish("tool_calls")],
+            [text("Execution was denied."), finish()],
+        ]
+        h = Harness(make_repo(tmp_path), turns, launcher=None)
+        await h.service.run("Run exec without sandbox")
+        events = h.sink.events_of("tool.completed")
+        assert len(events) == 1
+        assert events[0].error_code == "denied"
+        assert "sandbox_unavailable" in events[0].summary

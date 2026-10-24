@@ -70,8 +70,6 @@ class TestReadOnlyJourney:
 
 
 class TestEditJourney:
-    TURNS: list[list[ModelEvent]] = []
-
     @staticmethod
     def fix_turns() -> list[list[ModelEvent]]:
         return [

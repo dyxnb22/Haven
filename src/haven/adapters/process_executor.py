@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import shutil
 import signal
@@ -17,6 +18,7 @@ from asyncio.subprocess import Process
 from pathlib import Path
 
 from haven.contracts.tools import RecipeSpec
+from haven.domain.exec_policy import split_pipeline
 from haven.ports.executor import CheckOutcome, ExecOutcome, ExecSpec
 from haven.ports.sandbox import (
     SandboxLauncher,
@@ -49,7 +51,9 @@ class ProcessExecutor:
         self._launcher = launcher
         self._extra_env = dict(extra_env or {})
 
-    async def run_recipe(self, recipe: RecipeSpec, workspace_root: Path) -> CheckOutcome:
+    async def run_recipe(
+        self, recipe: RecipeSpec, workspace_root: Path, extra_args: tuple[str, ...] = ()
+    ) -> CheckOutcome:
         """将已注册 recipe 转换为沙箱规格并执行，返回检查专用结果。
 
         每次调用都在工作区外原子创建并自行回收临时目录；绝不采用仓库可预置的
@@ -57,8 +61,9 @@ class ProcessExecutor:
         """
         scratch_dir = Path(tempfile.mkdtemp(prefix="haven-recipe-scratch-"))
         try:
+            full_argv = (*recipe.argv, *extra_args)
             outcome = await self._run(
-                recipe.argv,
+                full_argv,
                 cwd=workspace_root,
                 timeout_seconds=recipe.timeout_seconds,
                 sandbox=SandboxSpec(
@@ -76,7 +81,7 @@ class ProcessExecutor:
                 ),
             )
         finally:
-            shutil.rmtree(scratch_dir, ignore_errors=True)
+            await asyncio.to_thread(shutil.rmtree, scratch_dir, ignore_errors=True)
         return CheckOutcome(
             recipe_id=recipe.id,
             exit_code=outcome.exit_code,
@@ -88,9 +93,155 @@ class ProcessExecutor:
         )
 
     async def run_exec(self, spec: ExecSpec) -> ExecOutcome:
-        """执行已构造的沙箱命令规格，不解释 shell 语法。"""
+        """执行已构造的沙箱命令规格，不解释 shell 语法（支持受控只读管道）。"""
+        pipeline = split_pipeline(spec.argv)
+        if pipeline is not None and len(pipeline) > 1:
+            return await self._run_pipeline(
+                pipeline,
+                cwd=spec.cwd,
+                timeout_seconds=spec.timeout_seconds,
+                sandbox=spec.sandbox,
+            )
         return await self._run(
             spec.argv, cwd=spec.cwd, timeout_seconds=spec.timeout_seconds, sandbox=spec.sandbox
+        )
+
+    async def _run_pipeline(
+        self,
+        pipeline: tuple[tuple[str, ...], ...],
+        *,
+        cwd: Path,
+        timeout_seconds: float,
+        sandbox: SandboxSpec,
+    ) -> ExecOutcome:
+        env = {key: os.environ[key] for key in ENV_ALLOWLIST if key in os.environ}
+        sandbox.scratch_dir.mkdir(parents=True, exist_ok=True)
+        env["TMPDIR"] = str(sandbox.scratch_dir)
+        env["CI"] = "1"
+        env["DEBIAN_FRONTEND"] = "noninteractive"
+        env["TERM"] = "dumb"
+        env["NO_COLOR"] = "1"
+        env.update(self._extra_env)
+
+        commands = [
+            self._launcher.wrap(seg, sandbox) if self._launcher is not None else seg
+            for seg in pipeline
+        ]
+
+        started = time.monotonic()
+        procs: list[Process] = []
+        pipes: list[tuple[int, int]] = []
+        stderr_tasks: list[asyncio.Task[tuple[bytes, bool]]] = []
+
+        try:
+            prev_r: int | None = None
+            for i, cmd in enumerate(commands):
+                is_first = i == 0
+                is_last = i == len(commands) - 1
+                stdin = prev_r if not is_first else asyncio.subprocess.DEVNULL
+                if not is_last:
+                    r, w = os.pipe()
+                    pipes.append((r, w))
+                    stdout = w
+                else:
+                    stdout = asyncio.subprocess.PIPE
+
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    cwd=cwd,
+                    env=env,
+                    stdin=stdin,
+                    stdout=stdout,
+                    stderr=asyncio.subprocess.PIPE,
+                    start_new_session=os.name == "posix",
+                )
+                procs.append(proc)
+                stderr_tasks.append(asyncio.create_task(self._read_bounded(proc.stderr)))
+
+                if prev_r is not None:
+                    with contextlib.suppress(OSError):
+                        os.close(prev_r)
+                if not is_last:
+                    with contextlib.suppress(OSError):
+                        os.close(w)
+                    prev_r = r
+
+        except OSError as exc:
+            for r, w in pipes:
+                for fd in (r, w):
+                    with contextlib.suppress(OSError):
+                        os.close(fd)
+            for p in procs:
+                await self._shutdown(p)
+            return ExecOutcome(
+                exit_code=127,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                stdout_tail="",
+                stderr_tail=f"pipeline failure: could not start process: {exc.strerror or exc}",
+                truncated=False,
+                timed_out=False,
+            )
+
+        timed_out = False
+        last_proc = procs[-1]
+        stdout_task = asyncio.create_task(self._read_bounded(last_proc.stdout))
+
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                for p in procs:
+                    await self._wait_for_leader_exit(p)
+                    await self._cleanup_descendants(p)
+                out, out_trunc = await stdout_task
+                err_results = await asyncio.gather(*stderr_tasks)
+                for p in procs:
+                    await p.wait()
+        except TimeoutError:
+            timed_out = True
+            out, out_trunc = b"", False
+            err_results = [(b"", False)] * len(procs)
+            for p in procs:
+                await self._shutdown(p)
+            await self._cancel_readers(stdout_task, *stderr_tasks)
+        except BaseException:
+            for p in procs:
+                await self._shutdown(p)
+            await self._cancel_readers(stdout_task, *stderr_tasks)
+            raise
+
+        duration_ms = int((time.monotonic() - started) * 1000)
+        exit_code = 0
+        err_parts: list[str] = []
+        any_err_trunc = False
+        sigpipe_val = getattr(signal, "SIGPIPE", 13)
+        for i, (p, (err_bytes, err_trunc)) in enumerate(zip(procs, err_results, strict=True)):
+            rc = p.returncode if p.returncode is not None else -1
+            if rc not in (0, -sigpipe_val, 128 + sigpipe_val) and exit_code == 0:
+                exit_code = rc
+            if err_bytes:
+                prefix = f"[{' '.join(pipeline[i])}]: " if len(pipeline) > 1 else ""
+                err_parts.append(prefix + err_bytes.decode("utf-8", errors="replace"))
+            if err_trunc:
+                any_err_trunc = True
+
+        if last_proc.returncode == 0:
+            exit_code = 0
+            clean_err_parts = [
+                err
+                for err in err_parts
+                if "BrokenPipeError" not in err and "Broken pipe" not in err
+            ]
+            combined_err = "\n".join(clean_err_parts)
+        else:
+            if exit_code == 0 and last_proc.returncode is not None:
+                exit_code = last_proc.returncode
+            combined_err = "\n".join(err_parts)
+        return ExecOutcome(
+            exit_code=124 if timed_out else exit_code,
+            duration_ms=duration_ms,
+            stdout_tail=out.decode("utf-8", errors="replace"),
+            stderr_tail=combined_err,
+            truncated=out_trunc or any_err_trunc,
+            timed_out=timed_out,
         )
 
     async def _run(

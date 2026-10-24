@@ -283,8 +283,9 @@ def search_web_docs(query: str, max_results: int = 5) -> dict[str, Any]:
         raw_url = urls[i].strip()
         if "uddg=" in raw_url:
             query_parts = urllib.parse.parse_qs(urllib.parse.urlparse(raw_url).query)
-            if "uddg" in query_parts and query_parts["uddg"]:
-                raw_url = query_parts["uddg"][0]
+            uddg_val = query_parts.get("uddg")
+            if uddg_val:
+                raw_url = uddg_val[0]
         elif raw_url.startswith("//"):
             raw_url = f"https:{raw_url}"
 

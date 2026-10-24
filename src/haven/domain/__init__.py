@@ -40,7 +40,7 @@ from haven.domain.evidence import (
     GateResult,
     evaluate_evidence_gate,
 )
-from haven.domain.exec_policy import ExecClass, classify_argv
+from haven.domain.exec_policy import ExecClass, classify_argv, split_pipeline
 from haven.domain.ids import (
     ApprovalId,
     RunId,
@@ -125,6 +125,7 @@ __all__ = [
     "review_diff",
     "sha256_bytes",
     "sha256_text",
+    "split_pipeline",
     "transition",
     "validate_syntax",
 ]

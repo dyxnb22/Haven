@@ -29,7 +29,7 @@ run() {
 printf '\033[1mHaven — evidence-driven local coding agent\033[0m\n'
 printf 'Everything below is offline and deterministic: no API key is used.\n'
 
-step "1. The claims are executable: 27 offline eval cases, security is a hard gate"
+step "1. The claims are executable: 40 offline eval cases, security is a hard gate"
 run $HAVEN eval --offline
 
 step "2. Security cases only — every one asserts a specific policy denial"

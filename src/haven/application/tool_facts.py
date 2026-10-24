@@ -297,7 +297,7 @@ class ToolFactsCollector:
                 tool_name=call.tool_name,
                 within_workspace=facts.within_workspace,
                 touches_protected_path=facts.is_protected,
-                exec_class=classify_argv(args.argv).value,
+                exec_class=classify_argv(args.argv),
                 sandbox_available=self._launcher is not None and self._launcher.available(),
                 path=facts.normalized,
             ),
@@ -314,7 +314,7 @@ class ToolFactsCollector:
                 tool_name=call.tool_name,
                 within_workspace=facts.within_workspace,
                 touches_protected_path=facts.is_protected,
-                exec_class=classify_argv(args.argv).value,
+                exec_class=classify_argv(args.argv),
                 sandbox_available=self._launcher is not None and self._launcher.available(),
                 path=facts.normalized,
             ),
@@ -325,9 +325,26 @@ class ToolFactsCollector:
         self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
     ) -> tuple[ToolFacts, ToolPreview]:
         assert isinstance(args, RepoCheckArgs)
+        within = True
+        touches_protected = False
+        for item in args.args:
+            for token in item.split("="):
+                if token.startswith("..") or "/../" in token or "\\..\\" in token:
+                    within = False
+                if token.startswith(("/", "~")):
+                    within = False
+            clean_item = item.split("::", 1)[0]
+            if not item.startswith("-"):
+                facts = self._workspace.path_facts(clean_item)
+                if not facts.within_workspace:
+                    within = False
+                if facts.is_protected:
+                    touches_protected = True
         return ToolFacts(
             tool_name=call.tool_name,
             recipe_registered=args.recipe_id in self._recipes,
+            within_workspace=within,
+            touches_protected_path=touches_protected,
         ), None
 
     async def _facts_recipe_propose(

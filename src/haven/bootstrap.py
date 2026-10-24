@@ -62,8 +62,6 @@ MAX_GUIDANCE_CHARS = 4_000
 class BootstrapError(Exception):
     """应用启动阶段无法解析配置或创建依赖时的错误。"""
 
-    pass
-
 
 @dataclass(slots=True)
 class AppServices:
