@@ -160,10 +160,10 @@ uv run python scripts/gates.py --list        # 检查图及其依赖
 
 | 指标 | 数值 |
 |---|---|
-| 自动化测试 | 1217 |
+| 自动化测试 | 1222 |
 | 行覆盖率（`src/`） | 89% |
-| 源码 / 测试规模 | 约 23.2k / 约 18.0k 行 |
-| 类型检查模块（`mypy --strict`） | 120 |
+| 源码 / 测试规模 | 约 23.7k / 约 18.4k 行 |
+| 类型检查模块（`mypy --strict`） | 121 |
 | 架构决策记录 | 43 |
 | 离线评估 | 40/40 通过，0 个安全违规 |
 | 评估类别 | security 16 · task 10 · robustness 6 · injection 4 · budget 2 · recovery 2 |

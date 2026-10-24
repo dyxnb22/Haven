@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from pathlib import Path
 
 import typer
@@ -13,11 +14,18 @@ from haven.interfaces.cli_support.common import EXIT_OK, EXIT_USAGE
 
 
 def mcp(
-    action: str = typer.Argument("list", help="Action: list, inspect, pin."),
+    action: str = typer.Argument("list", help="Action: list, inspect, pin, serve."),
     server_name: str | None = typer.Argument(
         None, help="MCP server name from config (required for inspect, pin)."
     ),
     workspace: Path = typer.Option(Path("."), "--workspace", "-w", help="Workspace root."),
+    stdio: bool = typer.Option(True, "--stdio", help="Serve via stdio JSON-RPC 2.0 (for serve)."),  # noqa: ARG001
+    read_only: bool = typer.Option(
+        True, "--read-only/--write", help="Enforce read-only execution (default true)."
+    ),
+    store_path: Path | None = typer.Option(
+        None, "--store-path", help="Path to sqlite store database."
+    ),
 ) -> None:
     """管理与检查受控 MCP 服务器：查看已配置服务、检查可用工具与自动计算/固定 Schema 指纹。"""
     ws = workspace.resolve()
@@ -39,8 +47,8 @@ def mcp(
             typer.echo(f"    Command:        {cmd_preview}")
             allowed = ", ".join(s.allowed_tools) if s.allowed_tools else "(none - fail-closed)"
             typer.echo(f"    Allowed tools:  {allowed}")
-            read_only = ", ".join(s.read_only_tools) if s.read_only_tools else "(none)"
-            typer.echo(f"    Read-only:      {read_only}")
+            ro_tools = ", ".join(s.read_only_tools) if s.read_only_tools else "(none)"
+            typer.echo(f"    Read-only:      {ro_tools}")
             typer.echo(f"    Pinned schemas: {len(s.pinned_schemas)} tool(s)")
             for t_name, digest in s.pinned_schemas.items():
                 typer.echo(f"      - {t_name}: {digest[:16]}...")
@@ -135,5 +143,18 @@ def mcp(
         asyncio.run(_run())
         raise typer.Exit(EXIT_OK)
 
-    typer.echo(f"error: unknown action {action!r}; use list, inspect, or pin")
+    if action == "serve":
+        from haven.interfaces.mcp_server import run_mcp_server
+
+        with contextlib.suppress(KeyboardInterrupt, asyncio.CancelledError):
+            asyncio.run(
+                run_mcp_server(
+                    workspace=ws,
+                    read_only=read_only,
+                    store_path=store_path,
+                )
+            )
+        raise typer.Exit(EXIT_OK)
+
+    typer.echo(f"error: unknown action {action!r}; use list, inspect, pin, or serve")
     raise typer.Exit(EXIT_USAGE)
