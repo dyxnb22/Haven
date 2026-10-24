@@ -385,14 +385,16 @@ class MCPServer:
 async def run_mcp_server(
     workspace: Path,
     *,
-    read_only: bool = True,  # noqa: ARG001
+    read_only: bool = True,
     store_path: Path | None = None,
 ) -> None:
     """初始化并运行 MCP Server（stdio 传输）。"""
+    mode = PermissionMode.READ_ONLY if read_only else PermissionMode.INTERACTIVE
+    approvals = AutoApprover("reject_all") if read_only else AutoApprover("approve_all")
     services = await build_services(
         workspace,
-        mode=PermissionMode.READ_ONLY,
-        approvals=AutoApprover("reject_all"),
+        mode=mode,
+        approvals=approvals,
         sinks=[],
         store_path=store_path,
     )

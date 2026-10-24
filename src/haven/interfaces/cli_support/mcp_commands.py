@@ -19,7 +19,7 @@ def mcp(
         None, help="MCP server name from config (required for inspect, pin)."
     ),
     workspace: Path = typer.Option(Path("."), "--workspace", "-w", help="Workspace root."),
-    stdio: bool = typer.Option(True, "--stdio", help="Serve via stdio JSON-RPC 2.0 (for serve)."),  # noqa: ARG001
+    stdio: bool = typer.Option(True, "--stdio", help="Serve via stdio JSON-RPC 2.0 (for serve)."),
     read_only: bool = typer.Option(
         True, "--read-only/--write", help="Enforce read-only execution (default true)."
     ),
@@ -144,6 +144,9 @@ def mcp(
         raise typer.Exit(EXIT_OK)
 
     if action == "serve":
+        if not stdio:
+            typer.echo("error: only --stdio transport is currently supported")
+            raise typer.Exit(EXIT_USAGE)
         from haven.interfaces.mcp_server import run_mcp_server
 
         with contextlib.suppress(KeyboardInterrupt, asyncio.CancelledError):

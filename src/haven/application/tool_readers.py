@@ -423,7 +423,9 @@ class ReadToolExecutor:
         for rel_path in scope_files[:5]:
             try:
                 pf = self._workspace.path_facts(rel_path)
-                if pf.exists and pf.is_file:
+                is_within = getattr(pf, "within_workspace", True)
+                is_prot = getattr(pf, "is_protected", False)
+                if pf.exists and pf.is_file and is_within and not is_prot:
                     read_res = await self._workspace.read_file(rel_path, 1, 50)
                     evidence_citations.append(
                         {

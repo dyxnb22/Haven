@@ -136,9 +136,10 @@ class RunActor:
 
         if scratch_dir is not None:
             self._scratch_dir = scratch_dir
+            self._owns_scratch = False
         else:
             self._scratch_dir = Path(tempfile.mkdtemp(prefix=f"haven-scratch-{ctx.run_id[:8]}-"))
-        self._owns_scratch = True
+            self._owns_scratch = True
 
         self._pipeline = ToolPipeline(
             workspace=workspace,

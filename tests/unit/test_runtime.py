@@ -1,15 +1,16 @@
 """单元测试：HavenRuntime 应用门面与会话协调。"""
 
+import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
 
-from haven.application.approvals import ApprovalDecision, AutoApprover
+from haven.application.approvals import AutoApprover
 from haven.application.runtime import HavenRuntime
 from haven.bootstrap import build_services
 from haven.contracts.model import ModelEvent, ModelRequest, StreamFinished, TextDelta
-from haven.domain.enums import PermissionMode, RunStatus
+from haven.domain.enums import ApprovalDecision, PermissionMode, RunStatus
 
 
 class ScriptedModel:
@@ -160,5 +161,56 @@ async def test_runtime_approve(tmp_path: Path) -> None:
         # 响应未挂起的审批请求返回 False
         delivered = await runtime.approve("non-existent-approval", decision)
         assert delivered is False
+    finally:
+        await services.close()
+
+
+class SlowStreamingModel:
+    """在流式输出时挂起以供测试取消逻辑的模型桩。"""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.closed = False
+
+    @property
+    def model_name(self) -> str:
+        return "deepseek-chat"
+
+    async def _stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:  # noqa: ARG002
+        self.started.set()
+        await asyncio.sleep(10)
+        yield TextDelta(text="Done")
+        yield StreamFinished(finish_reason="stop")
+
+    def generate_stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+        return self._stream(request)
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+async def test_runtime_cancel_active_run(tmp_path: Path) -> None:
+    model = SlowStreamingModel()
+    services = await build_services(
+        tmp_path,
+        mode=PermissionMode.READ_ONLY,
+        approvals=AutoApprover("reject_all"),
+        sinks=[],
+        model=model,
+        store_path=tmp_path / "haven.db",
+    )
+    try:
+        runtime = services.runtime
+        run_task = asyncio.create_task(runtime.start_run("Long running task"))
+        await model.started.wait()
+        active_id = runtime.active_run_id
+        assert active_id is not None
+        cancelled = await runtime.cancel(active_id)
+        assert cancelled is True
+        with pytest.raises(asyncio.CancelledError):
+            await run_task
+        run_record = await runtime.get_run(active_id)
+        assert run_record is not None
+        assert run_record.status is RunStatus.CANCELLED
     finally:
         await services.close()

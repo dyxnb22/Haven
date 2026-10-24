@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from haven.adapters.memory_session import MemorySessionStore
-from haven.application.emitter import EventEmitter
+from haven.application.emitter import EventEmitter, EventEnvelope
 from haven.application.state import RunContext
 from haven.application.tool_readers import ReadToolExecutor
 from haven.contracts.events import ApplicationEvent, ChildFinished, ChildStarted
@@ -13,6 +13,7 @@ from haven.contracts.model import ToolCallProposal
 from haven.contracts.tools import AgentDelegateArgs
 from haven.domain.budget import Budget, BudgetUsage
 from haven.domain.enums import PermissionMode, RunStatus, ToolStatus
+from haven.domain.ids import RunId
 
 
 class MemoryWorkspace:
@@ -25,7 +26,16 @@ class MemoryWorkspace:
         p = self.root / rel_path
         exists = p.exists()
         is_f = p.is_file() if exists else False
-        return type("Facts", (), {"exists": exists, "is_file": is_f})()
+        return type(
+            "Facts",
+            (),
+            {
+                "exists": exists,
+                "is_file": is_f,
+                "within_workspace": True,
+                "is_protected": False,
+            },
+        )()
 
     async def read_file(self, rel_path: str, start_line: int, max_lines: int):  # noqa: ANN201
         p = self.root / rel_path
@@ -51,7 +61,7 @@ class MemorySink:
     def __init__(self) -> None:
         self.events: list[ApplicationEvent] = []
 
-    async def emit(self, envelope) -> None:  # noqa: ANN001
+    async def emit(self, envelope: EventEnvelope) -> None:
         self.events.append(envelope.event)
 
 
@@ -67,7 +77,7 @@ async def test_subagent_delegate_scout_success(tmp_path: Path) -> None:
     executor = ReadToolExecutor(ws, emitter)  # type: ignore[arg-type]
 
     ctx = RunContext(
-        run_id="run-parent-1",
+        run_id=RunId("run-parent-1"),
         goal="Test subagent",
         mode=PermissionMode.INTERACTIVE,
         budget=Budget(max_steps=10, max_tool_calls=15),
@@ -113,7 +123,7 @@ async def test_subagent_delegate_reviewer_success(tmp_path: Path) -> None:
     executor = ReadToolExecutor(ws, emitter)  # type: ignore[arg-type]
 
     ctx = RunContext(
-        run_id="run-parent-2",
+        run_id=RunId("run-parent-2"),
         goal="Test reviewer subagent",
         mode=PermissionMode.INTERACTIVE,
         budget=Budget(max_steps=10, max_tool_calls=15),
@@ -142,7 +152,7 @@ async def test_subagent_depth_invariant_rejection(tmp_path: Path) -> None:
 
     # 已是子运行（parent_run_id 非空）
     ctx = RunContext(
-        run_id="run-child-1",
+        run_id=RunId("run-child-1"),
         goal="Nested subagent",
         mode=PermissionMode.INTERACTIVE,
         parent_run_id="run-parent-0",
@@ -165,7 +175,7 @@ async def test_subagent_budget_exhaustion_rejection(tmp_path: Path) -> None:
 
     # 预算已消耗殆尽
     ctx = RunContext(
-        run_id="run-parent-3",
+        run_id=RunId("run-parent-3"),
         goal="Exhausted budget",
         mode=PermissionMode.INTERACTIVE,
         budget=Budget(max_steps=5, max_tool_calls=5),

@@ -43,17 +43,10 @@ from haven.application.answer_resolution import (
 from haven.application.answer_resolution import (
     MAX_EVIDENCE_NUDGES as MAX_EVIDENCE_NUDGES,
 )
-from haven.application.answer_resolution import (
-    MAX_OUTPUT_CONTINUATIONS as MAX_OUTPUT_CONTINUATIONS,
-)
-from haven.application.answer_resolution import (
-    AnswerResolver,
-)
 from haven.application.approvals import ApprovalResponder
 from haven.application.context_builder import ContextBuilder
 from haven.application.emitter import EventEmitter
 from haven.application.mcp_client import MCPClientManager
-from haven.application.model_router import ModelRouter
 from haven.application.model_stream import (
     MODEL_RETRY_MAX_DELAY,
     ModelStreamer,
@@ -75,15 +68,12 @@ from haven.application.tool_pipeline import ToolPipeline
 from haven.contracts.capability import build_capability_snapshot
 from haven.contracts.checkpoint import CheckpointV1
 from haven.contracts.events import (
-    ContextBuilt,
     Notice,
     RunCreated,
 )
 from haven.contracts.mcp import MCPServerConfig
 from haven.contracts.model import (
     ModelMessage,
-    ModelRequest,
-    ModelResult,
     ToolCallProposal,
 )
 from haven.contracts.tools import RecipeSpec
@@ -99,18 +89,10 @@ from haven.domain.ids import RunId, new_run_id
 from haven.domain.pricing import Pricing
 from haven.domain.stuck import StuckLoopDetector, call_fingerprint
 from haven.ports.executor import ExecutorPort
-from haven.ports.model import ModelPort, ProviderError
+from haven.ports.model import ModelPort
 from haven.ports.sandbox import SandboxLauncher
 from haven.ports.session import SessionStorePort
 from haven.ports.workspace import WorkspacePort
-
-#: 提供商返回的 `context_overflow`（字符预算超过实际 token 窗口）会通过缩小
-#: 预算并重建上下文来恢复，最多进行这么多次；之后运行失败，因此确实无法
-#: 放入的 transcript 仍会导致停止。
-MAX_CONTEXT_OVERFLOW_RETRIES = 2
-#: 每次溢出重试后保留多少预算。缩减幅度足以让几次缩小消除真实的超出；
-#: builder 会设置下限，以保证固定头部始终放得下。
-CONTEXT_OVERFLOW_SHRINK = 0.6
 
 #: 在真实网络中，提供商的临时故障很常见，因此因一次故障丢掉整个运行不应是
 #: 默认行为。实测：8 次在线运行中有 3 次在收到任何 token 前遇到 ConnectError，
@@ -217,14 +199,6 @@ class RunService:
             skills=self._skills,
             approval_mode=approval_mode,
             mcp_manager=self._mcp_manager,
-        )
-        self._answers = AnswerResolver(
-            emitter=emitter,
-            workspace=workspace,
-            verification_available=lambda: bool(self._recipes),
-            supports_prefix=self._supports_prefix,
-            finish=self._finish,
-            checkpoint=self._checkpoint,
         )
 
     @property
@@ -468,87 +442,6 @@ class RunService:
             return True
         return False
 
-    def _drain_steering(self) -> list[str]:
-        drained: list[str] = []
-        queue = self._steer_queue
-        while queue:
-            drained.append(queue.popleft())
-        return drained
-
-    async def _call_model_step(
-        self,
-        ctx: RunContext,
-        step: int,
-        builder: ContextBuilder,
-        envelope_digest: str,
-        answer_final_text: str,
-    ) -> tuple[ModelRequest, ModelResult, str] | RunOutcome:
-        """构建上下文、记录遥测并向模型发起流式请求，对 context_overflow 进行有界恢复。"""
-        overflow_retries = 0
-        while True:
-            request, segments = builder.build(ctx.transcript, ctx.usage, ctx.plan)
-            envelope_digest = await self._telemetry.record_envelope(
-                ctx, step, request, envelope_digest
-            )
-            await self._emitter.emit(
-                ctx.run_id,
-                ContextBuilt(
-                    run_id=ctx.run_id,
-                    step=step,
-                    segments=segments,
-                    total_bytes=sum(s.size_bytes for s in segments),
-                ),
-            )
-
-            try:
-                ctx.refresh_wall_time(time.monotonic())
-                remaining = max(
-                    0.0,
-                    ctx.budget.max_wall_time_seconds - ctx.usage.wall_time_seconds,
-                )
-                async with asyncio.timeout(remaining):
-                    result = await self._stream_model(ctx, step, request)
-                return request, result, envelope_digest
-            except TimeoutError:
-                ctx.refresh_wall_time(time.monotonic())
-                return await self._finish(
-                    ctx,
-                    RunStatus.STOPPED,
-                    StopReason.WALL_TIME_EXHAUSTED,
-                    answer_final_text,
-                )
-            except ProviderError as exc:
-                if (
-                    exc.code == "context_overflow"
-                    and overflow_retries < MAX_CONTEXT_OVERFLOW_RETRIES
-                ):
-                    overflow_retries += 1
-                    new_budget = builder.reduce_budget(CONTEXT_OVERFLOW_SHRINK)
-                    await self._emitter.emit(
-                        ctx.run_id,
-                        Notice(
-                            run_id=ctx.run_id,
-                            level="warning",
-                            message=(
-                                "context overflow; forcing compaction "
-                                f"(budget -> {new_budget} chars), retry "
-                                f"{overflow_retries}/{MAX_CONTEXT_OVERFLOW_RETRIES}"
-                            ),
-                        ),
-                    )
-                    continue
-                await self._emitter.emit(
-                    ctx.run_id,
-                    Notice(
-                        run_id=ctx.run_id,
-                        level="error",
-                        message=f"provider error ({exc.code}): {exc}",
-                    ),
-                )
-                return await self._finish(
-                    ctx, RunStatus.FAILED, StopReason.PROVIDER_ERROR, answer_final_text
-                )
-
     # -- 循环 ------------------------------------------------------------------
 
     def _create_actor(
@@ -601,10 +494,14 @@ class RunService:
         )
         self._actors[ctx.run_id] = actor
         self._active_run_id = ctx.run_id
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            self._tasks[ctx.run_id] = current_task
         self._pipeline.replace_scratch_dir(self._scratch_dir)
         try:
             return await actor.drive()
         finally:
+            self._tasks.pop(ctx.run_id, None)
             self._actors.pop(ctx.run_id, None)
             if self._active_run_id == ctx.run_id:
                 self._active_run_id = None
@@ -693,16 +590,6 @@ class RunService:
                 )
                 return await self._finish(ctx, RunStatus.STOPPED, StopReason.NO_PROGRESS, "")
         return None
-
-    # -- 模型流式输出 ------------------------------------------------------------
-
-    async def _stream_model(self, ctx: RunContext, step: int, request: ModelRequest) -> ModelResult:
-        model = (
-            self._model.select_model(ctx, step)
-            if isinstance(self._model, ModelRouter)
-            else self._model
-        )
-        return await self._streamer.stream(model, ctx, step, request)
 
     # -- 持久化 ------------------------------------------------------------------
 
