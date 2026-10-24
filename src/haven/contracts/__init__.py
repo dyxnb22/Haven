@@ -32,6 +32,8 @@ from haven.contracts.events import (
     ApprovalDecided,
     ApprovalRequested,
     AssistantDelta,
+    ChildFinished,
+    ChildStarted,
     ContextBuilt,
     ContextSegment,
     DiffPreview,
@@ -73,6 +75,7 @@ from haven.contracts.tools import (
     ARGS_MODELS,
     TOOL_DESCRIPTIONS,
     TOOL_VERSION,
+    AgentDelegateArgs,
     PlanStep,
     RecipeProposeArgs,
     RecipeSpec,
@@ -93,6 +96,7 @@ from haven.contracts.tools import (
 
 __all__ = [
     "ARGS_MODELS",
+    "AgentDelegateArgs",
     "CHECKPOINT_SCHEMA_VERSION",
     "EVENT_ADAPTER",
     "SCHEMA_VERSION",
@@ -107,6 +111,8 @@ __all__ = [
     "CapabilitySnapshot",
     "CapabilitySpec",
     "CheckpointV1",
+    "ChildFinished",
+    "ChildStarted",
     "ContextBuilt",
     "ContextSegment",
     "DiffPreview",

@@ -80,6 +80,7 @@ class ToolFactsCollector:
             "task.stop": self._facts_stateless,
             "web.search": self._facts_stateless,
             "web.fetch": self._facts_stateless,
+            "agent.delegate": self._facts_stateless,
         }
 
     async def collect(

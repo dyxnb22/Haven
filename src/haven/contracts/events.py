@@ -425,6 +425,31 @@ class RunFinished(StrictModel):
     duration_ms: int = 0
 
 
+class ChildStarted(StrictModel):
+    """受限只读子 Agent 运行启动事件（规划书 Phase P5）。"""
+
+    kind: Literal["child.started"] = "child.started"
+    child_run_id: str
+    parent_run_id: str
+    role: str
+    task: str
+    allocated_steps: int
+    allocated_tool_calls: int
+
+
+class ChildFinished(StrictModel):
+    """受限只读子 Agent 运行终态完成事件（规划书 Phase P5）。"""
+
+    kind: Literal["child.finished"] = "child.finished"
+    child_run_id: str
+    parent_run_id: str
+    role: str
+    status: str
+    steps_used: int
+    tool_calls_used: int
+    outcome_summary: str = ""
+
+
 # 唯一的 trace 流，按大致生命周期顺序排列。UI 展示、`replay` 重新渲染以及
 # 评估套件断言的所有内容都来自这里。
 ApplicationEvent = Annotated[
@@ -443,6 +468,9 @@ ApplicationEvent = Annotated[
     | ApprovalDecided
     | ExecutionStarted
     | ToolCompleted
+    # 子 Agent 委托执行生命周期
+    | ChildStarted
+    | ChildFinished
     # 成功状态记录：Evidence Gate 将检查的内容
     | EvidenceRecorded
     | DiffPreview

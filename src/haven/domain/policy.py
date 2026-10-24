@@ -27,6 +27,7 @@ READ_ONLY_TOOLS = frozenset(
         "task.logs",
         "web.search",
         "web.fetch",
+        "agent.delegate",
     }
 )
 

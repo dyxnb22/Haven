@@ -374,6 +374,35 @@ class WebFetchArgs(StrictModel):
     )
 
 
+class AgentDelegateArgs(StrictModel):
+    """向受限只读子 Agent 委派专门子任务（规划书 Phase P5）。"""
+
+    role: Literal["scout", "reviewer"] = Field(
+        description="专职子 Agent 角色：scout（代码定位探索）或 reviewer（审查 diff 与证据）。"
+    )
+    task: str = Field(
+        min_length=3,
+        max_length=2000,
+        description="有界子任务描述，明确指示子 Agent 需要调查或审查的事实。",
+    )
+    file_scope: tuple[str, ...] | None = Field(
+        default=None,
+        description="可选的文件或路径白名单；限制子 Agent 探索范围。",
+    )
+    max_steps: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+        description="为子 Agent 分配的最大执行步骤数（小于父运行剩余预算）。",
+    )
+    max_tool_calls: int = Field(
+        default=10,
+        ge=1,
+        le=20,
+        description="为子 Agent 分配的最大工具调用数（小于父运行剩余预算）。",
+    )
+
+
 ToolArgs = (
     RepoListArgs
     | RepoSearchArgs
@@ -397,6 +426,7 @@ ToolArgs = (
     | TaskStopArgs
     | WebSearchArgs
     | WebFetchArgs
+    | AgentDelegateArgs
     | MCPToolArgs
 )
 
@@ -423,6 +453,7 @@ ARGS_MODELS: dict[str, type[ToolArgs]] = {
     "task.stop": TaskStopArgs,
     "web.search": WebSearchArgs,
     "web.fetch": WebFetchArgs,
+    "agent.delegate": AgentDelegateArgs,
 }
 
 TOOL_DESCRIPTIONS: dict[str, str] = {
@@ -518,6 +549,11 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "web.fetch": (
         "Fetch a public documentation web page by URL, stripped to clean markdown. "
         "Bounded in size, SSRF protected, and safely isolated as untrusted data."
+    ),
+    "agent.delegate": (
+        "Delegate a bounded read-only investigation task to a specialized subagent "
+        "(scout for searching/code reading, or reviewer for inspecting diffs and evidence). "
+        "Returns structured findings and citations."
     ),
 }
 

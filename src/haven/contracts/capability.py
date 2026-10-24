@@ -148,7 +148,7 @@ def builtin_capabilities() -> tuple[CapabilitySpec, ...]:
     for name, model_cls in ARGS_MODELS.items():
         desc = TOOL_DESCRIPTIONS.get(name, "")
         schema = model_cls.model_json_schema()
-        if name in ("web.search", "web.fetch"):
+        if name in ("web.search", "web.fetch", "agent.delegate"):
             effect_class = "external_observation"
             replay_policy = "safe"
             approval_policy = "allow"

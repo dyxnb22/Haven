@@ -39,7 +39,8 @@
       "task.logs",
       "task.stop",
       "web.search",
-      "web.fetch"
+      "web.fetch",
+      "agent.delegate"
     ],
     "reasoning_effort": "",
     "max_output_tokens": 4096

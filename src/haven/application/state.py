@@ -60,6 +60,9 @@ class RunContext:
     #: 本次运行冻结的能力快照与摘要（ADR 规划书 P2）。
     catalog_digest: str = ""
     capabilities: CapabilitySnapshot | None = None
+    #: 父运行与根运行关系（ADR 规划书 Phase P5 子 Agent）。
+    parent_run_id: str | None = None
+    root_run_id: str | None = None
     #: 以下两项仅用于当前进程的单调时钟，不写入检查点；恢复时会从 usage 中
     #: 已保存的累计墙钟重新起算。
     _timing_started_at: float | None = field(default=None, repr=False)

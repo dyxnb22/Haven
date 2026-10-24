@@ -100,6 +100,10 @@ CONSTRAINTS: dict[str, str] = {
     "web.fetch": (
         "read-only web fetch converted to markdown, byte-capped, SSRF protected (ADR 0038)"
     ),
+    "agent.delegate": (
+        "delegates bounded read-only investigation to subagent "
+        "(depth 1, scout/reviewer, inherited budget)"
+    ),
 }
 
 #: 工具所属的集合，用于 class 列。
