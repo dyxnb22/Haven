@@ -152,11 +152,11 @@ def builtin_capabilities() -> tuple[CapabilitySpec, ...]:
             effect_class = "external_observation"
             replay_policy = "safe"
             approval_policy = "allow"
-        elif name in ("task.plan", "task.stop"):
+        elif name in ("task.plan", "task.stop", "user.ask"):
             effect_class = "state"
             replay_policy = "idempotent_with_key"
             approval_policy = "allow"
-        elif name in ("repo.exec", "task.start"):
+        elif name in ("repo.exec", "task.start", "task.input"):
             effect_class = "exec"
             replay_policy = "never"
             approval_policy = "ask"

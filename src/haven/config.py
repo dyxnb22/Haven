@@ -4,15 +4,17 @@
 内置安全默认值 -> 用户配置 -> 提供商环境变量和 CLI 预算档位
 -> 项目 `.haven.toml`（仅允许收紧）。
 
-项目文件只能收紧预算和注册验证配方；不能提高限制、改变提供商或改变代理的
+项目文件只能收紧预算、注册验证配方及命名检查组；不能提高限制、改变提供商或改变代理的
 审批策略。配方是用户明确编写的进程授权，可以声明自身所需的网络权限和可读
 根目录。秘密只存在于环境变量中，并且只报告“存在/缺失”。
 """
 
 from __future__ import annotations
 
+import json
 import math
 import os
+import re
 import shlex
 import tomllib
 from dataclasses import dataclass, field
@@ -22,10 +24,13 @@ from urllib.parse import urlsplit
 import platformdirs
 
 from haven.contracts.mcp import MCPServerConfig
+from haven.contracts.model_call import ModelSpec
 from haven.contracts.tools import RecipeSpec
 from haven.domain.budget import BUDGET_TIERS, Budget
 from haven.domain.pricing import Pricing
 from haven.domain.skill_grants import grants_enabled
+from haven.ports.executor import ENV_ALLOWLIST, EXEC_ENV_FIXED
+from haven.ports.sandbox import default_readable_roots
 
 APP_NAME = "haven"
 
@@ -84,6 +89,33 @@ class ResolvedConfig:
     router: RouterConfig | None = None
     #: config key -> 最终值的来源，用于诊断和可审计的配置报告。
     sources: dict[str, str] = field(default_factory=dict)
+    #: 只有用户显式选择后才成为运行要求；配置本身不自动执行检查。
+    verification_groups: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    model_presets: dict[str, ModelSpec] = field(default_factory=dict)
+
+    def default_model_spec(
+        self,
+        *,
+        fast_model: str | None = None,
+        deep_model: str | None = None,
+        fast_turns: int | None = None,
+    ) -> ModelSpec:
+        router = self.router
+        if (router and router.enabled) or fast_model is not None or deep_model is not None:
+            return ModelSpec(
+                model=deep_model
+                if deep_model is not None
+                else (router and router.deep_model) or self.provider.model,
+                fast_model=fast_model
+                if fast_model is not None
+                else (router and router.fast_model) or DEFAULT_MODEL,
+                fast_turns=fast_turns
+                if fast_turns is not None
+                else router.fast_turns
+                if router
+                else None,
+            )
+        return ModelSpec(model=self.provider.model)
 
 
 def config_dir() -> Path:
@@ -288,6 +320,62 @@ def _parse_recipes(raw: object, origin: str) -> dict[str, RecipeSpec]:
     return recipes
 
 
+def _parse_verification_groups(raw: object, origin: str) -> dict[str, tuple[str, ...]]:
+    if not isinstance(raw, dict) or len(raw) > 32:
+        raise ConfigError(f"[verification_groups] in {origin} must be a table of at most 32 groups")
+    groups = {}
+    for name, members in raw.items():
+        if not name or len(name) > 100 or any(char.isspace() for char in name):
+            raise ConfigError(
+                f"verification group names in {origin} need 1–100 non-space characters"
+            )
+        if (
+            not isinstance(members, list)
+            or not 1 <= len(members) <= 32
+            or not all(isinstance(item, str) and 1 <= len(item) <= 100 for item in members)
+            or len(set(members)) != len(members)
+        ):
+            raise ConfigError(
+                f"verification group {name!r} in {origin} needs 1–32 unique recipe IDs"
+            )
+        groups[name] = tuple(members)
+    return groups
+
+
+def _parse_model_presets(raw: object, origin: str) -> dict[str, ModelSpec]:
+    if not isinstance(raw, dict) or len(raw) > 16:
+        raise ConfigError(f"[model_presets] in {origin} must be a table of at most 16 presets")
+    presets: dict[str, ModelSpec] = {}
+    for name, spec in raw.items():
+        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,47}", name):
+            raise ConfigError(
+                f"invalid model preset name in {origin}; use 1–48 letters, digits, _ or -"
+            )
+        error = f"model preset {name!r} in {origin} needs model or fast_model and deep_model"
+        if not isinstance(spec, dict):
+            raise ConfigError(error)
+        try:
+            if spec.keys() == {"model"}:
+                presets[name] = ModelSpec(model=spec["model"])
+            elif spec.keys() in (
+                {"fast_model", "deep_model"},
+                {"fast_model", "deep_model", "fast_turns"},
+            ):
+                turns = spec.get("fast_turns")
+                if not spec["fast_model"] or (
+                    turns is not None and (type(turns) is not int or turns < 0)
+                ):
+                    raise ValueError(error)
+                presets[name] = ModelSpec(
+                    model=spec["deep_model"], fast_model=spec["fast_model"], fast_turns=turns
+                )
+            else:
+                raise ValueError(error)
+        except ValueError:
+            raise ConfigError(error + " with optional non-negative fast_turns") from None
+    return presets
+
+
 def _parse_mcp_servers(raw: object, origin: str) -> tuple[MCPServerConfig, ...]:
     if not isinstance(raw, dict):
         raise ConfigError(f"[mcp] in {origin} must be a table")
@@ -324,6 +412,8 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
     budget = Budget()
     pricing = Pricing()
     recipes: dict[str, RecipeSpec] = {}
+    verification_groups: dict[str, tuple[str, ...]] = {}
+    model_presets: dict[str, ModelSpec] = {}
     mcp_servers: list[MCPServerConfig] = []
     sources: dict[str, str] = {
         "provider.base_url": "default",
@@ -348,6 +438,8 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
             "mcp",
             "runtime",
             "router",
+            "verification_groups",
+            "model_presets",
         }
         if unknown_top_level:
             raise ConfigError(f"unknown top-level keys in {user_path}: {sorted(unknown_top_level)}")
@@ -426,8 +518,17 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
                 raise ConfigError(f"invalid [pricing] in {user_path}: {exc}") from exc
             sources["pricing"] = "user"
         if recipes_raw := raw.get("recipes"):
-            recipes.update(_parse_recipes(recipes_raw, str(user_path)))
+            parsed = _parse_recipes(recipes_raw, str(user_path))
+            recipes.update(parsed)
+            sources.update({f"recipes.{key}": str(user_path) for key in parsed})
             sources["recipes(user)"] = "user"
+        if "verification_groups" in raw:
+            verification_groups.update(
+                _parse_verification_groups(raw["verification_groups"], str(user_path))
+            )
+            sources["verification_groups(user)"] = "user"
+        if "model_presets" in raw:
+            model_presets = _parse_model_presets(raw["model_presets"], str(user_path))
         if mcp_raw := raw.get("mcp"):
             mcp_servers.extend(_parse_mcp_servers(mcp_raw, str(user_path)))
             sources["mcp(user)"] = "user"
@@ -459,25 +560,33 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
         budget = BUDGET_TIERS[tier]
         sources["budget"] = f"tier:{tier}"
 
-    # -- 项目级别：只能收紧预算并注册 recipe -----------------------------------
+    # -- 项目级别：收紧预算、注册 recipe 与可选检查组 ---------------------------
     if workspace is not None:
         project_path = project_config_path(workspace)
         if project_path.is_file():
             raw = _read_toml(project_path)
-            allowed = {"budget", "recipes", "mcp"}
+            allowed = {"budget", "recipes", "mcp", "verification_groups"}
             unknown = set(raw) - allowed
             if unknown:
                 raise ConfigError(
                     f"project config {project_path} may only contain "
-                    f"[budget], [recipes], and [mcp]; found {sorted(unknown)}"
+                    "[budget], [recipes], [verification_groups], and [mcp]; "
+                    f"found {sorted(unknown)}"
                 )
             if budget_raw := raw.get("budget"):
                 project_budget = _parse_budget(budget_raw, str(project_path))
                 budget = budget.tightened(project_budget)
                 sources["budget"] = f"{sources['budget']}+project(tighten-only)"
             if recipes_raw := raw.get("recipes"):
-                recipes.update(_parse_recipes(recipes_raw, str(project_path)))
+                parsed = _parse_recipes(recipes_raw, str(project_path))
+                recipes.update(parsed)
+                sources.update({f"recipes.{key}": str(project_path) for key in parsed})
                 sources["recipes(project)"] = "project"
+            if "verification_groups" in raw:
+                verification_groups.update(
+                    _parse_verification_groups(raw["verification_groups"], str(project_path))
+                )
+                sources["verification_groups(project)"] = "project"
             if mcp_raw := raw.get("mcp"):
                 mcp_servers.extend(_parse_mcp_servers(mcp_raw, str(project_path)))
                 sources["mcp(project)"] = "project"
@@ -503,6 +612,12 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
         sources["router"] = "env"
 
     _validate_provider(provider)
+    for name, members in verification_groups.items():
+        missing = [recipe_id for recipe_id in members if recipe_id not in recipes]
+        if missing:
+            raise ConfigError(
+                f"verification group {name!r} references unavailable recipes: {missing}"
+            )
     return ResolvedConfig(
         provider=provider,
         budget=budget,
@@ -512,6 +627,8 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
         worktree=worktree,
         router=router,
         sources=sources,
+        verification_groups=verification_groups,
+        model_presets=model_presets,
     )
 
 
@@ -537,14 +654,53 @@ def explain(config: ResolvedConfig, sandbox_backend: str = "unknown") -> list[tu
         ("budget.max_cost_usd", str(config.budget.max_cost_usd), config.sources["budget"]),
         (
             "pricing",
-            f"in={config.pricing.input_per_1m_usd}/1M out={config.pricing.output_per_1m_usd}/1M",
+            (
+                f"in={config.pricing.input_per_1m_usd}/1M out={config.pricing.output_per_1m_usd}/1M"
+                if config.pricing.is_known
+                else "automatic per model"
+                if config.sources["pricing"] == "default"
+                else "unknown"
+            ),
             config.sources["pricing"],
         ),
     ]
     rows.append(("sandbox.backend", sandbox_backend, "platform"))
+    rows.extend(
+        [
+            ("execution.cwd", "active workspace root (isolated worktree when enabled)", "policy"),
+            ("execution.env.forwarded", ", ".join(ENV_ALLOWLIST), "policy (names only)"),
+            ("execution.env.fixed", json.dumps(dict(EXEC_ENV_FIXED)), "policy"),
+            ("execution.env.TMPDIR", "private temporary directory for each command", "policy"),
+            (
+                "execution.readable_roots",
+                json.dumps([str(root) for root in default_readable_roots()], ensure_ascii=False),
+                "interpreter defaults",
+            ),
+        ]
+    )
     for recipe_id, spec in sorted(config.recipes.items()):
         network = " [network allowed]" if spec.allow_network else ""
-        rows.append((f"recipes.{recipe_id}", shlex.join(spec.argv) + network, "config"))
+        source = config.sources.get(f"recipes.{recipe_id}", "config")
+        rows.append((f"recipes.{recipe_id}", shlex.join(spec.argv) + network, source))
+        rows.extend(
+            [
+                (
+                    f"recipes.{recipe_id}.network",
+                    "allowed" if spec.allow_network else "denied",
+                    source,
+                ),
+                (
+                    f"recipes.{recipe_id}.readable_roots",
+                    json.dumps(list(spec.readable_roots), ensure_ascii=False),
+                    source,
+                ),
+                (f"recipes.{recipe_id}.timeout_seconds", str(spec.timeout_seconds), source),
+            ]
+        )
+    for name, members in sorted(config.verification_groups.items()):
+        rows.append(
+            (f"verification_groups.{name}", ", ".join(members), "config (explicit selection)")
+        )
     rows.append(("storage.db", str(db_path()), "platformdirs"))
     rows.append(("storage.artifacts", str(artifacts_dir()), "platformdirs"))
     rows.append(("skills.user_dir", str(user_skills_dir()), "platformdirs"))

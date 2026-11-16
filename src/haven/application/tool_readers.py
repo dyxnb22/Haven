@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-from typing import Any
+import difflib
 
 from haven.application.approval_cards import PREVIEW_CHARS, ToolPreview
 from haven.application.code_ast import find_symbol_occurrences, outline_source
 from haven.application.emitter import EventEmitter
+from haven.application.planning import normalize_plan
 from haven.application.skills import SkillCatalog, SkillError, list_skill_files, read_skill_file
 from haven.application.state import RunContext
 from haven.application.tool_execution_types import (
     MODEL_PAYLOAD_CHARS,
+    DelegateHandler,
     ExecuteHandler,
     ToolExecution,
     clip,
@@ -20,8 +21,6 @@ from haven.application.tool_execution_types import (
 )
 from haven.application.web_lookup import fetch_web_page, search_web_docs
 from haven.contracts.events import (
-    ChildFinished,
-    ChildStarted,
     DiffPreview,
     EvidenceRecorded,
     PlanStepView,
@@ -41,9 +40,11 @@ from haven.contracts.tools import (
     WebFetchArgs,
     WebSearchArgs,
 )
+from haven.contracts.user_input import UserAskArgs, UserInputRequest
 from haven.domain.digest import sha256_text
-from haven.domain.enums import ToolErrorCode
+from haven.domain.enums import AgentMode, PlanStatus, ToolErrorCode
 from haven.domain.evidence import DiffEvidence
+from haven.ports.session import SessionStorePort
 from haven.ports.workspace import WorkspaceError, WorkspacePort
 
 
@@ -55,9 +56,14 @@ class ReadToolExecutor:
         workspace: WorkspacePort,
         emitter: EventEmitter,
         skills: SkillCatalog | None = None,
+        *,
+        delegate: DelegateHandler | None = None,
+        store: SessionStorePort | None = None,
     ) -> None:
         self._workspace = workspace
         self._emitter = emitter
+        self._delegate = delegate
+        self._store = store
         # 技能目录由组合根注入；离线或没有技能时为 None，此时 `skill.read` 返回
         # 一个结构化的 unknown_skill，而不是崩溃。
         self._skills = skills if skills is not None else SkillCatalog()
@@ -70,6 +76,7 @@ class ReadToolExecutor:
             "skill.read": self.execute_skill_read,
             "repo.diff": self.execute_diff,
             "task.plan": self.execute_plan,
+            "user.ask": self.execute_ask,
             "web.search": self.execute_web_search,
             "web.fetch": self.execute_web_fetch,
             "agent.delegate": self.execute_agent_delegate,
@@ -254,6 +261,22 @@ class ReadToolExecutor:
             )
         return ToolExecution(ok_result(call, results, truncated=results.get("truncated", False)))
 
+    async def execute_ask(
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: ToolArgs,
+        ticket_digest: str,
+        preview: ToolPreview,
+    ) -> ToolExecution:
+        """记录追问；界面事件在 Actor 完成暂停和清理后发出。"""
+        assert isinstance(args, UserAskArgs)
+        request_id = "input-" + sha256_text(f"{ctx.run_id}:{ctx.usage.steps}:{call.call_id}")[:20]
+        ctx.pending_input = UserInputRequest(
+            request_id=request_id, call_id=call.call_id, questions=args.questions
+        )
+        return ToolExecution(ok_result(call, {"needs_input": True, "request_id": request_id}))
+
     async def execute_plan(
         self,
         ctx: RunContext,
@@ -264,15 +287,20 @@ class ReadToolExecutor:
     ) -> ToolExecution:
         """替换运行中的任务计划并广播计划更新事件。"""
         assert isinstance(args, TaskPlanArgs)
-        ctx.plan = tuple(args.steps)
+        try:
+            plan = normalize_plan(ctx, args.steps)
+        except ValueError as exc:
+            return ToolExecution(error_result(call, ToolErrorCode.INVALID_ARGUMENTS, str(exc)))
+        ctx.plan = plan
+        ctx.plan_status = (
+            PlanStatus.DRAFTING if ctx.agent_mode is AgentMode.PLAN else PlanStatus.EXECUTING
+        )
         await self._emitter.emit(
             ctx.run_id,
             PlanUpdated(
                 run_id=ctx.run_id,
-                steps=tuple(
-                    PlanStepView(title=clip(step.title, 120), status=step.status)
-                    for step in ctx.plan
-                ),
+                steps=tuple(PlanStepView.model_validate(step.model_dump()) for step in ctx.plan),
+                plan_status=ctx.plan_status.value,
             ),
         )
         done = sum(1 for step in ctx.plan if step.status == "done")
@@ -290,6 +318,40 @@ class ReadToolExecutor:
     ) -> ToolExecution:
         """读取运行基线差异，记录 diff 证据并返回有界预览。"""
         run_diff = await self._workspace.run_diff()
+        if ctx.parent_run_id and ctx.file_scope:
+            paths = [
+                path
+                for path in run_diff.files
+                if any(
+                    scope == "." or path == scope or path.startswith(scope.rstrip("/") + "/")
+                    for scope in ctx.file_scope
+                )
+            ]
+            chunks: list[str] = []
+            originals = self._workspace.original_contents()
+            for path in paths:
+                original = originals.get(path) or ""
+                current = ""
+                facts = self._workspace.path_facts(path)
+                if facts.exists:
+                    current = (await self._workspace.read_file(path, 1, 2000)).content
+                chunks.extend(
+                    difflib.unified_diff(
+                        original.splitlines(True),
+                        current.splitlines(True),
+                        fromfile=f"a/{path}",
+                        tofile=f"b/{path}",
+                    )
+                )
+            return ToolExecution(
+                ok_result(
+                    call,
+                    {
+                        "files": paths,
+                        "diff": clip("".join(chunks), MODEL_PAYLOAD_CHARS),
+                    },
+                )
+            )
         envelope = await self._emitter.emit(
             ctx.run_id,
             DiffPreview(
@@ -300,13 +362,18 @@ class ReadToolExecutor:
                 preview=clip(run_diff.diff, PREVIEW_CHARS),
             ),
         )
+        diff_digest = (
+            await self._store.put_artifact(run_diff.diff.encode("utf-8"))
+            if self._store is not None
+            else sha256_text(run_diff.diff)
+        )
         ctx.ledger = ctx.ledger.with_diff(
             DiffEvidence(
                 seq=envelope.seq,
                 files_changed=len(run_diff.files),
                 insertions=run_diff.insertions,
                 deletions=run_diff.deletions,
-                diff_digest=sha256_text(run_diff.diff),
+                diff_digest=diff_digest,
             )
         )
         await self._emitter.emit(
@@ -396,97 +463,8 @@ class ReadToolExecutor:
                 )
             )
 
-        alloc_steps = min(args.max_steps, rem_steps - 1)
-        alloc_tools = min(args.max_tool_calls, rem_tools - 1)
-
-        # 3. 确定性派生子运行 ID
-        child_id = f"child-{sha256_text(f'{ctx.run_id}:{call.call_id}:0')[:12]}"
-
-        # 4. 发送 child.started 事件
-        await self._emitter.emit(
-            ctx.run_id,
-            ChildStarted(
-                child_run_id=child_id,
-                parent_run_id=ctx.run_id,
-                role=args.role,
-                task=args.task,
-                allocated_steps=alloc_steps,
-                allocated_tool_calls=alloc_tools,
-            ),
-        )
-
-        # 5. 执行受限只读调查
-        evidence_citations: list[dict[str, Any]] = []
-        findings: list[str] = []
-
-        scope_files = args.file_scope or ()
-        for rel_path in scope_files[:5]:
-            try:
-                pf = self._workspace.path_facts(rel_path)
-                is_within = getattr(pf, "within_workspace", True)
-                is_prot = getattr(pf, "is_protected", False)
-                if pf.exists and pf.is_file and is_within and not is_prot:
-                    read_res = await self._workspace.read_file(rel_path, 1, 50)
-                    evidence_citations.append(
-                        {
-                            "path": rel_path,
-                            "lines": f"1-{min(50, read_res.total_lines)}",
-                            "digest": read_res.digest[:16],
-                            "claim": f"Inspected file in {args.role} role",
-                        }
-                    )
-            except Exception:
-                pass
-
-        steps_used = min(1, alloc_steps)
-        tools_used = min(len(evidence_citations) or 1, alloc_tools)
-
-        # 计入父运行预算
-        ctx.usage = replace(
-            ctx.usage,
-            steps=ctx.usage.steps + steps_used,
-            tool_calls=ctx.usage.tool_calls + tools_used,
-        )
-
-        if args.role == "scout":
-            findings.append(f"Completed scout exploration for: {args.task}")
-            if evidence_citations:
-                findings.append(f"Verified {len(evidence_citations)} in-scope file citation(s).")
-            else:
-                findings.append("No explicit file scope specified; workspace baseline available.")
-            summary_payload: dict[str, Any] = {
-                "role": "scout",
-                "task": args.task,
-                "answer": "\n".join(findings),
-                "evidence": evidence_citations,
-                "unresolved": [],
-                "confidence": "high" if evidence_citations else "medium",
-            }
-        else:
-            diff_obj = await self._workspace.run_diff()
-            diff_text = diff_obj.diff
-            findings.append(f"Reviewed workspace diff ({len(diff_text.splitlines())} lines).")
-            summary_payload = {
-                "role": "reviewer",
-                "task": args.task,
-                "findings": findings,
-                "diff_summary": f"{len(diff_text)} characters reviewed",
-                "evidence": evidence_citations,
-                "verdict": "review_complete",
-            }
-
-        # 6. 发送 child.finished 事件
-        await self._emitter.emit(
-            ctx.run_id,
-            ChildFinished(
-                child_run_id=child_id,
-                parent_run_id=ctx.run_id,
-                role=args.role,
-                status="succeeded",
-                steps_used=steps_used,
-                tool_calls_used=tools_used,
-                outcome_summary=f"Subagent {args.role} completed: {args.task[:80]}",
-            ),
-        )
-
-        return ToolExecution(ok_result(call, summary_payload))
+        if self._delegate is None:
+            return ToolExecution(
+                error_result(call, ToolErrorCode.DENIED, "subagent model runtime is unavailable")
+            )
+        return await self._delegate(ctx, call, args)

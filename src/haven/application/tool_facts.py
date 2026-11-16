@@ -74,7 +74,9 @@ class ToolFactsCollector:
             "recipe.propose": self._facts_recipe_propose,
             "repo.diff": self._facts_stateless,
             "task.plan": self._facts_stateless,
+            "user.ask": self._facts_stateless,
             "task.start": self._facts_task_start,
+            "task.input": self._facts_stateless,
             "task.status": self._facts_stateless,
             "task.logs": self._facts_stateless,
             "task.stop": self._facts_stateless,
@@ -367,6 +369,10 @@ class ToolFactsCollector:
                 within_workspace=within,
                 touches_protected_path=touches_protected,
                 sandbox_available=self._launcher is not None and self._launcher.available(),
+                replaces_required_recipe=bool(
+                    ctx.verification
+                    and any(item.recipe_id == args.recipe_id for item in ctx.verification.required)
+                ),
             ),
             None,
         )

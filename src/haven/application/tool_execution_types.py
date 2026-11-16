@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from haven.application.approval_cards import ToolPreview
 from haven.application.state import RunContext
 from haven.contracts.model import ToolCallProposal
-from haven.contracts.tools import ToolArgs, ToolResult
+from haven.contracts.process_output import ProcessReport
+from haven.contracts.tools import AgentDelegateArgs, ToolArgs, ToolResult
 from haven.domain.enums import ToolErrorCode, ToolStatus
 from haven.ports.workspace import WorkspaceError
 
@@ -35,11 +36,15 @@ class ToolExecution:
     result: ToolResult
     #: 执行器无法证明副作用是否发生时为 True。
     effect_unknown: bool = False
+    process: ProcessReport | None = None
 
 
 ExecuteHandler = Callable[
     [RunContext, ToolCallProposal, ToolArgs, str, ToolPreview],
     Awaitable[ToolExecution],
+]
+DelegateHandler = Callable[
+    [RunContext, ToolCallProposal, AgentDelegateArgs], Awaitable[ToolExecution]
 ]
 
 

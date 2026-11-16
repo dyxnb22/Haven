@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from haven.domain.enums import PermissionMode, PolicyDecision, RiskLevel
+from haven.domain.enums import AgentMode, PermissionMode, PolicyDecision, RiskLevel
 from haven.domain.exec_policy import ExecClass
 
 #: 只观察工作区的工具。
@@ -41,12 +41,26 @@ EFFECT_TOOLS = frozenset(
         "repo.apply_patch",
         "repo.check",
         "recipe.propose",
+        "task.input",
     }
 )
 
 #: 只修改当前运行自身内存状态的工具。它们既不接触磁盘，也不接触运行范围
 #: 之外的内容，因此即使在 read_only 模式下也允许使用。
-STATE_TOOLS = frozenset({"task.plan", "task.stop"})
+STATE_TOOLS = frozenset({"task.plan", "task.stop", "user.ask"})
+
+# task.stop 会终止进程，不属于规划阶段允许的状态修改。
+PLAN_TOOLS = READ_ONLY_TOOLS | {"task.plan", "user.ask"}
+CHILD_READ_TOOLS = frozenset(
+    {
+        "repo.list",
+        "repo.search",
+        "repo.read",
+        "repo.outline",
+        "repo.symbol",
+        "repo.diff",
+    }
+)
 
 #: 运行任意程序的工具。它们的影响范围由操作系统沙箱限制，而不是由参数
 #: 允许列表限制，因此在没有可用沙箱时，策略必须完全拒绝它们。
@@ -82,10 +96,17 @@ class ToolFacts:
     mcp_server: str | None = None
     mcp_read_only: bool = False
     mcp_schema_drift: bool = False
+    #: 流水线从 RunContext 绑定的行为模式，工具参数不能覆盖。
+    agent_mode: AgentMode = AgentMode.AGENT
+    allowed_in_run: bool = True
+    within_scope: bool = True
+    replaces_required_recipe: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.exec_class, str):
             object.__setattr__(self, "exec_class", ExecClass(self.exec_class))
+        if isinstance(self.agent_mode, str):
+            object.__setattr__(self, "agent_mode", AgentMode(self.agent_mode))
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,9 +123,15 @@ class PolicyOutcome:
 
 def evaluate_policy(mode: PermissionMode, facts: ToolFacts) -> PolicyOutcome:
     """为一项提议决定 allow/ask/deny。这是纯函数，并且对所有输入都有定义。"""
+    if not facts.allowed_in_run:
+        return PolicyOutcome(PolicyDecision.DENY, "delegated_tool_unavailable", RiskLevel.HIGH)
+    if not facts.within_scope:
+        return PolicyOutcome(PolicyDecision.DENY, "outside_file_scope", RiskLevel.HIGH)
     if facts.tool_name.startswith("mcp."):
         if facts.mcp_schema_drift:
             return PolicyOutcome(PolicyDecision.DENY, "mcp_schema_drift", RiskLevel.HIGH)
+        if facts.agent_mode is AgentMode.PLAN and not facts.mcp_read_only:
+            return PolicyOutcome(PolicyDecision.DENY, "plan_mode", RiskLevel.MEDIUM)
         if mode is PermissionMode.READ_ONLY and not facts.mcp_read_only:
             return PolicyOutcome(PolicyDecision.DENY, "read_only_mode", RiskLevel.MEDIUM)
         if facts.mcp_read_only:
@@ -119,6 +146,11 @@ def evaluate_policy(mode: PermissionMode, facts: ToolFacts) -> PolicyOutcome:
         return PolicyOutcome(PolicyDecision.DENY, "outside_workspace", RiskLevel.HIGH)
     if facts.touches_protected_path:
         return PolicyOutcome(PolicyDecision.DENY, "protected_path", RiskLevel.HIGH)
+    if facts.replaces_required_recipe:
+        return PolicyOutcome(PolicyDecision.DENY, "required_recipe_frozen", RiskLevel.HIGH)
+
+    if facts.agent_mode is AgentMode.PLAN and facts.tool_name not in PLAN_TOOLS:
+        return PolicyOutcome(PolicyDecision.DENY, "plan_mode", RiskLevel.MEDIUM)
 
     if facts.tool_name in STATE_TOOLS:
         return PolicyOutcome(PolicyDecision.ALLOW, "state_tool", RiskLevel.NONE)
@@ -152,6 +184,9 @@ def evaluate_policy(mode: PermissionMode, facts: ToolFacts) -> PolicyOutcome:
 
     if facts.tool_name == "recipe.propose":
         return PolicyOutcome(PolicyDecision.ASK, "propose_recipe_requires_approval", RiskLevel.HIGH)
+
+    if facts.tool_name == "task.input":
+        return PolicyOutcome(PolicyDecision.ASK, "task_input_requires_approval", RiskLevel.HIGH)
 
     if facts.tool_name == "repo.create":
         return PolicyOutcome(PolicyDecision.ASK, "create_requires_approval", RiskLevel.MEDIUM)

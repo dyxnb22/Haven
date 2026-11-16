@@ -27,6 +27,16 @@ changes and separates them from evaluation verdicts.
   [0020](adr/0020-session-runtime-steering-rewind-lease.md),
   [0025](adr/0025-standing-approval-for-identical-checks.md), and
   [0027](adr/0027-provider-failures-that-are-recoverable.md).
+  Project guidance snapshots and idle reload follow
+  [0044](adr/0044-project-guidance-snapshots.md).
+  Explicit user-saved project notes follow
+  [0045](adr/0045-explicit-project-notes.md).
+  User-selected verification requirements follow
+  [0046](adr/0046-user-selected-verification.md).
+  Explicit task handoff notes follow
+  [0048](adr/0048-explicit-task-handoff.md).
+  Run-scoped model selection and usage follow
+  [0049](adr/0049-run-model-selection.md).
 
 ## Supporting design choices
 
@@ -47,6 +57,7 @@ changes and separates them from evaluation verdicts.
 - Technical documentation lookup: [0038](adr/0038-sandboxed-technical-docs-lookup.md).
 - Hardened MCP gateway: [0039](adr/0039-hardened-mcp-gateway.md).
 - Syntax pre-commit gate and diagnostic feeder: [0040](adr/0040-ast-guided-syntax-gate-and-diagnostic-feeder.md).
+- Retained process logs and bounded diagnostic views: [0047](adr/0047-retained-process-output.md).
 - Speculative git worktrees and atomic reconcile: [0041](adr/0041-speculative-git-worktrees-and-atomic-reconcile.md).
 - Dual-track hybrid model routing: [0042](adr/0042-dual-track-fast-explorer-and-deep-coder-routing.md).
 - Headless operation: [0021](adr/0021-headless-write-and-discovery-accept.md).

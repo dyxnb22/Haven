@@ -11,9 +11,14 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import Field, TypeAdapter
+from pydantic import Field, SerializerFunctionWrapHandler, TypeAdapter, model_serializer
 
 from haven.contracts.base import StrictModel
+from haven.contracts.handoff import HandoffNotes, HandoffSource
+from haven.contracts.model_call import ModelCallInfo
+from haven.contracts.process_output import ProcessReport
+from haven.contracts.user_input import UserInputRequest, UserInputResponse
+from haven.contracts.verification import CheckResultData, VerificationSelection
 
 SCHEMA_VERSION = 1
 
@@ -33,6 +38,8 @@ class RunCreated(StrictModel):
     goal: str
     #: 本次运行使用的权限模式，以稳定字符串值序列化。
     mode: str
+    #: 行为模式，与权限模式和审批策略独立；兼容旧事件。
+    agent_mode: str = "agent"
     #: 最终配置中选择的模型标识符。
     model_name: str
     #: 创建运行时记录的 Git 分支；不可用时为空。
@@ -47,6 +54,17 @@ class RunCreated(StrictModel):
     parent_run_id: str = ""
     #: 本次运行冻结的能力快照摘要（ADR 规划书 P2）。
     catalog_digest: str = ""
+    verification: VerificationSelection | None = None
+    model_preset: str = ""
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        data: dict[str, object] = handler(self)
+        if self.verification is None:
+            data.pop("verification", None)
+        if not self.model_preset:
+            data.pop("model_preset", None)
+        return data
 
 
 class StepStarted(StrictModel):
@@ -126,6 +144,14 @@ class ModelCompleted(StrictModel):
     reasoning_tokens: int = 0
     #: input_tokens 中由提供商提示缓存提供的部分。
     cached_input_tokens: int = 0
+    model_info: ModelCallInfo | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        data: dict[str, object] = handler(self)
+        if self.model_info is None:
+            data.pop("model_info", None)
+        return data
 
 
 class ToolProposed(StrictModel):
@@ -215,6 +241,16 @@ class ExecutionStarted(StrictModel):
     sandbox_backend: str = ""
 
 
+class HandoffUpdated(StrictModel):
+    """显式用户操作追加的笔记修订；None 是清除记录。"""
+
+    kind: Literal["handoff.updated"] = "handoff.updated"
+    run_id: str
+    notes: HandoffNotes | None
+    source: HandoffSource = "manual"
+    checkpoint_seq: int = Field(ge=0)
+
+
 class ToolCompleted(StrictModel):
     """工具调用结束后的状态、摘要、错误和耗时。"""
 
@@ -236,6 +272,15 @@ class ToolCompleted(StrictModel):
     truncated: bool = False
     #: 工具墙上时钟耗时，单位为毫秒。
     duration_ms: int = 0
+    #: 进程输出位置与诊断，仅用于展示；旧事件缺省为空。
+    process: ProcessReport | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        data: dict[str, object] = handler(self)
+        if self.process is None:
+            data.pop("process", None)
+        return data
 
 
 class EvidenceRecorded(StrictModel):
@@ -249,6 +294,15 @@ class EvidenceRecorded(StrictModel):
     evidence_kind: Literal["edit", "check", "diff"]
     #: 证据条目的有界说明。
     summary: str
+    #: 新检查的结构化结果；旧事件只保存说明，按原有方式显示。
+    check: CheckResultData | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        data: dict[str, object] = handler(self)
+        if self.check is None:
+            data.pop("check", None)
+        return data
 
 
 class DiffPreview(StrictModel):
@@ -336,6 +390,11 @@ class PlanStepView(StrictModel):
     title: str
     #: 为 UI 渲染的 PlanStep 状态。
     status: str
+    id: str = ""
+    depends_on: tuple[str, ...] = ()
+    acceptance: tuple[str, ...] = ()
+    evidence: tuple[str, ...] = ()
+    blocked_reason: str = ""
 
 
 class PlanUpdated(StrictModel):
@@ -347,6 +406,38 @@ class PlanUpdated(StrictModel):
     run_id: str
     #: 完整的有序计划快照。
     steps: tuple[PlanStepView, ...]
+    #: 计划整体状态，旧事件为空。
+    plan_status: str = ""
+
+
+class ReviewRequested(StrictModel):
+    kind: Literal["review.requested"] = "review.requested"
+    run_id: str
+    binding: str
+    files: tuple[str, ...]
+
+
+class ReviewResolved(StrictModel):
+    kind: Literal["review.resolved"] = "review.resolved"
+    run_id: str
+    binding: str
+    accepted: bool
+
+
+class UserInputRequested(StrictModel):
+    """已持久化的待答请求，界面可以安全展示。"""
+
+    kind: Literal["user_input.requested"] = "user_input.requested"
+    run_id: str
+    request: UserInputRequest
+
+
+class UserInputAnswered(StrictModel):
+    """程序已校验并保存用户回答或取消决定。"""
+
+    kind: Literal["user_input.answered"] = "user_input.answered"
+    run_id: str
+    response: UserInputResponse
 
 
 class Notice(StrictModel):
@@ -468,6 +559,7 @@ ApplicationEvent = Annotated[
     | ApprovalDecided
     | ExecutionStarted
     | ToolCompleted
+    | HandoffUpdated
     # 子 Agent 委托执行生命周期
     | ChildStarted
     | ChildFinished
@@ -478,6 +570,10 @@ ApplicationEvent = Annotated[
     | RequestEnvelope
     | ContextBuilt
     | PlanUpdated
+    | ReviewRequested
+    | ReviewResolved
+    | UserInputRequested
+    | UserInputAnswered
     # 会话运行时信息与诊断
     | Notice
     | SteerQueued

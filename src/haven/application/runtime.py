@@ -15,7 +15,8 @@ from haven.application.recovery_service import RecoveryService
 from haven.application.run_persistence import RunOutcome
 from haven.application.run_service import RunService, build_run_context_from_checkpoint
 from haven.contracts.checkpoint import CheckpointV1
-from haven.domain.enums import ApprovalDecision, ApprovalMode
+from haven.contracts.user_input import UserInputResponse
+from haven.domain.enums import AgentMode, ApprovalDecision, ApprovalMode
 from haven.ports.session import RunRecord, SessionStorePort
 
 
@@ -88,10 +89,20 @@ class HavenRuntime:
         *,
         skill_names: Sequence[str] = (),
         approval_mode: ApprovalMode | None = None,
+        agent_mode: AgentMode = AgentMode.AGENT,
+        require_review: bool = False,
+        check_group: str | None = None,
+        model_preset: str | None = None,
     ) -> RunOutcome:
         """启动新目标运行并等待执行收口。"""
         return await self._run_service.run(
-            goal, skill_names=skill_names, approval_mode=approval_mode
+            goal,
+            skill_names=skill_names,
+            approval_mode=approval_mode,
+            agent_mode=agent_mode,
+            require_review=require_review,
+            check_group=check_group,
+            model_preset=model_preset,
         )
 
     async def continue_run(
@@ -101,6 +112,8 @@ class HavenRuntime:
         *,
         skill_names: Sequence[str] = (),
         approval_mode: ApprovalMode | None = None,
+        check_group: str | None = None,
+        model_preset: str | None = None,
     ) -> RunOutcome:
         """在历史运行检查点基础上启动后续轮次。"""
         return await self._run_service.continue_run(
@@ -108,6 +121,26 @@ class HavenRuntime:
             follow_up,
             skill_names=skill_names,
             approval_mode=approval_mode,
+            check_group=check_group,
+            model_preset=model_preset,
+        )
+
+    async def implement_plan(
+        self,
+        run_id: str,
+        *,
+        skill_names: Sequence[str] = (),
+        approval_mode: ApprovalMode | None = None,
+        check_group: str | None = None,
+        model_preset: str | None = None,
+    ) -> RunOutcome:
+        """确认并执行已经准备好的计划；只读 Runtime 无法提升写权限。"""
+        return await self._run_service.implement_plan(
+            run_id,
+            skill_names=skill_names,
+            approval_mode=approval_mode,
+            check_group=check_group,
+            model_preset=model_preset,
         )
 
     async def resume_run(self, run_id: str) -> RunOutcome:
@@ -117,6 +150,10 @@ class HavenRuntime:
             raise ValueError(f"no checkpoint for run {run_id!r}; cannot resume it")
         ctx = build_run_context_from_checkpoint(checkpoint)
         return await self._run_service.resume(ctx)
+
+    async def answer_run(self, run_id: str, response: UserInputResponse) -> RunOutcome:
+        """提交结构化回答，或取消正在等待用户的运行。"""
+        return await self._run_service.answer_run(run_id, response)
 
     async def steer(self, text: str, *, run_id: str | None = None) -> bool:
         """为活跃运行注入用户转向指令。"""

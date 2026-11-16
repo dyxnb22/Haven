@@ -159,10 +159,41 @@ def test_doctor_detects_git_in_subdirectory(tmp_path: Path) -> None:
     assert result.exit_code == 0
 
 
-def test_doctor_creates_no_data_directory(tmp_path: Path) -> None:
+@pytest.mark.parametrize("module", ["pytest", "ruff"])
+def test_doctor_reports_missing_python_recipe_dependency_without_importing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, module: str
+) -> None:
+    import json
+    import sys
+
+    from haven.interfaces.cli_support import recipe_environment
+
+    (tmp_path / ".git").mkdir()
+    argv = json.dumps([sys.executable, "-m", module])
+    (tmp_path / ".haven.toml").write_text(f"[recipes.check]\nargv = {argv}\n")
+    installed = tmp_path / "empty-installed"
+    installed.mkdir()
+    monkeypatch.setattr(recipe_environment.sysconfig, "get_path", lambda name: str(installed))
+    marker = tmp_path / "imported"
+    (tmp_path / f"{module}.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).touch()\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    result = runner.invoke(app, ["doctor", "--workspace", str(tmp_path)])
+    assert result.exit_code == 2, result.output
+    assert "[FAIL] recipe check dependency" in result.stdout
+    assert f"Python module '{module}' is missing" in result.stdout
+    assert "prepare the project's dependencies" in result.stdout
+    assert not marker.exists()
+
+
+def test_doctor_creates_no_data_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`doctor` 声明自己没有副作用，因此不得创建数据目录。"""
     import os
 
+    from haven import bootstrap
+
+    monkeypatch.setattr(bootstrap, "select_launcher", lambda: None)
     data_dir = tmp_path / "haven-data-that-should-not-appear"
     os.environ["HAVEN_DATA_DIR"] = str(data_dir)
     try:
@@ -170,6 +201,7 @@ def test_doctor_creates_no_data_directory(tmp_path: Path) -> None:
     finally:
         del os.environ["HAVEN_DATA_DIR"]
     assert "data dir" in result.stdout
+    assert "[info] sandbox: unavailable; repo.exec is disabled" in result.stdout
     assert not data_dir.exists(), "doctor created the data directory"
 
 

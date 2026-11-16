@@ -3,6 +3,7 @@
     "kind": "run.created",
     "goal": "Fix the bug in add()",
     "mode": "interactive",
+    "agent_mode": "agent",
     "model_name": "scripted",
     "max_steps": 24,
     "sandbox_backend": "recording",
@@ -16,7 +17,7 @@
     "kind": "request.envelope",
     "step": 1,
     "reason": "initial",
-    "system_prompt_chars": 2509,
+    "system_prompt_chars": 2681,
     "tool_names": [
       "repo.list",
       "repo.search",
@@ -34,7 +35,9 @@
       "repo.check",
       "recipe.propose",
       "task.plan",
+      "user.ask",
       "task.start",
+      "task.input",
       "task.status",
       "task.logs",
       "task.stop",
@@ -52,7 +55,7 @@
       {
         "source": "system_rules",
         "trust": "trusted",
-        "size_bytes": 2513,
+        "size_bytes": 2685,
         "reason": "fixed operating rules"
       },
       {
@@ -74,12 +77,29 @@
     "step": 1,
     "text": "Locating the bug.",
     "tool_call_count": 1,
-    "input_tokens": 0,
-    "output_tokens": 0,
-    "usage_estimated": false,
+    "input_tokens": "<estimated>",
+    "output_tokens": "<estimated>",
+    "usage_estimated": true,
     "finish_reason": "tool_calls",
     "reasoning_tokens": 0,
-    "cached_input_tokens": 0
+    "cached_input_tokens": 0,
+    "model_info": {
+      "model_name": "scripted",
+      "selection_reason": "single",
+      "profile_name": "default",
+      "profile_source": "fallback",
+      "context_chars": 96000,
+      "context_window_tokens": 0,
+      "output_limit_tokens": 0,
+      "reasoning_supported": null,
+      "reasoning_effort": null,
+      "reasoning_replay": false,
+      "prefix_continuation": false,
+      "usage_source": "estimated",
+      "cost_usd": 0.0,
+      "cost_known": false,
+      "pricing_source": "unknown"
+    }
   },
   {
     "kind": "tool.proposed",
@@ -121,7 +141,7 @@
       {
         "source": "system_rules",
         "trust": "trusted",
-        "size_bytes": 2513,
+        "size_bytes": 2685,
         "reason": "fixed operating rules"
       },
       {
@@ -155,12 +175,29 @@
     "step": 2,
     "text": "",
     "tool_call_count": 1,
-    "input_tokens": 0,
-    "output_tokens": 0,
-    "usage_estimated": false,
+    "input_tokens": "<estimated>",
+    "output_tokens": "<estimated>",
+    "usage_estimated": true,
     "finish_reason": "tool_calls",
     "reasoning_tokens": 0,
-    "cached_input_tokens": 0
+    "cached_input_tokens": 0,
+    "model_info": {
+      "model_name": "scripted",
+      "selection_reason": "single",
+      "profile_name": "default",
+      "profile_source": "fallback",
+      "context_chars": 96000,
+      "context_window_tokens": 0,
+      "output_limit_tokens": 0,
+      "reasoning_supported": null,
+      "reasoning_effort": null,
+      "reasoning_replay": false,
+      "prefix_continuation": false,
+      "usage_source": "estimated",
+      "cost_usd": 0.0,
+      "cost_known": false,
+      "pricing_source": "unknown"
+    }
   },
   {
     "kind": "tool.proposed",
@@ -202,7 +239,7 @@
       {
         "source": "system_rules",
         "trust": "trusted",
-        "size_bytes": 2513,
+        "size_bytes": 2685,
         "reason": "fixed operating rules"
       },
       {
@@ -248,12 +285,29 @@
     "step": 3,
     "text": "",
     "tool_call_count": 1,
-    "input_tokens": 0,
-    "output_tokens": 0,
-    "usage_estimated": false,
+    "input_tokens": "<estimated>",
+    "output_tokens": "<estimated>",
+    "usage_estimated": true,
     "finish_reason": "tool_calls",
     "reasoning_tokens": 0,
-    "cached_input_tokens": 0
+    "cached_input_tokens": 0,
+    "model_info": {
+      "model_name": "scripted",
+      "selection_reason": "single",
+      "profile_name": "default",
+      "profile_source": "fallback",
+      "context_chars": 96000,
+      "context_window_tokens": 0,
+      "output_limit_tokens": 0,
+      "reasoning_supported": null,
+      "reasoning_effort": null,
+      "reasoning_replay": false,
+      "prefix_continuation": false,
+      "usage_source": "estimated",
+      "cost_usd": 0.0,
+      "cost_known": false,
+      "pricing_source": "unknown"
+    }
   },
   {
     "kind": "tool.proposed",
@@ -312,7 +366,7 @@
       {
         "source": "system_rules",
         "trust": "trusted",
-        "size_bytes": 2513,
+        "size_bytes": 2685,
         "reason": "fixed operating rules"
       },
       {
@@ -370,12 +424,29 @@
     "step": 4,
     "text": "",
     "tool_call_count": 1,
-    "input_tokens": 0,
-    "output_tokens": 0,
-    "usage_estimated": false,
+    "input_tokens": "<estimated>",
+    "output_tokens": "<estimated>",
+    "usage_estimated": true,
     "finish_reason": "tool_calls",
     "reasoning_tokens": 0,
-    "cached_input_tokens": 0
+    "cached_input_tokens": 0,
+    "model_info": {
+      "model_name": "scripted",
+      "selection_reason": "single",
+      "profile_name": "default",
+      "profile_source": "fallback",
+      "context_chars": 96000,
+      "context_window_tokens": 0,
+      "output_limit_tokens": 0,
+      "reasoning_supported": null,
+      "reasoning_effort": null,
+      "reasoning_replay": false,
+      "prefix_continuation": false,
+      "usage_source": "estimated",
+      "cost_usd": 0.0,
+      "cost_known": false,
+      "pricing_source": "unknown"
+    }
   },
   {
     "kind": "tool.proposed",
@@ -429,7 +500,7 @@
       {
         "source": "system_rules",
         "trust": "trusted",
-        "size_bytes": 2513,
+        "size_bytes": 2685,
         "reason": "fixed operating rules"
       },
       {
@@ -499,12 +570,29 @@
     "step": 5,
     "text": "",
     "tool_call_count": 1,
-    "input_tokens": 0,
-    "output_tokens": 0,
-    "usage_estimated": false,
+    "input_tokens": "<estimated>",
+    "output_tokens": "<estimated>",
+    "usage_estimated": true,
     "finish_reason": "tool_calls",
     "reasoning_tokens": 0,
-    "cached_input_tokens": 0
+    "cached_input_tokens": 0,
+    "model_info": {
+      "model_name": "scripted",
+      "selection_reason": "single",
+      "profile_name": "default",
+      "profile_source": "fallback",
+      "context_chars": 96000,
+      "context_window_tokens": 0,
+      "output_limit_tokens": 0,
+      "reasoning_supported": null,
+      "reasoning_effort": null,
+      "reasoning_replay": false,
+      "prefix_continuation": false,
+      "usage_source": "estimated",
+      "cost_usd": 0.0,
+      "cost_known": false,
+      "pricing_source": "unknown"
+    }
   },
   {
     "kind": "tool.proposed",
@@ -550,7 +638,16 @@
     "status": "ok",
     "error_code": "",
     "summary": "{\"recipe_id\": \"verify-calc\", \"exit_code\": 0, \"duration_ms\": <ms>, \"stdout_tail\": \"\", \"stderr_tail\": \"\"}",
-    "truncated": false
+    "truncated": false,
+    "process": {
+      "recipe_id": "verify-calc",
+      "exit_code": 0,
+      "timed_out": false,
+      "cwd": "<workspace>",
+      "output_digest": "<digest>",
+      "output_truncated": false,
+      "diagnostics": []
+    }
   },
   {
     "kind": "step.started",
@@ -563,7 +660,7 @@
       {
         "source": "system_rules",
         "trust": "trusted",
-        "size_bytes": 2513,
+        "size_bytes": 2685,
         "reason": "fixed operating rules"
       },
       {
@@ -645,12 +742,29 @@
     "step": 6,
     "text": "Fixed add(); diff and verify-calc both recorded.",
     "tool_call_count": 0,
-    "input_tokens": 0,
-    "output_tokens": 0,
-    "usage_estimated": false,
+    "input_tokens": "<estimated>",
+    "output_tokens": "<estimated>",
+    "usage_estimated": true,
     "finish_reason": "stop",
     "reasoning_tokens": 0,
-    "cached_input_tokens": 0
+    "cached_input_tokens": 0,
+    "model_info": {
+      "model_name": "scripted",
+      "selection_reason": "single",
+      "profile_name": "default",
+      "profile_source": "fallback",
+      "context_chars": 96000,
+      "context_window_tokens": 0,
+      "output_limit_tokens": 0,
+      "reasoning_supported": null,
+      "reasoning_effort": null,
+      "reasoning_replay": false,
+      "prefix_continuation": false,
+      "usage_source": "estimated",
+      "cost_usd": 0.0,
+      "cost_known": false,
+      "pricing_source": "unknown"
+    }
   },
   {
     "kind": "run.finished",

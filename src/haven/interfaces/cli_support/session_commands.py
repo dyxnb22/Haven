@@ -8,10 +8,13 @@ from pathlib import Path
 import typer
 
 from haven.interfaces.cli_support.common import EXIT_OK, EXIT_USAGE
-from haven.interfaces.cli_support.sinks import ConsoleSink
+from haven.interfaces.cli_support.sinks import ConsoleSink, _plain
 
 
-def sessions_list(limit: int = typer.Option(20, min=0, help="Max runs to show.")) -> None:
+def sessions_list(
+    limit: int = typer.Option(20, min=0, help="Max runs to show."),
+    search: str = typer.Option("", "--search", help="Search all session IDs, goals and statuses."),
+) -> None:
     """列出已存储的运行，最新的排在最前。"""
 
     async def _list() -> None:
@@ -19,7 +22,7 @@ def sessions_list(limit: int = typer.Option(20, min=0, help="Max runs to show.")
 
         store = await open_store()
         try:
-            runs = await store.list_runs(limit)
+            runs = await store.search_runs(search, limit)
             if not runs:
                 typer.echo("no runs stored yet")
                 return
@@ -55,6 +58,26 @@ def sessions_show(run_id: str) -> None:
             await store.close()
 
     raise typer.Exit(asyncio.run(_show()))
+
+
+def sessions_stats(run_id: str) -> None:
+    """汇总一次运行的模型、工具、重读、上下文和费用。"""
+
+    async def _stats() -> str:
+        from haven.bootstrap import open_store
+        from haven.interfaces.run_stats import run_stats_text
+
+        store = await open_store()
+        try:
+            return await run_stats_text(store, run_id)
+        finally:
+            await store.close()
+
+    try:
+        typer.echo(_plain(asyncio.run(_stats())))
+    except ValueError as exc:
+        typer.echo(f"error: {_plain(str(exc))}")
+        raise typer.Exit(EXIT_USAGE) from exc
 
 
 def gc(

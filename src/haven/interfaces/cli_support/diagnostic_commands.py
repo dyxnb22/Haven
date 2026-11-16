@@ -12,6 +12,10 @@ from haven.application.skills import SkillSelectionError, discover_skills
 from haven.config import ConfigError, load_config, user_skills_dir
 from haven.contracts.events import ContextBuilt
 from haven.interfaces.cli_support.common import EXIT_OK, EXIT_PROVIDER, EXIT_USAGE
+from haven.interfaces.cli_support.recipe_environment import (
+    python_tool_dependency,
+    resolve_recipe_executable,
+)
 
 
 def doctor(
@@ -21,6 +25,8 @@ def doctor(
     import os
     import shutil
     import sys
+
+    from haven.bootstrap import sandbox_backend_name, select_launcher
 
     failures = 0
 
@@ -38,6 +44,11 @@ def doctor(
         f"{sys.version_info.major}.{sys.version_info.minor}",
     )
     check("git", shutil.which("git") is not None, shutil.which("git") or "not found")
+    backend = sandbox_backend_name(select_launcher())
+    if backend == "none":
+        typer.echo("[info] sandbox: unavailable; repo.exec is disabled")
+    else:
+        check("sandbox", True, backend)
     ripgrep = shutil.which("rg")
     typer.echo(
         f"[ok ] ripgrep: {
@@ -78,12 +89,19 @@ def doctor(
             deep = config.router.deep_model or config.provider.model
             check("router", True, f"fast={fast}, deep={deep}")
         for recipe_id, spec in sorted(config.recipes.items()):
-            found = (
-                shutil.which(spec.argv[0]) is not None
-                or (ws / spec.argv[0]).exists()
-                or Path(spec.argv[0]).exists()
+            executable = resolve_recipe_executable(spec.argv[0], ws)
+            check(
+                f"recipe {recipe_id}",
+                executable is not None,
+                str(executable) if executable else f"{spec.argv[0]}: executable not found",
             )
-            check(f"recipe {recipe_id}", found, spec.argv[0])
+            dependency = python_tool_dependency(spec, executable) if executable else None
+            if dependency is not None:
+                available, detail = dependency
+                if available is None:
+                    typer.echo(f"[info] recipe {recipe_id} dependency: {detail}")
+                else:
+                    check(f"recipe {recipe_id} dependency", available, detail)
         for mcp_srv in config.mcp_servers:
             mcp_found = (
                 shutil.which(mcp_srv.command) is not None

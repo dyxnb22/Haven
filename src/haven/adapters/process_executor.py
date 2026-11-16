@@ -19,7 +19,14 @@ from pathlib import Path
 
 from haven.contracts.tools import RecipeSpec
 from haven.domain.exec_policy import split_pipeline
-from haven.ports.executor import CheckOutcome, ExecOutcome, ExecSpec
+from haven.ports.executor import (
+    ENV_ALLOWLIST,
+    EXEC_ENV_FIXED,
+    CapturedOutput,
+    CheckOutcome,
+    ExecOutcome,
+    ExecSpec,
+)
 from haven.ports.sandbox import (
     SandboxLauncher,
     SandboxSpec,
@@ -28,9 +35,42 @@ from haven.ports.sandbox import (
 )
 
 OUTPUT_CAP_BYTES = 64 * 1024
+SAVED_OUTPUT_CAP_BYTES = 2 * 1024 * 1024
 TERMINATE_GRACE_SECONDS = 2.0
 
-ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR", "VIRTUAL_ENV")
+
+class _OutputBuffer:
+    """持续排空管道；内存有界，日志保留头尾，模型仍只收到原来的尾部。"""
+
+    def __init__(self) -> None:
+        self.head = bytearray()
+        self.tail = bytearray()
+        self.total = 0
+
+    def append(self, chunk: bytes) -> None:
+        half = SAVED_OUTPUT_CAP_BYTES // 2
+        self.total += len(chunk)
+        self.head.extend(chunk[: max(0, half - len(self.head))])
+        self.tail.extend(chunk)
+        if len(self.tail) > half:
+            del self.tail[:-half]
+
+    def observation(self) -> tuple[bytes, bool]:
+        return bytes(self.tail[-OUTPUT_CAP_BYTES:]), self.total > OUTPUT_CAP_BYTES
+
+    def saved(self) -> str:
+        overlap = len(self.head) + len(self.tail) - self.total
+        if overlap >= 0:
+            content = bytes(self.head) + bytes(self.tail[overlap:])
+        else:
+            marker = f"\n... [{-overlap} output bytes omitted] ...\n".encode()
+            content = bytes(self.head) + marker + bytes(self.tail)
+        return content.decode("utf-8", errors="replace")
+
+    @property
+    def truncated(self) -> bool:
+        return self.total > SAVED_OUTPUT_CAP_BYTES
+
 
 #: 旧版本 check recipe 使用的工作区内临时目录名。保留该常量只为让评估夹具
 #: 忽略历史残留；新执行不会信任或创建这个可由仓库预置的路径。
@@ -90,6 +130,7 @@ class ProcessExecutor:
             stderr_tail=outcome.stderr_tail,
             truncated=outcome.truncated,
             timed_out=outcome.timed_out,
+            output=outcome.output,
         )
 
     async def run_exec(self, spec: ExecSpec) -> ExecOutcome:
@@ -117,10 +158,7 @@ class ProcessExecutor:
         env = {key: os.environ[key] for key in ENV_ALLOWLIST if key in os.environ}
         sandbox.scratch_dir.mkdir(parents=True, exist_ok=True)
         env["TMPDIR"] = str(sandbox.scratch_dir)
-        env["CI"] = "1"
-        env["DEBIAN_FRONTEND"] = "noninteractive"
-        env["TERM"] = "dumb"
-        env["NO_COLOR"] = "1"
+        env.update(EXEC_ENV_FIXED)
         env.update(self._extra_env)
 
         commands = [
@@ -132,6 +170,7 @@ class ProcessExecutor:
         procs: list[Process] = []
         pipes: list[tuple[int, int]] = []
         stderr_tasks: list[asyncio.Task[tuple[bytes, bool]]] = []
+        stderr_buffers: list[_OutputBuffer] = []
 
         try:
             prev_r: int | None = None
@@ -156,7 +195,9 @@ class ProcessExecutor:
                     start_new_session=os.name == "posix",
                 )
                 procs.append(proc)
-                stderr_tasks.append(asyncio.create_task(self._read_bounded(proc.stderr)))
+                buffer = _OutputBuffer()
+                stderr_buffers.append(buffer)
+                stderr_tasks.append(asyncio.create_task(self._read_bounded(proc.stderr, buffer)))
 
                 if prev_r is not None:
                     with contextlib.suppress(OSError):
@@ -173,6 +214,7 @@ class ProcessExecutor:
                         os.close(fd)
             for p in procs:
                 await self._shutdown(p)
+            await self._cancel_readers(*stderr_tasks)
             return ExecOutcome(
                 exit_code=127,
                 duration_ms=int((time.monotonic() - started) * 1000),
@@ -184,7 +226,8 @@ class ProcessExecutor:
 
         timed_out = False
         last_proc = procs[-1]
-        stdout_task = asyncio.create_task(self._read_bounded(last_proc.stdout))
+        stdout_buffer = _OutputBuffer()
+        stdout_task = asyncio.create_task(self._read_bounded(last_proc.stdout, stdout_buffer))
 
         try:
             async with asyncio.timeout(timeout_seconds):
@@ -202,6 +245,8 @@ class ProcessExecutor:
             for p in procs:
                 await self._shutdown(p)
             await self._cancel_readers(stdout_task, *stderr_tasks)
+            out, out_trunc = stdout_buffer.observation()
+            err_results = [buffer.observation() for buffer in stderr_buffers]
         except BaseException:
             for p in procs:
                 await self._shutdown(p)
@@ -235,6 +280,9 @@ class ProcessExecutor:
             if exit_code == 0 and last_proc.returncode is not None:
                 exit_code = last_proc.returncode
             combined_err = "\n".join(err_parts)
+        saved_stderr = _OutputBuffer()
+        for index, buffer in enumerate(stderr_buffers):
+            saved_stderr.append(f"[pipeline stage {index + 1}]\n{buffer.saved()}\n".encode())
         return ExecOutcome(
             exit_code=124 if timed_out else exit_code,
             duration_ms=duration_ms,
@@ -242,6 +290,13 @@ class ProcessExecutor:
             stderr_tail=combined_err,
             truncated=out_trunc or any_err_trunc,
             timed_out=timed_out,
+            output=CapturedOutput(
+                stdout_buffer.saved(),
+                saved_stderr.saved(),
+                stdout_buffer.truncated
+                or saved_stderr.truncated
+                or any(buffer.truncated for buffer in stderr_buffers),
+            ),
         )
 
     async def _run(
@@ -256,10 +311,7 @@ class ProcessExecutor:
         sandbox.scratch_dir.mkdir(parents=True, exist_ok=True)
         env["TMPDIR"] = str(sandbox.scratch_dir)
         # 强制非交互与禁用 ANSI 光标/彩色重绘，保障沙箱运行不受交互提示阻塞
-        env["CI"] = "1"
-        env["DEBIAN_FRONTEND"] = "noninteractive"
-        env["TERM"] = "dumb"
-        env["NO_COLOR"] = "1"
+        env.update(EXEC_ENV_FIXED)
         env.update(self._extra_env)
 
         command = self._launcher.wrap(argv, sandbox) if self._launcher is not None else argv
@@ -289,8 +341,9 @@ class ProcessExecutor:
                 timed_out=False,
             )
         timed_out = False
-        stdout_task = asyncio.create_task(self._read_bounded(proc.stdout))
-        stderr_task = asyncio.create_task(self._read_bounded(proc.stderr))
+        stdout_buffer, stderr_buffer = _OutputBuffer(), _OutputBuffer()
+        stdout_task = asyncio.create_task(self._read_bounded(proc.stdout, stdout_buffer))
+        stderr_task = asyncio.create_task(self._read_bounded(proc.stderr, stderr_buffer))
         try:
             async with asyncio.timeout(timeout_seconds):
                 await self._wait_for_leader_exit(proc)
@@ -305,6 +358,8 @@ class ProcessExecutor:
             out, out_trunc, err, err_trunc = b"", False, b"", False
             await self._shutdown(proc)
             await self._cancel_readers(stdout_task, stderr_task)
+            out, out_trunc = stdout_buffer.observation()
+            err, err_trunc = stderr_buffer.observation()
         except BaseException:
             await self._shutdown(proc)
             await self._cancel_readers(stdout_task, stderr_task)
@@ -319,25 +374,28 @@ class ProcessExecutor:
             stderr_tail=err.decode("utf-8", errors="replace"),
             truncated=out_trunc or err_trunc,
             timed_out=timed_out,
+            output=CapturedOutput(
+                stdout_buffer.saved(),
+                stderr_buffer.saved(),
+                stdout_buffer.truncated or stderr_buffer.truncated,
+            ),
         )
 
     @staticmethod
-    async def _read_bounded(stream: asyncio.StreamReader | None) -> tuple[bytes, bool]:
+    async def _read_bounded(
+        stream: asyncio.StreamReader | None, buffer: _OutputBuffer | None = None
+    ) -> tuple[bytes, bool]:
         """最多保留末尾的 OUTPUT_CAP_BYTES；其余内容继续排空，避免子进程
         因管道写满而阻塞。"""
         if stream is None:
             return b"", False
-        buffer = b""
-        truncated = False
+        capture = buffer if buffer is not None else _OutputBuffer()
         while True:
             chunk = await stream.read(65536)
             if not chunk:
                 break
-            buffer += chunk
-            if len(buffer) > OUTPUT_CAP_BYTES:
-                buffer = buffer[-OUTPUT_CAP_BYTES:]
-                truncated = True
-        return buffer, truncated
+            capture.append(chunk)
+        return capture.observation()
 
     @staticmethod
     async def _cancel_readers(*tasks: asyncio.Task[tuple[bytes, bool]]) -> None:

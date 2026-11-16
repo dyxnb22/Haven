@@ -28,6 +28,8 @@
 
 ## 快速开始（离线，不需要 API key）
 
+仅安装运行依赖、检查平台支持或升级旧会话时，参见[安装与升级说明](docs/INSTALL_UPGRADE.md)。
+
 ```bash
 uv sync --locked
 
@@ -101,11 +103,11 @@ flowchart TD
 - **持久化执行**：SQLite 检查点 + 追加式事件日志；恢复流程会分类中断的副作用，无法判断时绝不自动重放。
 - 流式响应、取消、预算（步骤 / 工具 / 时间 / token / 成本）和卡死循环检测。
 - 可复现的离线评估套件，覆盖任务、健壮性、安全、注入、预算和恢复用例，并有硬安全门禁。
-- **先有收益门禁，再加功能**：MCP、模型驱动的 reviewer subagent、planner/FSM、subagent 编排和完整 LSP 集成等能力，已根据实测失败数据评估并有意不实现；理由记录在 ADR 0007，以及实时评估阶段之后的 ADR 0023 中。
+- 具备独立上下文和父任务预算记账的只读 scout/reviewer 模型循环、带依赖和证据的结构化计划、受控 MCP 工具和工作树审阅。早期取舍见 ADR 0007、ADR 0023；当前行为见[能力说明](docs/REMAINING_CAPABILITIES.md)。
 
 ## 非目标（v1）
 
-多代理编排 · RAG/GraphRAG · 浏览器 / computer-use / 语音 / 图片 · 云账号或远程执行 · 不受限制的 shell（`repo.exec` 只接受 argv；显式 shell 解释器必须审批且仍处于沙箱中）· 自动 commit/push/PR · 多 Provider 路由 · MCP。这样可以证明核心保证，而不是只做概念性承诺。
+不受限制的多代理编排 · RAG/GraphRAG · 浏览器 / computer-use / 语音 / 图片 · 云账号或远程执行 · 不受限制的 shell（`repo.exec` 只接受 argv；显式 shell 解释器必须审批且仍处于沙箱中）· 自动 commit/push/PR · 多 Provider 路由。
 
 ## 命令面
 
@@ -117,16 +119,25 @@ haven tui [PATH]                     # 在指定工作区启动交互式 TUI
 haven init --workspace PATH [--accept]   # 一步初始化：环境摘要 + 配方发现
 haven run GOAL --workspace PATH      # 无头模式；默认只读
 haven run GOAL --write --approval-policy reject|trusted-recipe|all [--jsonl] [--events F]
+haven run GOAL --plan                # 只读调研并生成待确认计划
+haven run GOAL --write --worktree --review   # 保留验证后的改动，等待人工审阅
+haven review RUN_ID [--file PATH --hunk N]   # 逐文件、逐 hunk 查看隔离改动
+haven review RUN_ID --apply|--discard --binding DIGEST   # 确认或丢弃审阅快照
+haven implement RUN_ID --approval-policy reject|trusted-recipe|all   # 确认并执行计划
+haven answer RUN_ID --request ID --answers '{"scope":"Parser"}'  # 回答已保存的问题
 haven continue RUN_ID FOLLOW_UP      # 保留上下文继续运行
 haven discover --workspace PATH [--accept]   # 建议（或保存）.haven.toml 配方
 haven doctor --workspace PATH        # 环境检查，不产生副作用
 haven gc [--keep N] [--older-than-days D] [--yes]   # 清理旧运行（默认只预览）
 haven sessions list | show RUN_ID
+haven sessions list --search QUERY   # 按 ID、目标或状态搜索完整历史
 haven replay RUN_ID                  # 纯日志投影，不调用模型或工具
 haven resume RUN_ID                  # 恢复检查后进入 TUI
 haven rewind RUN_ID                  # 撤销已完成运行的文件修改（失败即关闭）
 haven reconcile RUN_ID CALL_ID --as confirmed|not_run|abandon
 haven export RUN_ID --format jsonl|markdown
+haven output RUN_ID [CALL_ID]        # 检查状态、诊断位置和已保存的进程日志
+haven handoff RUN_ID [--prepare|--set FILE --expected-seq N|--history|--clear]
 haven debug-context GOAL             # 模型会看到什么，以及原因
 haven debug-context --run RUN_ID     # 查看每一步记录的上下文
 haven eval --offline [--category task,security]
@@ -137,9 +148,72 @@ haven config explain --workspace PATH
 
 <!-- END CLI COMMAND SURFACE -->
 
-TUI 中的 `/help`、`/mode`、`/budget`、`/context`、`/sessions`、`/skill`、`/fork`、`/rewind`、`/diff`、`/export` 和 `/quit` 提供交互控制。`@path` 文件提及会让代理通过 `repo.read` 访问文件，不会绕过工具边界；运行期间输入的文字会排队到下一轮，而不是打断当前轮。
+TUI 中的 `/help`、`/mode`、`/budget`、`/context`、`/new`、`/sessions`、`/skill`、`/fork`、`/rewind`、`/diff`、`/review`、`/export` 和 `/quit` 提供交互控制。`@path` 文件提及会让代理通过 `repo.read` 访问文件，不会绕过工具边界；运行期间输入的文字会排队到下一轮，而不是打断当前轮。
 
-退出码稳定：`0` 成功 · `2` 用法错误 · `3` 策略 / 权限 · `4` Provider · `5` 工具 · `6` 预算 / 停止 · `7` 需要恢复。
+`/new` 开始全新对话；`/sessions QUERY` 可搜索历史，选择打开、恢复中断任务或分支。`/diff FILE` 可逐文件、逐 hunk 查看；TUI 隔离工作树合流前必须确认，保留后可用 `/review` 再次审阅。待回答或待审阅时不能启动另一项任务。
+
+后台进程可通过 `task.input` 接收 stdin；`task.start(terminal=true)` 启用 POSIX PTY。计划步骤支持稳定 ID、依赖、阻塞原因、验收标准和真实证据引用。使用方法与边界见[能力说明](docs/REMAINING_CAPABILITIES.md)。
+
+使用 `/plan GOAL` 进入只读规划，查看计划后可继续发消息修订；`/implement`（或 `/implement RUN_ID`）才会确认执行。普通追问和 `/mode` 审批策略切换不会解除规划限制。状态与恢复语义见 [Plan 模式](docs/PLAN_MODE.md)。
+
+Agent 可以通过 `user.ask` 提出选择题或自由文本问题。TUI 展示回答表单，`/answer` 可重新打开；无头运行以退出码 `8` 返回 `needs_input`，用 `haven answer` 回答后继续同一次运行。等待期间不轮询模型，问题、预算和证据可恢复；暂停工作树也会保留。详见 [用户追问](docs/USER_INPUT.md)。
+
+退出码稳定：`0` 成功 · `2` 用法错误 · `3` 策略 / 权限 · `4` Provider · `5` 工具 · `6` 预算 / 停止 · `7` 需要恢复 · `8` 等待回答。
+
+TUI 主输入框支持 ↑/↓ 浏览最近 20 条已提交任务；向下越过最新一条时，会恢复浏览前
+尚未提交的草稿。历史按工作区保存到现有会话数据库，重启后仍可使用；草稿只保留在
+内存中。斜杠命令和追问表单的答案不会加入任务输入历史。
+使用 `/history` 查看，`/history clear` 只清除当前工作区的输入历史。
+在浏览历史时执行这两个命令，会恢复浏览前的草稿。
+使用 `/memory` 查看新运行将采用的已加载项目指引，以及来源、范围、未加载原因和
+截断情况。查看只展示已有快照，不重新读取文件或调用模型。
+空闲时用 `/memory reload` 重新加载外部修改，下一次新任务或后续轮次采用新内容；
+运行中、等待回答或等待审阅时不能刷新。恢复旧任务沿用该任务保存的快照；
+没有快照的旧检查点会提示后使用当前指引。刷新读取实际工作区（启用隔离时为工作树），
+权限、技能、验证配方和 MCP 配置不随之刷新。
+空闲时在 `/remember` 后输入约定正文，可保存到 Haven 本地用户数据。
+`/memory` 展示笔记 ID 和创建时间；`/memory forget ID` 删除一条，
+`/memory clear` 清空本项目笔记。最多 20 条、每条 500 字符、正文合计 2000 字符；
+达到容量时拒绝新增。笔记与仓库指引分开，作为不可信资料进入新运行；
+重启及更换隔离工作树后，仍按同一主工作区加载。删除笔记不改写历史任务中的快照。
+修改笔记不重新读取仓库文件；外部文件修改仍用 `/memory reload` 加载。
+
+用 `/verify` 查看验证配置组和当前结果；`/verify use NAME` 选择下一次运行
+必须通过的检查，`/verify clear` 显式清除下一次的选择。
+无头运行可用 `--check-group NAME`，后续轮次默认继承原要求。
+每项必需检查都要按配置的完整命令在最后一次写入后通过；
+漏项、失败、过期或追加筛选参数的结果均不能满足要求。
+配置、权限、Plan、恢复与 `--clear-check-group` 见
+[验证配置组](docs/VERIFICATION_GROUPS.md)。
+
+使用 pytest 和 Ruff 的项目可按 [Python 工程流程](docs/PYTHON_WORKFLOW.md)
+完成配方预览与确认、环境及权限检查、隔离修改、两项验证和审阅应用。
+`doctor` 会报告 Haven 同一 Python 环境中缺失的 pytest/Ruff 模块；
+其他解释器的依赖可用性明确标为未知。
+
+Evidence 页集中展示必需检查状态、最近的进程结果、诊断位置和日志回看命令。
+`/output` 切换到该页，`/output CALL_ID` 只读分页查看日志，不调用模型。
+无头运行用 `haven output RUN_ID` 查看概览，加 `CALL_ID` 回看日志。
+保存上限、分页和导出方式见[进程输出说明](docs/PROCESS_OUTPUT.md)。
+
+`/handoff` 查看任务事实和工作笔记；用 `/handoff prepare`、`/handoff edit`、
+`/handoff history`、`/handoff clear` 显式整理暂停或结束任务的交接。
+决策、尝试和下一步可跨压缩与恢复保留，笔记仍是不可信资料，
+必需检查始终从账本计算。追问表单的 **Keep paused** 可保留问题并回到主界面，
+稍后用 `/answer` 重开。使用和恢复边界见[长任务交接](docs/HANDOFF.md)。
+
+`/model` 查看模型预设和最近一次调用，`/model use NAME` 为后续新运行选择预设。
+无头运行接受 `--model-preset NAME`。保存的任务沿用原路由恢复。见[模型预设](docs/MODEL_PRESETS.md)。
+
+`/stats` 或 `haven sessions stats RUN_ID` 汇总单次运行的模型和工具耗时、重读范围、
+上下文构建、token 和估算费用。最慢的调用带有事件序号，可在 JSONL 导出中查阅。
+工具耗时包含审批等待。压缩次数按日志中带摘要或预算截断的构建计算。
+进行中的运行显示已记录的数据。
+
+任务完成、失败或等待回答时，TUI 和交互终端中的人类可读无头运行会触发终端响铃。
+设置 `HAVEN_BELL=0` 可关闭；终端设置决定它是声音还是视觉提示。重定向输出、
+JSON 输出、重放和委派子任务结束时不会响铃。常见密钥、验证配方和权限错误会附带
+下一步操作建议；请在任务的工作区中运行建议的配置命令。
 
 ## 开发
 
@@ -154,21 +228,25 @@ uv run python scripts/gates.py --list        # 检查图及其依赖
 
 ## 测量结果
 
-所有结果都可以在不使用 API key 的干净 checkout 中复现。下面的数字由 `scripts/refresh_metrics.py` 生成，发生漂移时 CI 会失败：
+离线测试、覆盖率和评估可以不使用 API key 复现；实时模型成绩是历史测量，
+不表示本版本重新跑过。表格由 `scripts/refresh_metrics.py` 生成，CI 检查漂移。
+工作区之外的测量可用 `--coverage-data PATH`、`--offline-report PATH` 指定；
+加 `--preserve-historical-live` 保留已有历史成绩，不读取真实评测目录。
+用相同参数加 `--check` 可验证生成表。
 
 <!-- BEGIN GENERATED METRICS (scripts/refresh_metrics.py; do not edit by hand) -->
 
 | 指标 | 数值 |
 |---|---|
-| 自动化测试 | 1232 |
-| 行覆盖率（`src/`） | 89% |
-| 源码 / 测试规模 | 约 24.1k / 约 18.8k 行 |
-| 类型检查模块（`mypy --strict`） | 123 |
-| 架构决策记录 | 43 |
+| 自动化测试 | 1484 |
+| 行覆盖率（`src/`） | 90% |
+| 源码 / 测试规模 | 约 30.3k / 约 25.0k 行 |
+| 类型检查模块（`mypy --strict`） | 153 |
+| 架构决策记录 | 49 |
 | 离线评估 | 40/40 通过，0 个安全违规 |
 | 评估类别 | security 16 · task 10 · robustness 6 · injection 4 · budget 2 · recovery 2 |
-| 实时真实仓库套件（deepseek-v4-flash） | 修复后 75/79（31/31 + 9/9 + 5/5 + 20/20 + 9/13 + 1/1）；0 个安全违规——原始运行和根因见 docs/EVAL_LIVE.md |
-| 同版本完整重跑 | 一次不间断运行中 61/65（失败归因见 docs/EVAL_LIVE.md） |
+| 历史实时真实仓库套件（deepseek-v4-flash） | 修复后 75/79（31/31 + 9/9 + 5/5 + 20/20 + 9/13 + 1/1）；0 个安全违规——原始运行和根因见 docs/EVAL_LIVE.md |
+| 历史同版本完整重跑 | 一次不间断运行中 61/65（失败归因见 docs/EVAL_LIVE.md） |
 
 <!-- END GENERATED METRICS -->
 
@@ -197,6 +275,7 @@ uv run python scripts/gates.py --list        # 检查图及其依赖
 | [`docs/notes/`](docs/notes/) | 轻量级决策笔记 |
 | [`docs/adr/`](docs/adr/) | 不就地改写的架构决策历史记录 |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md)（及 ROADMAP2/3） | 已执行的改进计划和构建顺序记录 |
+| [`docs/PERSONAL_ROADMAP.md`](docs/PERSONAL_ROADMAP.md) | 个人长期规划：优先级、阶段、验收标准与范围（尚未实施的路线图） |
 
 ## 从这个仓库学习
 
@@ -209,7 +288,7 @@ Haven 是独立实现的 Python 项目。[Morrow](https://github.com/dyxnb22/Mor
 ## 已知限制
 
 - 模型提议的 `repo.exec` 需要 Seatbelt（macOS）或 Landlock（Linux），在工作区只读、不能读取 `$HOME`、不能访问网络（Landlock 覆盖 TCP；UDP/DNS 仍是 Linux 的已知缺口）。注册的 `repo.check` 使用可写工作区配置，并可通过已审阅配方选择网络；审批卡会再次展示实际命令、工作区写权限、网络权限和额外可读目录。没有沙箱后端的平台仍会在本地信任仓库假设下运行检查，但会拒绝 `repo.exec`。这不是容器或虚拟机：IPC 是开放的，`$HOME` 之外的密钥可能仍可读取。见 [ADR 0009](docs/adr/0009-os-sandbox-and-general-exec.md)、[ADR 0013](docs/adr/0013-sandbox-scope-exec-vs-check.md) 和 [ADR 0030](docs/adr/0030-exact-effect-attribution.md)。
-- Provider 返回 usage 时 token / 成本统计是精确的，否则会清楚标记为 `estimated`。
+- Token 用量来自 Provider 或有标记的估算。费用按费率卡估算，费率缺失时显示 `unknown`。
 - 单仓库、单 Provider、固定验证配方，不自动修改 Git 历史。
 
 ## 许可证

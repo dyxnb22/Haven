@@ -8,16 +8,18 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 MAX_DIAGNOSTICS_ITEMS = 25
+MAX_DIAGNOSTIC_MESSAGE_CHARS = 500
+MAX_DIAGNOSTICS_SUMMARY_CHARS = 4000
 
 # 匹配 pytest short test summary 或 fixture / teardown 报错：
 # FAILED tests/unit/test_calc.py::test_add - AssertionError: assert 0 == 4
 # FAILED tests/test_foo.py::TestCls::test_m - ValueError: bad value
 # ERROR tests/unit/test_calc.py::test_add - Exception: fixture failed
-_PYTEST_FAILED = re.compile(r"^(?:FAILED|ERROR)\s+([^:\s]+)::([^\s]+)\s+-\s+(.+)$")
+_PYTEST_FAILED = re.compile(r"^(?:FAILED|ERROR)\s+(.+?)::([^\s]+)\s+-\s+(.+)$")
 _PYTEST_COLLECTION_ERR = re.compile(r"^ERROR\s+collecting\s+([^:\s]+)")
 
 # 匹配 pytest 失败用例头部段落：
@@ -28,24 +30,25 @@ _PYTEST_SECTION_HEADER = re.compile(r"^_{5,}\s+(\S+)\s+_{5,}$")
 # 匹配 pytest / python 文件行内错误定位：
 # tests/unit/test_calc.py:12: in test_add
 # tests/unit/test_calc.py:12: AssertionError: ...
-_PYTEST_LOCATION_ERR = re.compile(r"^([a-zA-Z0-9_\-./\\]+\.py):(\d+):")
+_PYTEST_LOCATION_ERR = re.compile(r"^(.+?\.py):(\d{1,9}):")
 
 # 匹配 Mypy:
 # src/calc.py:15: error: Incompatible types [assignment]
 # src/calc.py:15:10: warning: ...
 _MYPY_DIAG = re.compile(
-    r"^([a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9_]+):(\d+)(?::(\d+))?:\s+(error|warning|note):\s+(.*?)(?:\s+\[([a-zA-Z0-9_\-]+)\])?$"
+    r"^(.+?\.[a-zA-Z0-9_]+):(\d{1,9})(?::(\d{1,9}))?:\s+(error|warning|note):\s+(.*?)(?:\s+\[([a-zA-Z0-9_\-]+)\])?$"
 )
 
 # 匹配 Ruff / Flake8:
 # src/calc.py:10:5: F401 'math' imported but unused
 _RUFF_DIAG = re.compile(
-    r"^([a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9_]+):(\d+):(\d+):\s+([A-Z]\d+|[A-Z]+[0-9]+)\s+(.+)$"
+    r"^(.+?\.[a-zA-Z0-9_]+):(\d{1,9}):(\d{1,9}):\s+([A-Z]\d+|[A-Z]+[0-9]+)\s+(.+)$"
 )
+_RUFF_HEADER = re.compile(r"^([A-Z]+[0-9]+)\s+(?:\[\*\]\s+)?(.+)$")
 
 # 匹配 Python 堆栈调用帧：
 # File "/path/to/file.py", line 42, in func_name
-_TRACEBACK_FRAME = re.compile(r'File "([^"]+)", line (\d+), in (\S+)')
+_TRACEBACK_FRAME = re.compile(r'File "([^"]+)", line (\d{1,9}), in (\S+)')
 
 # 匹配 Python 未捕获异常行（支持带模块路径的点号与各类内置/自定义异常）：
 # ZeroDivisionError: division by zero
@@ -57,20 +60,20 @@ _TRACEBACK_EXC = re.compile(r"^([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]
 # error[E0425]: cannot find value
 #   --> src/main.rs:12:5
 _RUST_ERR = re.compile(r"^error\[([a-zA-Z0-9]+)\]:\s+(.*)$")
-_RUST_LOC = re.compile(r"^\s*-->\s+([^:]+):(\d+):(\d+)$")
+_RUST_LOC = re.compile(r"^\s*-->\s+(.+):(\d{1,9}):(\d{1,9})$")
 
 # 匹配 TypeScript 编译器 (tsc) 输出:
 # src/index.ts:15:22 - error TS2304: Cannot find name 'x'.
 # src/index.ts(15,22): error TS2304: Cannot find name 'x'.
 _TSC_DIAG = re.compile(
-    r"^([a-zA-Z0-9_\-./\\]+\.[tj]sx?)(?:\((\d+),(\d+)\)|:(\d+):(\d+))(?::|\s+-)?\s+(error|warning)\s+([A-Z0-9]+):\s+(.*)$"
+    r"^([a-zA-Z0-9_\-./\\]+\.[tj]sx?)(?:\((\d{1,9}),(\d{1,9})\)|:(\d{1,9}):(\d{1,9}))(?::|\s+-)?\s+(error|warning)\s+([A-Z0-9]+):\s+(.*)$"
 )
 
 # 匹配 Go 编译与 golangci-lint 输出:
 # main.go:12:5: undefined: myVar
 # pkg/server.go:45:10: S1000: should use for range instead of ...
 _GO_DIAG = re.compile(
-    r"^([a-zA-Z0-9_\-./\\]+\.go):(\d+):(\d+):\s+(?:([A-Z]\d+|[A-Z]+[0-9]+):\s+)?(.*)$"
+    r"^([a-zA-Z0-9_\-./\\]+\.go):(\d{1,9}):(\d{1,9}):\s+(?:([A-Z]\d+|[A-Z]+[0-9]+):\s+)?(.*)$"
 )
 
 # ANSI 颜色转义字符匹配器，防止终端带色彩输出干扰模式匹配
@@ -177,7 +180,7 @@ def _extract_pytest_diagnostics(lines: list[str]) -> list[DiagnosticItem]:
 def _extract_ruff_diagnostics(lines: list[str]) -> list[DiagnosticItem]:
     """从 Ruff / Flake8 输出提取代码检查违规条目。"""
     items: list[DiagnosticItem] = []
-    for line in lines:
+    for index, line in enumerate(lines):
         m = _RUFF_DIAG.match(line)
         if m:
             items.append(
@@ -190,6 +193,18 @@ def _extract_ruff_diagnostics(lines: list[str]) -> list[DiagnosticItem]:
                     message=m.group(5),
                 )
             )
+        elif (header := _RUFF_HEADER.match(line)) and index + 1 < len(lines):
+            location = _RUST_LOC.match(lines[index + 1])
+            if location:
+                items.append(
+                    DiagnosticItem(
+                        file=location.group(1),
+                        line=int(location.group(2)),
+                        column=int(location.group(3)),
+                        rule_or_code=header.group(1),
+                        message=header.group(2),
+                    )
+                )
     return items
 
 
@@ -363,6 +378,12 @@ def extract_diagnostics(
     seen: set[tuple[str | None, int | None, str]] = set()
 
     def add_item(item: DiagnosticItem) -> None:
+        item = replace(
+            item,
+            file=item.file[:512] if item.file else None,
+            rule_or_code=item.rule_or_code[:80] if item.rule_or_code else None,
+            message=item.message[:MAX_DIAGNOSTIC_MESSAGE_CHARS],
+        )
         key = (item.file, item.line, item.message)
         if key not in seen and len(items) < MAX_DIAGNOSTICS_ITEMS:
             seen.add(key)
@@ -390,6 +411,20 @@ def extract_diagnostics(
     return items
 
 
+def format_diagnostic(d: DiagnosticItem) -> str:
+    """单条可定位的展示文字；终端转义由展示层负责。"""
+    loc = ""
+    if d.file:
+        loc = d.file
+        if d.line is not None:
+            loc += f":{d.line}"
+            if d.column is not None:
+                loc += f":{d.column}"
+        loc += " "
+    code = f"[{d.rule_or_code}] " if d.rule_or_code else ""
+    return f"{loc}({d.severity}) {code}{d.message}".strip()
+
+
 def format_diagnostics_summary(diagnostics: list[DiagnosticItem]) -> str:
     """将诊断条目格式化为面向模型观察的一览摘要。"""
     if not diagnostics:
@@ -397,15 +432,9 @@ def format_diagnostics_summary(diagnostics: list[DiagnosticItem]) -> str:
     count = len(diagnostics)
     header = f"Found {count} diagnostic issue(s):"
     lines = [header]
-    for d in diagnostics:
-        loc = ""
-        if d.file:
-            loc = d.file
-            if d.line is not None:
-                loc += f":{d.line}"
-                if d.column is not None:
-                    loc += f":{d.column}"
-            loc += " "
-        code = f"[{d.rule_or_code}] " if d.rule_or_code else ""
-        lines.append(f"- {loc}({d.severity}) {code}{d.message}".strip())
-    return "\n".join(lines)
+    lines.extend(f"- {format_diagnostic(d)}" for d in diagnostics[:MAX_DIAGNOSTICS_ITEMS])
+    summary = "\n".join(lines)
+    if len(summary) > MAX_DIAGNOSTICS_SUMMARY_CHARS:
+        marker = "\n... (more diagnostic text omitted; see saved output)"
+        summary = summary[: MAX_DIAGNOSTICS_SUMMARY_CHARS - len(marker)] + marker
+    return summary

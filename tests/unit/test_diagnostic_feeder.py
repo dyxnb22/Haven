@@ -1,9 +1,34 @@
 """结构化诊断提取器测试（ADR 0040）。"""
 
 from haven.application.diagnostic_feeder import (
+    MAX_DIAGNOSTICS_SUMMARY_CHARS,
     extract_diagnostics,
     format_diagnostics_summary,
 )
+
+
+def test_current_ruff_multiline_output_including_unicode_paths() -> None:
+    stdout = "F401 [*] `json` imported but unused\n --> src/计算 模块.py:7:8\n  |\n"
+    diagnostics = extract_diagnostics("ruff", stdout, "", 1)
+    assert len(diagnostics) == 1
+    assert diagnostics[0].file == "src/计算 模块.py"
+    assert (diagnostics[0].line, diagnostics[0].column) == (7, 8)
+    assert diagnostics[0].rule_or_code == "F401"
+
+
+def test_diagnostic_messages_and_summary_have_independent_limits() -> None:
+    stdout = "\n".join(f"src/a.py:{index}:1: F401 {'x' * 10000}" for index in range(1, 100))
+    diagnostics = extract_diagnostics("ruff", stdout, "", 1)
+    assert len(diagnostics) == 25
+    assert all(len(item.message) <= 500 for item in diagnostics)
+    summary = format_diagnostics_summary(diagnostics)
+    assert len(summary) <= MAX_DIAGNOSTICS_SUMMARY_CHARS
+    assert "saved output" in summary
+
+
+def test_malformed_huge_line_numbers_do_not_crash_diagnostic_parsing() -> None:
+    stdout = f"F401 unused import\n --> src/a.py:{'9' * 5000}:1\n"
+    assert extract_diagnostics("ruff", stdout, "", 1)
 
 
 class TestDiagnosticFeeder:

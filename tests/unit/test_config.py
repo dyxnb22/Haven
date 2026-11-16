@@ -39,6 +39,31 @@ def test_project_registers_recipes(tmp_path: Path) -> None:
     assert config.recipes["tests"].argv == ("pytest", "-q")
 
 
+def test_recipe_explanation_tracks_final_source_and_execution_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user = user_config_path()
+    user.parent.mkdir(parents=True, exist_ok=True)
+    user.write_text(
+        '[recipes.shared]\nargv = ["user-check"]\n[recipes.user_only]\nargv = ["user-only"]\n'
+    )
+    project = tmp_path / ".haven.toml"
+    project.write_text(
+        '[recipes.shared]\nargv = ["project-check", "two words"]\n'
+        'allow_network = true\nreadable_roots = ["~/toolchain"]\ntimeout_seconds = 42\n'
+    )
+    monkeypatch.setenv("LANG", "private-language-value")
+    rows = {key: (value, source) for key, value, source in explain(load_config(tmp_path))}
+    assert rows["recipes.shared"] == ("project-check 'two words' [network allowed]", str(project))
+    assert rows["recipes.user_only"] == ("user-only", str(user))
+    assert rows["recipes.shared.network"] == ("allowed", str(project))
+    assert rows["recipes.shared.readable_roots"] == ('["~/toolchain"]', str(project))
+    assert rows["recipes.shared.timeout_seconds"] == ("42.0", str(project))
+    assert "LANG" in rows["execution.env.forwarded"][0]
+    assert "private-language-value" not in str(rows)
+    assert "worktree" in rows["execution.cwd"][0]
+
+
 def test_a_tier_selects_its_budget(tmp_path: Path) -> None:
     assert load_config(tmp_path, "deep").budget.max_steps == 80
     assert load_config(tmp_path, "quick").budget.max_steps == 8

@@ -9,6 +9,8 @@ pytest 规则编码了针对五个真实仓库测得的经验（`docs/EVAL_LIVE.
 tests 目录作为结构回退，并为 src 布局修复 `pythonpath=src`。
 """
 
+import pytest
+
 from haven.domain.discovery import RecipeCandidate, discover_recipes
 
 
@@ -48,6 +50,47 @@ class TestPytestConfigSignals:
         assert argv is not None
         assert argv[0] != "pytest"
         assert argv[:3] == ("python", "-m", "pytest")
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"pyproject.toml": "[tool.ruff]\nline-length = 100\n"},
+        {"pyproject.toml": "[tool.ruff.lint]\nselect = ['F']\n"},
+        {"ruff.toml": "line-length = 100\n"},
+        {".ruff.toml": ""},
+    ],
+)
+def test_explicit_ruff_configuration_suggests_a_fixed_non_mutating_lint_command(
+    files: dict[str, str],
+) -> None:
+    candidates = discover_recipes(files)
+    ruff = next(recipe for recipe in candidates if recipe.id == "ruff")
+    assert ruff.argv == ("python", "-m", "ruff", "check", "--no-cache", ".")
+    assert "installed" in ruff.rationale
+
+
+def test_ruff_is_not_guessed_from_comments_or_injected_project_commands() -> None:
+    for content in (
+        '# [tool.ruff]\n[project]\nname = "demo"\n',
+        '[project]\nname = "ruff"\ndescription = "[tool.ruff]"\n',
+        '[project.scripts]\nruff = "untrusted:main"\n',
+        "not valid TOML [tool.ruff]",
+    ):
+        assert not any(
+            recipe.id == "ruff" for recipe in discover_recipes({"pyproject.toml": content})
+        )
+
+
+def test_pytest_and_ruff_are_discovered_once_in_a_stable_order() -> None:
+    files = {
+        "pyproject.toml": "[tool.pytest.ini_options]\n[tool.ruff]\n",
+        ".ruff.toml": "",
+        "ruff.toml": "",
+    }
+    candidates = discover_recipes(files)
+    assert [recipe.id for recipe in candidates] == ["pytest", "ruff"]
+    assert ".ruff.toml" in candidates[1].rationale
 
 
 class TestStructuralFallback:

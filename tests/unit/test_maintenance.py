@@ -15,6 +15,7 @@ from haven.contracts.checkpoint import (
 )
 from haven.domain.budget import Budget, BudgetUsage
 from haven.domain.enums import RunStatus
+from haven.domain.evidence import DiffEvidence, EditEvidence, EvidenceLedger
 
 
 async def _seed_run(
@@ -129,3 +130,38 @@ async def test_negative_keep_is_rejected() -> None:
         await collect_garbage(MemorySessionStore(), keep=-1)
     with pytest.raises(ValueError, match="older_than_days"):
         await collect_garbage(MemorySessionStore(), older_than_days=-1)
+
+
+async def test_pending_review_protects_run_and_recorded_diff_until_resolved() -> None:
+    from haven.contracts.review import ReviewSnapshot
+
+    store = MemorySessionStore()
+    await _seed_run(store, "review")
+    diff_digest = await store.put_artifact(b"recorded diff")
+    checkpoint = await store.load_checkpoint("review")
+    assert checkpoint is not None
+    ledger = (
+        EvidenceLedger()
+        .with_edit(EditEvidence(1, "a.py", "before", "after"))
+        .with_diff(DiffEvidence(2, 1, 1, 1, diff_digest))
+    )
+    checkpoint = checkpoint.model_copy(
+        update={"require_review": True, "evidence": EvidenceSnapshot.from_domain(ledger)}
+    )
+    await store.save_checkpoint(checkpoint)
+    report = await collect_garbage(store, keep=0, apply=True)
+    assert report.skipped_active == ("review",)
+    assert await store.get_artifact(diff_digest) == b"recorded diff"
+    resolved = ReviewSnapshot(
+        run_id="review",
+        binding="binding",
+        files=("a.py",),
+        diff="recorded diff",
+        preimages={"a.py": "before"},
+        postimages={"a.py": "after"},
+        applied=True,
+    )
+    await store.save_checkpoint(checkpoint.model_copy(update={"review": resolved}))
+    report = await collect_garbage(store, keep=0, apply=True)
+    assert report.deleted == ("review",)
+    assert await store.get_artifact(diff_digest) is None

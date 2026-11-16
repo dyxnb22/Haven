@@ -114,6 +114,8 @@ class BudgetUsage:
     cost_usd: float = 0.0
     #: 任一用量或费用是否来自估算，而非提供商的精确计数。
     usage_estimated: bool = False
+    #: 所有已记账模型调用是否都有费率；未知部分不能被后续已知调用抹掉。
+    cost_known: bool = True
 
     def __post_init__(self) -> None:
         counters = (
@@ -157,6 +159,7 @@ class BudgetUsage:
         *,
         estimated: bool,
         cached_input_tokens: int = 0,
+        cost_known: bool = True,
     ) -> BudgetUsage:
         """累计 token、缓存命中量和费用，并传播估算标记。"""
         if (
@@ -174,6 +177,7 @@ class BudgetUsage:
             cached_input_tokens=self.cached_input_tokens + cached_input_tokens,
             cost_usd=self.cost_usd + cost_usd,
             usage_estimated=self.usage_estimated or estimated,
+            cost_known=self.cost_known and cost_known,
         )
 
     @property

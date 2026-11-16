@@ -10,6 +10,7 @@ import os
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 
 from haven.adapters.git_baseline import capture_git_baseline
@@ -26,13 +27,17 @@ from haven.adapters.worktree import (
     create_ephemeral_worktree,
     is_git_repo,
     reconcile_worktree_to_main,
+    reopen_ephemeral_worktree,
 )
 from haven.application.approvals import ApprovalResponder
 from haven.application.context_builder import ContextBuilder
+from haven.application.diff_review import ReviewService
 from haven.application.emitter import EventEmitter
 from haven.application.mcp_resources import load_imported_resources
+from haven.application.model_catalog import ModelCatalog
 from haven.application.model_router import ModelRouter
-from haven.application.profiles import profile_for
+from haven.application.profiles import ModelProfile, profile_for, provider_profile_for
+from haven.application.project_memory import ProjectMemoryService
 from haven.application.recovery_service import RecoveryService
 from haven.application.replay_service import ReplayService
 from haven.application.run_persistence import RunOutcome
@@ -47,8 +52,11 @@ from haven.config import (
     load_config,
     user_skills_dir,
 )
-from haven.contracts.events import ContextSegment
+from haven.contracts.events import ContextSegment, ReviewResolved
+from haven.contracts.guidance import GuidanceSnapshot, GuidanceSource
 from haven.contracts.model import ModelRequest
+from haven.contracts.project_memory import render_project_notes
+from haven.contracts.review import ReviewSnapshot
 from haven.contracts.tools import tool_schemas
 from haven.domain.budget import BudgetUsage
 from haven.domain.enums import ApprovalMode, PermissionMode, RunStatus
@@ -104,12 +112,49 @@ class AppServices:
     approval_mode: ApprovalMode = ApprovalMode.ASK
     #: 临时投机工作树实例（ADR 0041）；未启用时为 None。
     ephemeral_worktree: EphemeralWorktree | None = None
+    #: 重开的暂停工作树在获得明确运行结果之前不能清理。
+    preserve_worktree: bool = False
 
     async def reconcile_worktree_if_succeeded(self, outcome: RunOutcome) -> list[str]:
         """如果处于临时工作树隔离模式且运行成功，将变更合流回主工作区。"""
+        self.preserve_worktree = outcome.status is RunStatus.WAITING_USER
         if self.ephemeral_worktree is not None and outcome.status is RunStatus.SUCCEEDED:
-            return await reconcile_worktree_to_main(self.ephemeral_worktree)
+            snapshot = await self.prepare_review(outcome.run_id)
+            checkpoint = await self.store.load_checkpoint(outcome.run_id)
+            if checkpoint is not None and checkpoint.require_review and snapshot.files:
+                return []
+            return await self.apply_review(outcome.run_id, snapshot.binding)
         return []
+
+    def review_service(self) -> ReviewService:
+        if self.ephemeral_worktree is None:
+            raise ValueError("this session has no isolated worktree")
+        worktree = self.ephemeral_worktree
+
+        async def apply(
+            paths: tuple[str, ...], before: dict[str, str], after: dict[str, str]
+        ) -> list[str]:
+            try:
+                return await reconcile_worktree_to_main(
+                    worktree, paths, expected_preimages=before, expected_postimages=after
+                )
+            except WorkspaceError as exc:
+                raise ValueError(str(exc)) from exc
+
+        return ReviewService(
+            self.store, self.workspace, FsWorkspace(worktree.repo_root), apply, self.emitter
+        )
+
+    async def prepare_review(self, run_id: str) -> ReviewSnapshot:
+        self.preserve_worktree = True
+        return await self.review_service().prepare(run_id)
+
+    async def apply_review(self, run_id: str, binding: str) -> list[str]:
+        self.preserve_worktree = True
+        paths = await self.review_service().apply(run_id, binding)
+        self.run_service.mark_reviewed(run_id)
+        self.preserve_worktree = False
+        return paths
 
     @property
     def runtime(self) -> HavenRuntime:
@@ -128,17 +173,19 @@ class AppServices:
             await self.run_service.close()
         finally:
             try:
-                await _close_model(self.model)
+                await self.store.close()
             finally:
                 try:
-                    await self.store.close()
+                    if (
+                        self.ephemeral_worktree is not None
+                        and not self.preserve_worktree
+                        and not self.run_service.has_pending_input
+                        and not self.run_service.has_pending_review
+                    ):
+                        await cleanup_ephemeral_worktree(self.ephemeral_worktree)
                 finally:
-                    try:
-                        if self.ephemeral_worktree is not None:
-                            await cleanup_ephemeral_worktree(self.ephemeral_worktree)
-                    finally:
-                        if self.lease is not None:
-                            self.lease.release()
+                    if self.lease is not None:
+                        self.lease.release()
 
 
 def select_launcher(platform: str | None = None) -> SandboxLauncher | None:
@@ -182,6 +229,7 @@ async def build_services(
     fast_model: ModelPort | str | None = None,
     deep_model: ModelPort | str | None = None,
     fast_turns: int | None = None,
+    resume_workspace: Path | None = None,
 ) -> AppServices:
     """组装一个工作区的完整服务图；所有接口都通过此函数完成组装。
 
@@ -208,7 +256,15 @@ async def build_services(
     ephemeral_wt: EphemeralWorktree | None = None
     should_worktree = worktree if worktree is not None else config.worktree
     active_root = workspace_root
-    if should_worktree:
+    reopening = resume_workspace is not None and resume_workspace.resolve() != workspace_root
+    if reopening:
+        assert resume_workspace is not None
+        try:
+            ephemeral_wt = await reopen_ephemeral_worktree(workspace_root, resume_workspace)
+        except WorkspaceError as exc:
+            raise BootstrapError(str(exc)) from exc
+        active_root = ephemeral_wt.worktree_path
+    elif should_worktree:
         if not await is_git_repo(workspace_root):
             raise BootstrapError(f"worktree isolation requires a git repository: {workspace_root}")
         ephemeral_wt = await create_ephemeral_worktree(
@@ -229,6 +285,7 @@ async def build_services(
             lease_warning = f"{held}; this session is read-only"
 
     store: SqliteSessionStore | None = None
+    model_catalog: ModelCatalog | None = None
     try:
         workspace = FsWorkspace(active_root)
         store = await SqliteSessionStore.open(store_path or db_path(), artifacts_dir())
@@ -239,70 +296,36 @@ async def build_services(
             if fast_turns is not None
             else (config.router.fast_turns if config.router else None)
         )
+        pricing_is_override = config.sources.get("pricing") == "user"
+        if (
+            model is None
+            and isinstance(fast_model, ModelPort)
+            and isinstance(deep_model, ModelPort)
+        ):
+            model = ModelRouter(fast_model, deep_model, fast_turns=effective_fast_turns)
         if model is None:
-            if isinstance(fast_model, ModelPort) and isinstance(deep_model, ModelPort):
-                model = ModelRouter(
-                    fast_model=fast_model, deep_model=deep_model, fast_turns=effective_fast_turns
-                )
-            else:
-                assert api_key is not None
-                use_router = (
-                    (config.router is not None and config.router.enabled)
-                    or fast_model is not None
-                    or deep_model is not None
-                )
-                if use_router:
-                    fast_name = (
-                        fast_model
-                        if isinstance(fast_model, str)
-                        else (
-                            config.router.fast_model
-                            if config.router and config.router.fast_model
-                            else "gpt-4o-mini"
-                        )
-                    )
-                    deep_name = (
-                        deep_model
-                        if isinstance(deep_model, str)
-                        else (
-                            config.router.deep_model
-                            if config.router and config.router.deep_model
-                            else config.provider.model
-                        )
-                    )
-                    fast_p = profile_for(fast_name)
-                    deep_p = profile_for(deep_name)
-                    fast_inst = OpenAICompatibleModel(
-                        base_url=config.provider.base_url,
-                        api_key=api_key,
-                        model=fast_name,
-                        requires_tool_call_reasoning=fast_p.requires_tool_call_reasoning,
-                        idle_timeout=fast_p.stream_idle_timeout_s,
-                    )
-                    deep_inst = OpenAICompatibleModel(
-                        base_url=config.provider.base_url,
-                        api_key=api_key,
-                        model=deep_name,
-                        requires_tool_call_reasoning=deep_p.requires_tool_call_reasoning,
-                        idle_timeout=deep_p.stream_idle_timeout_s,
-                    )
-                    model = ModelRouter(
-                        fast_model=fast_inst,
-                        deep_model=deep_inst,
-                        fast_turns=effective_fast_turns,
-                    )
-                else:
-                    configured_profile = profile_for(config.provider.model)
-                    model = OpenAICompatibleModel(
-                        base_url=config.provider.base_url,
-                        api_key=api_key,
-                        model=config.provider.model,
-                        requires_tool_call_reasoning=configured_profile.requires_tool_call_reasoning,
-                        idle_timeout=configured_profile.stream_idle_timeout_s,
-                    )
+            assert api_key is not None
+            default_spec = config.default_model_spec(
+                fast_model=fast_model if isinstance(fast_model, str) else None,
+                deep_model=deep_model if isinstance(deep_model, str) else None,
+                fast_turns=effective_fast_turns,
+            )
+            model_catalog = ModelCatalog(
+                default=default_spec,
+                presets=config.model_presets,
+                base_url=config.provider.base_url,
+                pricing_override=config.pricing if pricing_is_override else None,
+                create=partial(_build_provider_model, config.provider.base_url, api_key),
+            )
+            model = model_catalog.bind(model_catalog.select(None))
 
-        profile = profile_for(model.model_name)
-        if config.sources.get("pricing") == "default" and profile.pricing.is_known:
+        resolve_profile = model_catalog.profile_for if model_catalog else profile_for
+        profile = resolve_profile(model.model_name)
+        if (
+            not isinstance(model, ModelRouter)
+            and not pricing_is_override
+            and profile.pricing.is_known
+        ):
             config = replace(
                 config,
                 pricing=profile.pricing,
@@ -310,7 +333,8 @@ async def build_services(
             )
 
         baseline = await capture_git_baseline(workspace_root)
-        guidance = await _read_guidance(workspace)
+        project_memory = ProjectMemoryService(store, str(workspace_root))
+        guidance = await _read_project_memory_snapshot(workspace, project_memory)
         skills = discover_skills(user_root=user_skills_dir(), project_root=workspace_root)
         candidate = select_launcher()
         launcher = candidate if candidate is not None and candidate.available() else None
@@ -337,9 +361,15 @@ async def build_services(
             mode=mode,
             budget=config.budget,
             pricing=config.pricing,
+            pricing_is_override=pricing_is_override,
+            model_catalog=model_catalog,
             git_branch=baseline.branch,
             git_commit=baseline.commit,
-            project_guidance=guidance,
+            project_guidance=guidance.text,
+            guidance_snapshot=guidance,
+            guidance_loader=partial(_read_project_memory_snapshot, workspace, project_memory),
+            project_memory=project_memory,
+            verification_groups=config.verification_groups,
             skills=skills,
             launcher=launcher,
             approval_mode=resolved_approval_mode,
@@ -368,26 +398,92 @@ async def build_services(
             lease_warning=lease_warning,
             approval_mode=resolved_approval_mode,
             ephemeral_worktree=ephemeral_wt,
+            preserve_worktree=reopening,
         )
     except BaseException:
         try:
-            await _close_model(model)
+            if model_catalog is not None:
+                await model_catalog.close()
+            else:
+                await _close_model(model)
         finally:
             try:
-                await _close_model(getattr(model, "fast_model", None))
-                await _close_model(getattr(model, "deep_model", None))
+                if model_catalog is None:
+                    await _close_model(getattr(model, "fast_model", None))
+                    await _close_model(getattr(model, "deep_model", None))
             finally:
                 try:
                     if store is not None:
                         await store.close()
                 finally:
                     try:
-                        if ephemeral_wt is not None:
+                        if ephemeral_wt is not None and not reopening:
                             await cleanup_ephemeral_worktree(ephemeral_wt)
                     finally:
                         if lease is not None:
                             lease.release()
         raise
+
+
+async def review_saved_run(
+    run_id: str,
+    workspace_path: Path,
+    *,
+    binding: str = "",
+    apply: bool = False,
+    discard: bool = False,
+) -> tuple[ReviewSnapshot, list[str]]:
+    """离线审阅已保留的隔离工作树；不创建模型客户端。"""
+    root = resolve_workspace(workspace_path)
+    store = await open_store()
+    lease = None
+    try:
+        record = await store.get_run(run_id)
+        if record is None or record.status is not RunStatus.SUCCEEDED:
+            raise ValueError("review requires a successful saved run")
+        worktree = await reopen_ephemeral_worktree(root, Path(record.workspace))
+        local = FsWorkspace(worktree.worktree_path)
+        main = FsWorkspace(root)
+
+        async def reconcile(
+            paths: tuple[str, ...], before: dict[str, str], after: dict[str, str]
+        ) -> list[str]:
+            return await reconcile_worktree_to_main(
+                worktree, paths, expected_preimages=before, expected_postimages=after
+            )
+
+        service = ReviewService(store, local, main, reconcile)
+        checkpoint = await store.load_checkpoint(run_id)
+        if checkpoint is None:
+            raise ValueError("no checkpoint to review")
+        if apply or discard:
+            if apply and discard:
+                raise ValueError("choose either --apply or --discard")
+            if checkpoint.review is None or checkpoint.review.binding != binding:
+                raise ValueError("provide the --binding printed by haven review")
+            try:
+                lease = acquire_workspace_lease(root, data_dir() / "leases")
+            except LeaseHeld as exc:
+                raise ValueError(str(exc)) from exc
+            if discard:
+                if checkpoint.review.applied or checkpoint.review.discarded:
+                    raise ValueError("review has already been resolved")
+                snapshot = checkpoint.review.model_copy(update={"discarded": True})
+                await cleanup_ephemeral_worktree(worktree)
+                await store.save_checkpoint(checkpoint.model_copy(update={"review": snapshot}))
+                await EventEmitter(store, []).emit(
+                    run_id, ReviewResolved(run_id=run_id, binding=binding, accepted=False)
+                )
+                return snapshot, []
+            paths = await service.apply(run_id, binding)
+            await cleanup_ephemeral_worktree(worktree)
+            assert checkpoint.review is not None
+            return checkpoint.review.model_copy(update={"applied": True}), paths
+        return await service.prepare(run_id), []
+    finally:
+        if lease is not None:
+            lease.release()
+        await store.close()
 
 
 async def _close_model(model: ModelPort | None) -> None:
@@ -406,40 +502,89 @@ _GUIDANCE_FILENAMES = ("AGENTS.md", "CLAUDE.md")
 _MAX_SCOPED_GUIDANCE = 6
 
 
-async def _read_guidance(workspace: FsWorkspace) -> str:
-    """合并有作用域的指令文件，先根目录，且全部视为不可信数据。
+async def _read_project_memory_snapshot(
+    workspace: FsWorkspace, memory: ProjectMemoryService
+) -> GuidanceSnapshot:
+    guidance = await _read_guidance_snapshot(workspace)
+    return guidance.model_copy(update={"notes": await memory.load()})
 
-    Codex 和 opencode 都会把项目根目录的指导与更靠近代码的具体文件逐层
-    合并；Haven 现在也采用相同方式，但设有边界：先读取根目录的
-    AGENTS.md/CLAUDE.md，再读取少量子目录中的 AGENTS.md。每个文件都有独立
-    标题，以便模型区分作用域。这些内容始终是不可信数据，不能改变权限，
-    且合并结果总长度上限为 MAX_GUIDANCE_CHARS。
-    """
+
+async def _read_guidance(workspace: FsWorkspace) -> str:
+    """保留原有字符串接口，预览和实际运行使用相同的有界指引。"""
+    return (await _read_guidance_snapshot(workspace)).text
+
+
+async def _read_guidance_snapshot(workspace: FsWorkspace) -> GuidanceSnapshot:
+    """按原顺序和预算合并指引，同时记录实际包含的来源和未加载原因。"""
     sections: list[str] = []
-    for name in _GUIDANCE_FILENAMES:
-        text = await _read_one_guidance(workspace, name)
+    sources: list[GuidanceSource] = []
+    skipped_scopes = 0
+
+    async def include(path: str, scope: str) -> bool:
+        source, text = await _read_guidance_source(workspace, path, scope)
         if text:
-            sections.append(f"# {name} (repository root)\n{text}")
+            label = "repository root" if scope == "." else f"scoped to {scope}/"
+            section = f"# {path} ({label})\n{text}"
+            start = sum(map(len, sections)) + 2 * len(sections)
+            included = min(len(section), max(0, MAX_GUIDANCE_CHARS - start))
+            source = source.model_copy(
+                update={
+                    "status": "loaded" if included else "omitted",
+                    "included_chars": included,
+                    "truncated": source.truncated or included < len(section),
+                    "reason": "total character budget"
+                    if included < len(section)
+                    else source.reason,
+                }
+            )
+            sections.append(section)
+        sources.append(source)
+        return bool(text)
+
+    for name in _GUIDANCE_FILENAMES:
+        await include(name, ".")
 
     scoped = 0
-    for rel in _scoped_guidance_paths(workspace.root):
+    paths = _scoped_guidance_paths(workspace.root)
+    for index, rel in enumerate(paths):
         if scoped >= _MAX_SCOPED_GUIDANCE:
+            skipped_scopes = len(paths) - index
             break
-        text = await _read_one_guidance(workspace, rel)
-        if text:
-            sections.append(f"# {rel} (scoped to {rel.rsplit('/', 1)[0]}/)\n{text}")
+        if await include(rel, rel.rsplit("/", 1)[0]):
             scoped += 1
 
-    return "\n\n".join(sections)[:MAX_GUIDANCE_CHARS]
+    return GuidanceSnapshot(
+        text="\n\n".join(sections)[:MAX_GUIDANCE_CHARS],
+        sources=tuple(sources[:32]),
+        max_chars=MAX_GUIDANCE_CHARS,
+        per_file_chars=MAX_GUIDANCE_CHARS // 2,
+        per_file_lines=200,
+        skipped_scopes=skipped_scopes,
+        unreported_sources=max(0, len(sources) - 32),
+    )
 
 
-async def _read_one_guidance(workspace: FsWorkspace, rel: str) -> str:
+async def _read_guidance_source(
+    workspace: FsWorkspace, rel: str, scope: str
+) -> tuple[GuidanceSource, str]:
     try:
         result = await workspace.read_file(rel, 1, 200)
-    except WorkspaceError:
-        return ""
-    # 每个文件单独设置上限，避免某个大文件在总上限生效前挤掉其他文件。
-    return result.content[: MAX_GUIDANCE_CHARS // 2].strip()
+    except WorkspaceError as exc:
+        return GuidanceSource(
+            path=rel,
+            scope=scope,
+            status="missing" if exc.code == "not_found" else "unavailable",
+            reason=exc.code,
+        ), ""
+    text = result.content[: MAX_GUIDANCE_CHARS // 2].strip()
+    truncated = result.truncated or len(result.content) > MAX_GUIDANCE_CHARS // 2
+    return GuidanceSource(
+        path=rel,
+        scope=scope,
+        status="loaded" if text else "empty",
+        truncated=truncated,
+        reason="file character/line limit" if truncated else "",
+    ), text
 
 
 def _scoped_guidance_paths(root: Path) -> list[str]:
@@ -449,10 +594,24 @@ def _scoped_guidance_paths(root: Path) -> list[str]:
     遍历时直接剪枝跳过的目录，而不是先遍历再过滤结果，因此不会进入庞大的
     node_modules 或 .venv 目录。
     """
-    skip = {".git", ".haven", "node_modules", ".venv", "venv", "__pycache__", ".tox", "dist"}
+    skip = {
+        ".git",
+        ".haven",
+        "node_modules",
+        ".venv",
+        "venv",
+        "__pycache__",
+        ".tox",
+        "dist",
+        "eval_report",
+    }
+    excluded = {"evals/real", "evals/headtohead"}
     found: list[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in skip)
+        relative = Path(dirpath).relative_to(root)
+        dirnames[:] = sorted(
+            d for d in dirnames if d not in skip and (relative / d).as_posix() not in excluded
+        )
         if "AGENTS.md" in filenames:
             rel = Path(dirpath).relative_to(root) / "AGENTS.md"
             if rel.as_posix() != "AGENTS.md":  # 根文件已读取
@@ -472,19 +631,27 @@ def make_workspace(path: Path) -> FsWorkspace:
     return FsWorkspace(path.resolve())
 
 
+def _build_provider_model(
+    base_url: str, api_key: str, name: str, profile: ModelProfile
+) -> OpenAICompatibleModel:
+    return OpenAICompatibleModel(
+        base_url=base_url,
+        api_key=api_key,
+        model=name,
+        requires_tool_call_reasoning=profile.requires_tool_call_reasoning,
+        idle_timeout=profile.stream_idle_timeout_s,
+        use_max_completion_tokens=profile.use_max_completion_tokens,
+        default_reasoning_effort=profile.reasoning_effort,
+    )
+
+
 def build_provider(config: ResolvedConfig) -> OpenAICompatibleModel:
     """根据最终配置创建 OpenAI 兼容模型；缺少密钥时拒绝启动。"""
     api_key = config.provider.api_key()
     if api_key is None:
         raise BootstrapError(f"no API key found in ${config.provider.api_key_env}")
-    profile = profile_for(config.provider.model)
-    return OpenAICompatibleModel(
-        base_url=config.provider.base_url,
-        api_key=api_key,
-        model=config.provider.model,
-        requires_tool_call_reasoning=profile.requires_tool_call_reasoning,
-        idle_timeout=profile.stream_idle_timeout_s,
-    )
+    profile = provider_profile_for(config.provider.model, config.provider.base_url)
+    return _build_provider_model(config.provider.base_url, api_key, config.provider.model, profile)
 
 
 async def build_context_preview(
@@ -501,14 +668,23 @@ async def build_context_preview(
     """
     workspace_root = resolve_workspace(workspace_path)
     config = load_config(workspace_root)
-    guidance = await _read_guidance(FsWorkspace(workspace_root))
+    workspace = FsWorkspace(workspace_root)
+    guidance = await _read_guidance_snapshot(workspace)
+    if db_path().is_file():
+        store = await SqliteSessionStore.open(db_path(), artifacts_dir())
+        try:
+            memory = ProjectMemoryService(store, str(workspace_root))
+            guidance = guidance.model_copy(update={"notes": await memory.load()})
+        finally:
+            await store.close()
     skills = discover_skills(user_root=user_skills_dir(), project_root=workspace_root)
     builder = ContextBuilder(
         goal=goal,
         tools=tool_schemas(),
         budget=config.budget,
         recipe_ids=tuple(config.recipes),
-        project_guidance=guidance,
+        project_guidance=guidance.text,
+        project_notes=render_project_notes(guidance.notes),
         skills=skills.skills,
         selected_skills=resolve_selected_skills(skills.skills, skill_names),
         imported_resources=load_imported_resources(workspace_root),

@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from haven.adapters.process_executor import OUTPUT_CAP_BYTES, ProcessExecutor
+from haven.adapters.process_executor import (
+    OUTPUT_CAP_BYTES,
+    SAVED_OUTPUT_CAP_BYTES,
+    ProcessExecutor,
+)
 from haven.contracts.tools import RecipeSpec
 from haven.ports.executor import ExecSpec
 from haven.ports.sandbox import SandboxSpec
@@ -28,6 +32,68 @@ def exec_spec(tmp_path: Path, *code: str, timeout: float = 10.0) -> ExecSpec:
             workspace_root=tmp_path, scratch_dir=tmp_path / "scratch", writable=True
         ),
     )
+
+
+async def test_saved_output_keeps_early_errors_outside_the_observation_tail(tmp_path: Path) -> None:
+    outcome = await ProcessExecutor().run_recipe(
+        recipe(f"print('early error'); print('x' * {OUTPUT_CAP_BYTES * 2}); print('last line')"),
+        tmp_path,
+    )
+    assert outcome.truncated and "early error" not in outcome.stdout_tail
+    assert outcome.output is not None and not outcome.output.truncated
+    assert outcome.output.stdout.startswith("early error\n")
+    assert outcome.output.stdout.endswith("last line\n")
+    assert len(outcome.stdout_tail.encode()) <= OUTPUT_CAP_BYTES
+
+
+async def test_saved_output_is_bounded_and_marks_the_missing_middle(tmp_path: Path) -> None:
+    outcome = await ProcessExecutor().run_recipe(
+        recipe(
+            f"import sys; print('BEGIN' + 'x' * {SAVED_OUTPUT_CAP_BYTES * 2} + 'END'); "
+            f"sys.stderr.write('ERR_BEGIN' + 'y' * {SAVED_OUTPUT_CAP_BYTES * 2} + 'ERR_END')"
+        ),
+        tmp_path,
+    )
+    assert outcome.output is not None and outcome.output.truncated
+    for value, start, end in (
+        (outcome.output.stdout, "BEGIN", "END\n"),
+        (outcome.output.stderr, "ERR_BEGIN", "ERR_END"),
+    ):
+        assert value.startswith(start) and value.endswith(end)
+        assert "output bytes omitted" in value
+        assert len(value.encode()) <= SAVED_OUTPUT_CAP_BYTES + 100
+
+
+async def test_timeout_preserves_output_emitted_before_termination(tmp_path: Path) -> None:
+    outcome = await ProcessExecutor().run_recipe(
+        recipe("import time; print('before timeout', flush=True); time.sleep(30)", timeout=0.2),
+        tmp_path,
+    )
+    assert outcome.timed_out and outcome.exit_code == 124
+    assert outcome.output is not None and "before timeout" in outcome.output.stdout
+    assert "before timeout" in outcome.stdout_tail
+
+
+async def test_pipeline_saved_output_includes_each_stderr_and_timeout_prefix(
+    tmp_path: Path,
+) -> None:
+    executor = ProcessExecutor(launcher=RecordingLauncher())
+    first = "import sys; print('input'); print('first error', file=sys.stderr)"
+    last = "import sys; print(sys.stdin.read()); print('last error', file=sys.stderr)"
+    spec = exec_spec(tmp_path, first)
+    from dataclasses import replace
+
+    spec = replace(spec, argv=(PY, "-c", first, "|", PY, "-c", last))
+    outcome = await executor.run_exec(spec)
+    assert outcome.output is not None
+    assert "input" in outcome.output.stdout
+    assert "first error" in outcome.output.stderr and "last error" in outcome.output.stderr
+    assert not outcome.output.truncated
+    first = "import time; print('before pipeline timeout', flush=True); time.sleep(30)"
+    spec = replace(spec, argv=(PY, "-c", first, "|", "cat"), timeout_seconds=0.3)
+    outcome = await executor.run_exec(spec)
+    assert outcome.timed_out and outcome.output is not None
+    assert "before pipeline timeout" in outcome.output.stdout
 
 
 async def test_successful_command(tmp_path: Path) -> None:

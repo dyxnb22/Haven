@@ -10,10 +10,18 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
 from haven.application.state import RunContext
 from haven.contracts.model import ModelEvent, ModelRequest
+from haven.contracts.model_call import ModelRouteReason
 from haven.ports.model import ModelPort
+
+
+@dataclass(frozen=True, slots=True)
+class ModelChoice:
+    model: ModelPort
+    reason: ModelRouteReason
 
 
 class ModelRouter:
@@ -43,7 +51,7 @@ class ModelRouter:
         """返回当前选中的活动底层模型。"""
         return self._active_model
 
-    def select_model(self, ctx: RunContext, step: int) -> ModelPort:
+    def choose_model(self, ctx: RunContext, step: int) -> ModelChoice:
         """根据当前运行状态确定性选择本步应调用的模型。
 
         规则：
@@ -54,23 +62,23 @@ class ModelRouter:
         5. 其余只读探索与摸底阶段（未发生代码修改）：使用 fast_model。
         """
         if self.always_deep:
-            self._active_model = self.deep_model
-            return self.deep_model
+            return ModelChoice(self.deep_model, "always_deep")
 
         if ctx.ledger.edits:
-            self._active_model = self.deep_model
-            return self.deep_model
+            return ModelChoice(self.deep_model, "edits")
 
         if self.fast_turns is not None and step > self.fast_turns:
-            self._active_model = self.deep_model
-            return self.deep_model
+            return ModelChoice(self.deep_model, "fast_turns")
 
         if ctx.plan and any(item.status in ("in_progress", "done") for item in ctx.plan):
-            self._active_model = self.deep_model
-            return self.deep_model
+            return ModelChoice(self.deep_model, "plan")
 
-        self._active_model = self.fast_model
-        return self.fast_model
+        return ModelChoice(self.fast_model, "exploration")
+
+    def select_model(self, ctx: RunContext, step: int) -> ModelPort:
+        """保留直接调用方的本地代理接口；运行器使用无可变状态的 choose_model。"""
+        self._active_model = self.choose_model(ctx, step).model
+        return self._active_model
 
     def generate_stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
         """流式代理至当前活跃模型。"""

@@ -14,6 +14,7 @@ from haven.contracts.tools import (
     RepoEditArgs,
     RepoExecArgs,
     RepoMoveArgs,
+    TaskInputArgs,
     TaskStartArgs,
     ToolArgs,
 )
@@ -42,6 +43,7 @@ class ApprovalCardRenderer:
             "repo.apply_patch": self._card_patch,
             "repo.exec": self._card_exec,
             "task.start": self._card_task_start,
+            "task.input": self._card_task_input,
             "repo.check": self._card_check,
             "recipe.propose": self._card_recipe_propose,
         }
@@ -132,6 +134,9 @@ class ApprovalCardRenderer:
         if not isinstance(args, TaskStartArgs):
             return "", ""
         lines = [f"$ {shlex.join(args.argv)} (background task)", self._sandbox_description()]
+        lines.append(
+            "I/O: POSIX PTY (merged output)" if args.terminal else "I/O: stdin/stdout pipes"
+        )
         if classify_argv(args.argv) is ExecClass.SHELL_PASSTHROUGH:
             lines.append(
                 "WARNING: this interprets an arbitrary script, so the command "
@@ -142,6 +147,15 @@ class ApprovalCardRenderer:
             f"{self._intent(args.description)}"
         )
         return summary, "\n".join(lines)
+
+    def _card_task_input(self, args: ToolArgs, preview: ToolPreview) -> tuple[str, str]:
+        if not isinstance(args, TaskInputArgs):
+            return "", ""
+        # JSON quoting makes newline, escape and terminal control bytes reviewable.
+        return (
+            f"send input to {args.task_id}",
+            f"Text (JSON): {json.dumps(args.data, ensure_ascii=False)}\nEOF: {args.end_of_input}",
+        )
 
     def _card_check(self, args: ToolArgs, preview: ToolPreview) -> tuple[str, str]:
         if not isinstance(args, RepoCheckArgs):

@@ -9,6 +9,23 @@ from typing import Protocol
 from haven.contracts.tools import RecipeSpec
 from haven.ports.sandbox import SandboxSpec
 
+ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR", "VIRTUAL_ENV")
+EXEC_ENV_FIXED = (
+    ("CI", "1"),
+    ("DEBIAN_FRONTEND", "noninteractive"),
+    ("TERM", "dumb"),
+    ("NO_COLOR", "1"),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedOutput:
+    """与模型观察尾部独立的日志；达到保存上限时明确标记省略。"""
+
+    stdout: str
+    stderr: str
+    truncated: bool = False
+
 
 @dataclass(frozen=True, slots=True)
 class CheckOutcome:
@@ -33,6 +50,7 @@ class CheckOutcome:
     truncated: bool
     #: 执行器因达到超时而终止进程时为 True。
     timed_out: bool
+    output: CapturedOutput | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +91,7 @@ class ExecOutcome:
     truncated: bool
     #: 执行器因达到超时而终止进程时为 True。
     timed_out: bool
+    output: CapturedOutput | None = None
 
 
 class ExecutorPort(Protocol):

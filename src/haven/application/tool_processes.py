@@ -13,6 +13,7 @@ from haven.application.diagnostic_feeder import (
     format_diagnostics_summary,
 )
 from haven.application.emitter import EventEmitter
+from haven.application.process_outputs import save_process_output
 from haven.application.state import RunContext
 from haven.application.tool_execution_types import (
     ExecuteHandler,
@@ -21,6 +22,7 @@ from haven.application.tool_execution_types import (
     error_result,
     ok_result,
 )
+from haven.application.verification import recipe_invocation_digest
 from haven.contracts.events import EvidenceRecorded, Notice
 from haven.contracts.model import ToolCallProposal
 from haven.contracts.tools import (
@@ -28,14 +30,16 @@ from haven.contracts.tools import (
     RecipeSpec,
     RepoCheckArgs,
     RepoExecArgs,
+    TaskInputArgs,
     TaskLogsArgs,
     TaskStartArgs,
     TaskStatusArgs,
     TaskStopArgs,
     ToolArgs,
 )
+from haven.contracts.verification import CheckResultData
 from haven.domain.enums import EffectState, ToolErrorCode
-from haven.domain.evidence import CheckEvidence, EditEvidence
+from haven.domain.evidence import EditEvidence
 from haven.ports.executor import ExecSpec, ExecutorPort
 from haven.ports.sandbox import (
     SandboxLauncher,
@@ -74,6 +78,7 @@ class ProcessToolExecutor:
             "repo.check": self.execute_check,
             "recipe.propose": self.execute_recipe_propose,
             "task.start": self.execute_task_start,
+            "task.input": self.execute_task_input,
             "task.status": self.execute_task_status,
             "task.logs": self.execute_task_logs,
             "task.stop": self.execute_task_stop,
@@ -86,6 +91,7 @@ class ProcessToolExecutor:
     def replace_scratch_dir(self, scratch_dir: Path) -> None:
         """切换到新运行独占的临时目录；旧目录由 RunService 负责回收。"""
         self._scratch_dir = scratch_dir
+        self._task_manager = TaskManager()
 
     def sandbox_spec(self) -> SandboxSpec:
         """构造只读工作区、可写 scratch、禁网的命令沙箱规格。"""
@@ -150,6 +156,13 @@ class ProcessToolExecutor:
             raise
 
         await self._store.update_execution_state(ctx.run_id, call.call_id, EffectState.CONFIRMED)
+        process = await save_process_output(
+            self._store,
+            outcome,
+            self._workspace.root / args.cwd,
+            run_id=ctx.run_id,
+            call_id=call.call_id,
+        )
         if tampered:
             return ToolExecution(
                 error_result(
@@ -157,13 +170,15 @@ class ProcessToolExecutor:
                     ToolErrorCode.PROTECTED_PATH_TAMPERED,
                     "the command modified protected path(s) "
                     f"{', '.join(tampered)}; this is a boundary violation",
-                )
+                ),
+                process=process,
             )
         if outcome.timed_out:
             return ToolExecution(
                 error_result(
                     call, ToolErrorCode.TIMEOUT, f"command timed out after {args.timeout_seconds}s"
-                )
+                ),
+                process=process,
             )
         exec_payload: dict[str, object] = {
             "exit_code": outcome.exit_code,
@@ -174,12 +189,17 @@ class ProcessToolExecutor:
         }
         if outcome.exit_code != 0:
             exec_diags = extract_diagnostics(
-                "exec", outcome.stdout_tail, outcome.stderr_tail, outcome.exit_code
+                "exec",
+                outcome.output.stdout if outcome.output else outcome.stdout_tail,
+                outcome.output.stderr if outcome.output else outcome.stderr_tail,
+                outcome.exit_code,
             )
             if exec_diags:
                 exec_payload["diagnostics"] = [d.to_dict() for d in exec_diags]
                 exec_payload["summary"] = format_diagnostics_summary(exec_diags)
-        return ToolExecution(ok_result(call, exec_payload, truncated=outcome.truncated))
+        return ToolExecution(
+            ok_result(call, exec_payload, truncated=outcome.truncated), process=process
+        )
 
     async def execute_check(
         self,
@@ -216,6 +236,14 @@ class ProcessToolExecutor:
             raise
 
         await self._store.update_execution_state(ctx.run_id, call.call_id, EffectState.CONFIRMED)
+        process = await save_process_output(
+            self._store,
+            outcome,
+            self._workspace.root,
+            recipe.id,
+            run_id=ctx.run_id,
+            call_id=call.call_id,
+        )
         if tampered:
             return ToolExecution(
                 error_result(
@@ -223,9 +251,17 @@ class ProcessToolExecutor:
                     ToolErrorCode.PROTECTED_PATH_TAMPERED,
                     f"recipe {recipe.id!r} modified protected path(s) "
                     f"{', '.join(tampered)}; the check does not count as verification",
-                )
+                ),
+                process=process,
             )
         target = f"{recipe.id} {' '.join(args.args)}" if args.args else recipe.id
+        check = CheckResultData(
+            recipe_id=recipe.id,
+            recipe_digest=recipe_invocation_digest(recipe, args.args),
+            exit_code=outcome.exit_code,
+            duration_ms=outcome.duration_ms,
+            truncated=outcome.truncated,
+        )
         envelope = await self._emitter.emit(
             ctx.run_id,
             EvidenceRecorded(
@@ -235,24 +271,18 @@ class ProcessToolExecutor:
                     f"{target}: exit={outcome.exit_code} in {outcome.duration_ms}ms"
                     + (" (timed out)" if outcome.timed_out else "")
                 ),
+                check=check if ctx.verification else None,
             ),
         )
-        ctx.ledger = ctx.ledger.with_check(
-            CheckEvidence(
-                seq=envelope.seq,
-                recipe_id=recipe.id,
-                exit_code=outcome.exit_code,
-                duration_ms=outcome.duration_ms,
-                truncated=outcome.truncated,
-            )
-        )
+        ctx.ledger = ctx.ledger.with_check(check.to_domain(envelope.seq))
         if outcome.timed_out:
             return ToolExecution(
                 error_result(
                     call,
                     ToolErrorCode.TIMEOUT,
                     f"recipe {recipe.id!r} timed out after {recipe.timeout_seconds}s",
-                )
+                ),
+                process=process,
             )
         check_payload: dict[str, object] = {
             "recipe_id": recipe.id,
@@ -265,12 +295,17 @@ class ProcessToolExecutor:
             check_payload["args"] = list(args.args)
         if outcome.exit_code != 0:
             check_diags = extract_diagnostics(
-                recipe.id, outcome.stdout_tail, outcome.stderr_tail, outcome.exit_code
+                recipe.id,
+                outcome.output.stdout if outcome.output else outcome.stdout_tail,
+                outcome.output.stderr if outcome.output else outcome.stderr_tail,
+                outcome.exit_code,
             )
             if check_diags:
                 check_payload["diagnostics"] = [d.to_dict() for d in check_diags]
                 check_payload["summary"] = format_diagnostics_summary(check_diags)
-        return ToolExecution(ok_result(call, check_payload, truncated=outcome.truncated))
+        return ToolExecution(
+            ok_result(call, check_payload, truncated=outcome.truncated), process=process
+        )
 
     async def execute_recipe_propose(
         self,
@@ -282,6 +317,16 @@ class ProcessToolExecutor:
     ) -> ToolExecution:
         """提议并动态注册一个临时的验证配方，使其可供 repo.check 调用。"""
         assert isinstance(args, RecipeProposeArgs)
+        if ctx.verification and any(
+            item.recipe_id == args.recipe_id for item in ctx.verification.required
+        ):
+            return ToolExecution(
+                error_result(
+                    call,
+                    ToolErrorCode.INVALID_ARGUMENTS,
+                    "a required verification recipe cannot be replaced during a run",
+                )
+            )
         recipe = RecipeSpec(
             id=args.recipe_id,
             argv=args.argv,
@@ -337,6 +382,7 @@ class ProcessToolExecutor:
                 description=args.description,
                 sandbox_spec=self.sandbox_spec(),
                 launcher=self._launcher,
+                terminal=args.terminal,
             )
         except Exception as exc:
             return ToolExecution(
@@ -354,10 +400,38 @@ class ProcessToolExecutor:
                     "argv": list(args.argv),
                     "cwd": args.cwd,
                     "description": args.description,
+                    "terminal": args.terminal,
                     "sandbox": self._launcher.backend,
                 },
             )
         )
+
+    async def execute_task_input(
+        self,
+        ctx: RunContext,
+        call: ToolCallProposal,
+        args: ToolArgs,
+        ticket_digest: str,
+        preview: ToolPreview,
+    ) -> ToolExecution:
+        assert isinstance(args, TaskInputArgs)
+        try:
+            result = await self._task_manager.write_input(
+                args.task_id, args.data, end_of_input=args.end_of_input
+            )
+        except ValueError as exc:
+            return ToolExecution(error_result(call, ToolErrorCode.INVALID_ARGUMENTS, str(exc)))
+        except (OSError, TimeoutError) as exc:
+            return ToolExecution(
+                error_result(
+                    call,
+                    ToolErrorCode.INTERNAL,
+                    f"input may be partially delivered; inspect task.logs before retrying: {exc}",
+                )
+            )
+        if result.get("status") == "not_found":
+            return ToolExecution(error_result(call, ToolErrorCode.NOT_FOUND, "task not found"))
+        return ToolExecution(ok_result(call, result))
 
     async def execute_task_status(
         self,

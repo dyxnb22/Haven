@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -125,6 +126,27 @@ def _pytest_candidate(files: dict[str, str], tree: _TreeFacts) -> RecipeCandidat
     return None
 
 
+def _ruff_candidate(files: dict[str, str]) -> RecipeCandidate | None:
+    for name in (".ruff.toml", "ruff.toml"):
+        if name in files:
+            source: str = name
+            break
+    else:
+        try:
+            data = tomllib.loads(files.get("pyproject.toml", ""))
+        except tomllib.TOMLDecodeError:
+            return None
+        tool = data.get("tool")
+        if not isinstance(tool, dict) or not isinstance(tool.get("ruff"), dict):
+            return None
+        source = "pyproject.toml [tool.ruff]"
+    return RecipeCandidate(
+        "ruff",
+        ("python", "-m", "ruff", "check", "--no-cache", "."),
+        f"{source} configures Ruff; needs ruff installed in the selected Python environment",
+    )
+
+
 def _node(content: str) -> RecipeCandidate | None:
     try:
         parsed = json.loads(content)
@@ -164,6 +186,8 @@ _DETECTORS = (
 #: 检测器保持同步。
 KNOWN_FILES = (
     "pyproject.toml",
+    "ruff.toml",
+    ".ruff.toml",
     "tox.ini",
     "setup.cfg",
     "package.json",
@@ -184,6 +208,9 @@ def discover_recipes(files: dict[str, str], paths: Iterable[str] = ()) -> list[R
     pytest_candidate = _pytest_candidate(files, _tree_facts(paths))
     if pytest_candidate is not None:
         candidates.append(pytest_candidate)
+    ruff_candidate = _ruff_candidate(files)
+    if ruff_candidate is not None:
+        candidates.append(ruff_candidate)
     for name, detector in _DETECTORS:
         if name in files:
             candidate = detector(files[name])

@@ -2,7 +2,7 @@
 
 稳定的退出码：
 0 成功 | 2 用法错误 | 3 策略/权限错误 | 4 提供商错误
-5 工具错误 | 6 预算耗尽或已停止 | 7 需要恢复
+5 工具错误 | 6 预算耗尽或已停止 | 7 需要恢复 | 8 等待用户回答
 """
 
 from pathlib import Path
@@ -11,6 +11,7 @@ import typer
 
 from haven import __version__
 from haven.interfaces.cli_support.common import (
+    EXIT_NEEDS_INPUT,
     EXIT_OK,
     EXIT_POLICY,
     EXIT_PROVIDER,
@@ -26,15 +27,19 @@ from haven.interfaces.cli_support.diagnostic_commands import (
     verify_provider,
 )
 from haven.interfaces.cli_support.eval_commands import eval_command
+from haven.interfaces.cli_support.handoff_commands import handoff
 from haven.interfaces.cli_support.mcp_commands import mcp
+from haven.interfaces.cli_support.output_commands import output
 from haven.interfaces.cli_support.recovery_commands import reconcile, resume, rewind
-from haven.interfaces.cli_support.run_commands import continue_, run
+from haven.interfaces.cli_support.review_commands import review
+from haven.interfaces.cli_support.run_commands import answer, continue_, implement, run
 from haven.interfaces.cli_support.session_commands import (
     export,
     gc,
     replay,
     sessions_list,
     sessions_show,
+    sessions_stats,
 )
 from haven.interfaces.cli_support.sinks import ConsoleSink, JsonlEventSink, NullSink
 from haven.interfaces.cli_support.skill_commands import skills
@@ -46,6 +51,7 @@ __all__ = [
     "EXIT_POLICY",
     "EXIT_PROVIDER",
     "EXIT_RECOVERY",
+    "EXIT_NEEDS_INPUT",
     "EXIT_STOPPED",
     "EXIT_TOOL",
     "EXIT_USAGE",
@@ -120,9 +126,15 @@ def tui(
 # 注册顺序保持原 CLI 的帮助输出稳定；实现模块不依赖此组装模块。
 app.command()(run)
 app.command("continue")(continue_)
+app.command()(implement)
+app.command()(answer)
+app.command()(review)
+app.command()(output)
+app.command()(handoff)
 app.command()(doctor)
 sessions_app.command("list")(sessions_list)
 sessions_app.command("show")(sessions_show)
+sessions_app.command("stats")(sessions_stats)
 app.command()(gc)
 app.command()(replay)
 app.command()(resume)

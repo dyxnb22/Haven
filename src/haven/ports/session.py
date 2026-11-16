@@ -6,8 +6,22 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from haven.contracts.checkpoint import CheckpointV1
-from haven.contracts.events import ApplicationEvent, EventEnvelope
+from haven.contracts.events import ApplicationEvent, EventEnvelope, HandoffUpdated
+from haven.contracts.project_memory import ProjectNote
 from haven.domain.enums import ApprovalDecision, EffectState, RunStatus
+
+INPUT_HISTORY_LIMIT = 20
+HANDOFF_EDITABLE_STATUSES = frozenset(
+    {
+        RunStatus.WAITING_USER,
+        RunStatus.SUCCEEDED,
+        RunStatus.FAILED,
+        RunStatus.STOPPED,
+        RunStatus.CANCELLED,
+        RunStatus.EFFECT_UNKNOWN,
+    }
+)
+HANDOFF_SAVE_CONFLICT = "handoff changed or the run is active; reopen it before saving"
 
 
 class ArtifactError(Exception):
@@ -85,12 +99,50 @@ class SessionStorePort(Protocol):
         """按最近更新时间倒序返回最多 limit 条运行记录。"""
         ...
 
+    async def search_runs(
+        self, query: str, limit: int, workspace_digest: str | None = None
+    ) -> list[RunRecord]:
+        """搜索用户会话的 ID、目标和状态；可限定工作区，子运行不作为会话返回。"""
+        ...
+
+    async def record_input(self, workspace: str, text: str) -> None:
+        """保存用户提交的原始任务输入；每个工作区只保留最近 20 条。"""
+        ...
+
+    async def load_input_history(self, workspace: str) -> list[str]:
+        """按提交顺序返回工作区的输入历史，最旧的在前；不含未提交草稿。"""
+        ...
+
+    async def clear_input_history(self, workspace: str) -> None:
+        """只清除指定工作区的输入历史，不删除运行或检查点。"""
+        ...
+
+    async def add_project_note(self, workspace: str, text: str) -> ProjectNote:
+        """保存显式笔记；超出条数或字符容量时拒绝，不逐出旧条目。"""
+        ...
+
+    async def list_project_notes(self, workspace: str) -> tuple[ProjectNote, ...]:
+        """按创建顺序返回本项目的笔记。"""
+        ...
+
+    async def delete_project_note(self, workspace: str, note_id: int) -> bool:
+        """只删除本项目的指定笔记；不存在时返回 False。"""
+        ...
+
+    async def clear_project_notes(self, workspace: str) -> None:
+        """清空本项目笔记，保留输入历史、运行和检查点。"""
+        ...
+
     async def append_event(self, run_id: str, event: ApplicationEvent) -> EventEnvelope:
         """为持久化事件分配单调序号并原子写入事件流。"""
         ...
 
     async def load_events(self, run_id: str) -> list[EventEnvelope]:
         """按序读取运行的持久化事件；临时事件不在其中。"""
+        ...
+
+    async def append_handoff(self, event: HandoffUpdated, expected_seq: int) -> EventEnvelope:
+        """仅在已暂停/结束且日志序号未变化时追加修订，不重写检查点。"""
         ...
 
     async def save_checkpoint(self, checkpoint: CheckpointV1) -> None:

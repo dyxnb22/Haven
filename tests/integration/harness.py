@@ -132,6 +132,7 @@ class Harness:
         supports_prefix_continuation: bool | None = None,
         skills: SkillCatalog | None = None,
         approval_mode: ApprovalMode = ApprovalMode.ASK,
+        verification_groups: dict[str, tuple[str, ...]] | None = None,
     ) -> None:
         self.workspace = FsWorkspace(repo)
         self.store = MemorySessionStore()
@@ -159,4 +160,5 @@ class Harness:
             supports_prefix_continuation=supports_prefix_continuation,
             skills=skills,
             approval_mode=approval_mode,
+            verification_groups=verification_groups,
         )

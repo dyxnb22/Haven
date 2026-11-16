@@ -14,8 +14,10 @@ from haven.application.recovery_service import RecoveryService
 from haven.application.replay_service import ReplayService
 from haven.application.run_service import RunService
 from haven.application.skills import Skill, SkillCatalog
+from haven.application.state import RunContext
+from haven.contracts.tools import PlanStep
 from haven.domain.budget import Budget
-from haven.domain.enums import PermissionMode
+from haven.domain.enums import AgentMode, PermissionMode, PlanStatus, RunStatus
 from haven.interfaces.tui.app import HavenApp
 from tests.integration.fakes import RecordingLauncher
 from tests.integration.harness import (
@@ -26,6 +28,7 @@ from tests.integration.harness import (
     text,
     tool,
 )
+from tests.integration.test_plan_mode import completed_plan_turn, edit_turn, planning_turns
 
 
 class _Services:
@@ -167,6 +170,104 @@ async def test_edit_journey_with_approval(tmp_path: Path) -> None:
         assert app._state.stop_reason == "evidence_satisfied"  # noqa: SLF001
 
     assert "return a + b" in (repo / "src" / "calc.py").read_text()
+
+
+@pytest.mark.timeout(30)
+async def test_plan_then_implement_requires_explicit_confirmation_and_normal_approvals(
+    tmp_path: Path,
+) -> None:
+    repo = make_repo(tmp_path)
+    turns = planning_turns() + [
+        edit_turn(),
+        [tool("diff", "repo.diff"), finish("tool_calls")],
+        [tool("check", "repo.check", recipe_id="verify-calc"), finish("tool_calls")],
+        completed_plan_turn(),
+        [text("Fixed and verified."), finish()],
+    ]
+    app = HavenApp(workspace=repo, services_builder=make_builder(repo, turns))
+    async with app.run_test() as pilot:
+        await _wait_ready(app, pilot)
+        await _submit(app, pilot, "/plan Fix add()")
+        await _settle(pilot, 30)
+        assert app._state.agent_mode == "plan"  # noqa: SLF001
+        assert app._state.plan_status == "ready"  # noqa: SLF001
+        assert "/implement" in app._state.status_line()  # noqa: SLF001
+        assert "return a - b" in (repo / "src/calc.py").read_text()
+        planning_id = app._state.run_id  # noqa: SLF001
+
+        await _submit(app, pilot, "/implement")
+        await _approve_pending(app, pilot, "a", count=2)
+        await _settle(pilot, 40)
+        assert app._state.run_id != planning_id  # noqa: SLF001
+        assert app._state.agent_mode == "agent"  # noqa: SLF001
+        assert app._state.plan_status == "completed"  # noqa: SLF001
+        assert app._state.stop_reason == "evidence_satisfied"  # noqa: SLF001
+    assert "return a + b" in (repo / "src/calc.py").read_text()
+
+
+@pytest.mark.timeout(30)
+async def test_messages_and_approval_mode_changes_do_not_exit_planning(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    turns = planning_turns() + [edit_turn(), [text("Still planning."), finish()]]
+    app = HavenApp(workspace=repo, services_builder=make_builder(repo, turns))
+    async with app.run_test() as pilot:
+        await _wait_ready(app, pilot)
+        await _submit(app, pilot, "/plan Fix add()")
+        await _settle(pilot, 25)
+        await _submit(app, pilot, "/mode full")
+        await _submit(app, pilot, "Start implementation now")
+        await _settle(pilot, 30)
+        assert app._state.agent_mode == "plan"  # noqa: SLF001
+        assert app._state.plan_status == "ready"  # noqa: SLF001
+        assert app._state.approval_mode == "full"  # noqa: SLF001
+        assert app.screen.__class__.__name__ != "ApprovalScreen"
+        assert "return a - b" in (repo / "src/calc.py").read_text()
+
+
+@pytest.mark.timeout(30)
+async def test_resuming_a_draft_restores_the_planning_mode_and_visible_plan(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+
+    async def builder(*, workspace: Path, approvals: Any, sinks: list[Any]) -> _Services:
+        store = MemorySessionStore()
+        emitter = EventEmitter(store, [])
+        launcher = RecordingLauncher()
+        service = RunService(
+            model=ScriptedModel([[text("The plan is ready for review."), finish()]]),
+            workspace=FsWorkspace(workspace),
+            executor=ProcessExecutor(launcher=launcher),
+            store=store,
+            emitter=emitter,
+            approvals=approvals,
+            recipes=default_recipes(),
+            mode=PermissionMode.INTERACTIVE,
+            budget=Budget(),
+            launcher=launcher,
+        )
+        ctx = RunContext(
+            run_id="plan-to-resume",
+            goal="Fix add()",
+            mode=PermissionMode.READ_ONLY,
+            budget=Budget(),
+            agent_mode=AgentMode.PLAN,
+            plan=(PlanStep(title="Fix add()"),),
+            plan_status=PlanStatus.DRAFTING,
+        )
+        await service._announce_run(ctx, ctx.goal)  # noqa: SLF001
+        ctx.move_to(RunStatus.RUNNING_MODEL)
+        await service._checkpoints.save(ctx)  # noqa: SLF001
+        emitter._sinks = sinks  # noqa: SLF001 - only new events go to the live UI
+        return _Services(service, store)
+
+    app = HavenApp(workspace=repo, services_builder=builder, resume_run_id="plan-to-resume")
+    async with app.run_test() as pilot:
+        await _wait_ready(app, pilot)
+        await _settle(pilot, 30)
+        assert app._state.run_id == "plan-to-resume"  # noqa: SLF001
+        assert app._state.agent_mode == "plan"  # noqa: SLF001
+        assert app._state.mode == "read_only"  # noqa: SLF001
+        assert app._state.plan_status == "ready"  # noqa: SLF001
+        assert any("Fix add()" in line for line in app._state.plan_lines)  # noqa: SLF001
 
 
 @pytest.mark.timeout(30)
@@ -372,6 +473,9 @@ async def test_sessions_and_fork_commands(tmp_path: Path) -> None:
         await _submit(app, pilot, "/sessions")
         await _settle(pilot, 10)
         assert any(first_run_id in e.text for e in app._state.timeline)  # noqa: SLF001
+
+        await pilot.press("escape")
+        await _settle(pilot, 3)
 
         await _submit(app, pilot, f"/fork {first_run_id}")
         await _settle(pilot, 5)

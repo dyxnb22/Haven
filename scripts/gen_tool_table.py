@@ -83,6 +83,7 @@ CONSTRAINTS: dict[str, str] = {
         "`$HOME` unreadable; output is never evidence"
     ),
     "task.plan": "touches only run state; no path, no external effect",
+    "user.ask": "durable pause; schema-bound human answers; no permission elevation",
     "task.start": (
         "managed long-running process in OS sandbox; non-blocking ring buffer; "
         "auto-cleaned (ADR 0037)"
@@ -94,6 +95,7 @@ CONSTRAINTS: dict[str, str] = {
         "reads bounded tail lines from background task stdout/stderr ring buffer (ADR 0037)"
     ),
     "task.stop": "graceful SIGTERM/SIGKILL termination of a managed background task (ADR 0037)",
+    "task.input": "exact input/EOF approval; current run's sandboxed process only; bounded writes",
     "web.search": (
         "read-only web documentation search, bounded results, untrusted data framing (ADR 0038)"
     ),

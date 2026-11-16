@@ -8,12 +8,13 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from haven.adapters.git_baseline import capture_git_baseline
+from haven.domain.digest import sha256_bytes
 from haven.ports.workspace import WorkspaceError
 
 
@@ -33,6 +34,30 @@ async def is_git_repo(root: Path) -> bool:
     """检查路径是否位于有效的 Git 仓库中。"""
     baseline = await capture_git_baseline(root)
     return baseline.is_repo
+
+
+async def reopen_ephemeral_worktree(repo_root: Path, path: Path) -> EphemeralWorktree:
+    """重开本仓库中仍注册的受管工作树，不创建或重置任何文件。"""
+    target = path.resolve()
+    if target.parent != (repo_root / ".haven" / "worktrees").resolve() or not target.is_dir():
+        raise WorkspaceError("invalid_arguments", "saved workspace is not a managed worktree")
+    proc = await asyncio.create_subprocess_exec(
+        "git",
+        "worktree",
+        "list",
+        "--porcelain",
+        "-z",
+        cwd=repo_root,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _ = await proc.communicate()
+    registered = stdout.decode("utf-8", errors="replace").split("\0")
+    if proc.returncode != 0 or f"worktree {target}" not in registered:
+        raise WorkspaceError(
+            "invalid_arguments", "saved worktree is not registered in this repository"
+        )
+    return EphemeralWorktree(repo_root=repo_root, worktree_path=target, run_id=target.name)
 
 
 async def create_ephemeral_worktree(repo_root: Path, run_id: str) -> EphemeralWorktree:
@@ -90,6 +115,9 @@ async def create_ephemeral_worktree(repo_root: Path, run_id: str) -> EphemeralWo
 async def reconcile_worktree_to_main(
     worktree: EphemeralWorktree,
     changed_paths: list[str] | tuple[str, ...] | None = None,
+    *,
+    expected_preimages: dict[str, str] | None = None,
+    expected_postimages: dict[str, str] | None = None,
 ) -> list[str]:
     """将工作树中通过验证的文件变更原子同步回主仓库。"""
     repo_root = worktree.repo_root
@@ -113,28 +141,101 @@ async def reconcile_worktree_to_main(
                 paths.append(raw)
         changed_paths = tuple(paths)
 
-    reconciled: list[str] = []
-    for rel_path in changed_paths:
-        src = wt_path / rel_path
-        dst = repo_root / rel_path
+    staged: dict[Path, Path | None] = {}
+    backups: dict[Path, tuple[bytes | None, int]] = {}
+    sources: dict[Path, tuple[Path, str]] = {}
+    committed: list[Path] = []
 
-        if src.is_file():
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            content = src.read_bytes()
-            mode = src.stat().st_mode & 0o7777
-            tmp = dst.parent / f".haven-tmp-{os.getpid()}-{rel_path.replace('/', '_')}"
-            try:
-                tmp.write_bytes(content)
-                tmp.chmod(mode)
-                tmp.replace(dst)
-                reconciled.append(rel_path)
-            finally:
-                tmp.unlink(missing_ok=True)
-        elif not src.exists() and dst.exists():
-            dst.unlink(missing_ok=True)
-            reconciled.append(rel_path)
+    def fingerprint(content: bytes | None) -> str:
+        return sha256_bytes(content) if content is not None else ""
 
-    return sorted(set(reconciled))
+    try:
+        for rel_path in sorted(set(changed_paths)):
+            parts = Path(rel_path).parts
+            if (
+                Path(rel_path).is_absolute()
+                or ".." in parts
+                or any(part in {".git", ".haven", ".haven.toml"} for part in parts)
+            ):
+                raise WorkspaceError("denied", f"unsafe reconciliation path: {rel_path}")
+            src, dst = wt_path / rel_path, repo_root / rel_path
+            for root in (repo_root, wt_path):
+                target = root
+                for part in parts:
+                    target = target / part
+                    if target.is_symlink():
+                        raise WorkspaceError(
+                            "denied", f"symlink in reconciliation path: {rel_path}"
+                        )
+            if src.is_dir() or dst.is_dir():
+                raise WorkspaceError("denied", "reconciliation expects regular files")
+            before = dst.read_bytes() if dst.exists() else None
+            after = src.read_bytes() if src.exists() else None
+            if (
+                expected_preimages is not None
+                and fingerprint(before) != expected_preimages[rel_path]
+            ):
+                raise WorkspaceError("stale_preimage", f"main workspace changed: {rel_path}")
+            if (
+                expected_postimages is not None
+                and fingerprint(after) != expected_postimages[rel_path]
+            ):
+                raise WorkspaceError("stale_preimage", f"verified worktree changed: {rel_path}")
+            backups[dst] = (before, dst.stat().st_mode & 0o7777 if before is not None else 0o644)
+            sources[dst] = (src, fingerprint(after))
+            staged[dst] = None
+            if after is not None:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(
+                    prefix=".haven-reconcile-", dir=dst.parent, delete=False
+                ) as handle:
+                    temporary = Path(handle.name)
+                    staged[dst] = temporary
+                    handle.write(after)
+                # 审阅快照绑定文件内容，不把未审阅的 chmod 隐式带入主工作区。
+                mode = (
+                    backups[dst][1]
+                    if expected_postimages is not None
+                    else src.stat().st_mode & 0o7777
+                )
+                temporary.chmod(mode)
+        # 所有文件准备完成后重新验证两侧，任何漂移都在开始合流前拒绝。
+        for dst, (before, _) in backups.items():
+            actual = dst.read_bytes() if dst.exists() else None
+            src, expected = sources[dst]
+            current = src.read_bytes() if src.exists() else None
+            if fingerprint(actual) != fingerprint(before) or fingerprint(current) != expected:
+                raise WorkspaceError(
+                    "stale_preimage", "files changed while preparing reconciliation"
+                )
+        for dst, staged_path in staged.items():
+            if staged_path is None:
+                dst.unlink(missing_ok=True)
+            else:
+                staged_path.replace(dst)
+            committed.append(dst)
+    except BaseException:
+        for dst in reversed(committed):
+            before, mode = backups[dst]
+            if before is None:
+                dst.unlink(missing_ok=True)
+            else:
+                with tempfile.NamedTemporaryFile(
+                    prefix=".haven-rollback-", dir=dst.parent, delete=False
+                ) as handle:
+                    restore = Path(handle.name)
+                    handle.write(before)
+                try:
+                    restore.chmod(mode)
+                    restore.replace(dst)
+                finally:
+                    restore.unlink(missing_ok=True)
+        raise
+    finally:
+        for staged_path in staged.values():
+            if staged_path is not None:
+                staged_path.unlink(missing_ok=True)
+    return sorted(str(dst.relative_to(repo_root)) for dst in committed)
 
 
 async def cleanup_ephemeral_worktree(worktree: EphemeralWorktree) -> None:

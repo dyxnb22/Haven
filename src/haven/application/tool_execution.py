@@ -11,22 +11,24 @@ from haven.application.mcp_client import MCPClientManager
 from haven.application.skills import SkillCatalog
 from haven.application.state import RunContext
 from haven.application.tool_execution_types import (
-    ExecuteHandler as ExecuteHandler,
-)
-from haven.application.tool_execution_types import (
-    ToolExecution as ToolExecution,
-)
-from haven.application.tool_execution_types import (
+    DelegateHandler,
     clip,
     error_result,
     ok_result,
     summarize_payload,
+)
+from haven.application.tool_execution_types import (
+    ExecuteHandler as ExecuteHandler,
+)
+from haven.application.tool_execution_types import (
+    ToolExecution as ToolExecution,
 )
 from haven.application.tool_mutations import MutationToolExecutor
 from haven.application.tool_processes import ProcessToolExecutor
 from haven.application.tool_readers import ReadToolExecutor
 from haven.contracts.events import ToolCompleted
 from haven.contracts.model import ToolCallProposal
+from haven.contracts.process_output import ProcessReport
 from haven.contracts.tools import RecipeSpec, ToolArgs, ToolResult
 from haven.domain.enums import ToolErrorCode
 from haven.ports.executor import ExecutorPort
@@ -53,8 +55,9 @@ class ToolExecutor:
         scratch_dir: Path,
         skills: SkillCatalog | None = None,
         mcp_manager: MCPClientManager | None = None,
+        delegate: DelegateHandler | None = None,
     ) -> None:
-        readers = ReadToolExecutor(workspace, emitter, skills)
+        readers = ReadToolExecutor(workspace, emitter, skills, delegate=delegate, store=store)
         mutations = MutationToolExecutor(workspace, store, emitter)
         self._mcp_manager = mcp_manager
         self._processes = ProcessToolExecutor(
@@ -139,6 +142,7 @@ class ToolExecutor:
         result: ToolResult,
         started: float,
         effect_unknown: bool = False,
+        process: ProcessReport | None = None,
     ) -> ToolExecution:
         """补充执行耗时、发出统一完成事件并返回最终执行结果。"""
         duration_ms = int((time.monotonic() - started) * 1000)
@@ -154,9 +158,10 @@ class ToolExecutor:
                 summary=clip(result.message or summarize_payload(result), 200),
                 truncated=result.truncated,
                 duration_ms=duration_ms,
+                process=process,
             ),
         )
-        return ToolExecution(result=result, effect_unknown=effect_unknown)
+        return ToolExecution(result=result, effect_unknown=effect_unknown, process=process)
 
     def describe_sandbox(self) -> str:
         """返回当前进程工具执行所使用的沙箱边界描述。"""

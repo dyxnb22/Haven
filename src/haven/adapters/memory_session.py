@@ -5,10 +5,17 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from haven.contracts.checkpoint import CheckpointV1
-from haven.contracts.events import ApplicationEvent, EventEnvelope
+from haven.contracts.events import ApplicationEvent, EventEnvelope, HandoffUpdated
+from haven.contracts.project_memory import (
+    NOTE_CAPACITY_MESSAGE,
+    PROJECT_NOTE_LIMIT,
+    PROJECT_NOTES_TOTAL_CHARS,
+    ProjectNote,
+    normalize_note_text,
+)
 from haven.domain.digest import sha256_bytes
 from haven.domain.enums import ApprovalDecision, EffectState, RunStatus
-from haven.ports.session import ExecutionRecord, RunRecord
+from haven.ports.session import INPUT_HISTORY_LIMIT, ExecutionRecord, RunRecord
 
 
 def _now() -> str:
@@ -28,6 +35,9 @@ class MemorySessionStore:
         self.approvals: dict[str, dict[str, str]] = {}
         self.executions: dict[tuple[str, str], ExecutionRecord] = {}
         self.artifacts: dict[str, bytes] = {}
+        self._input_history: dict[str, list[str]] = {}
+        self._project_notes: dict[str, list[ProjectNote]] = {}
+        self._next_note_id = 1
 
     async def create_run(
         self, run_id: str, workspace: str, workspace_digest: str, goal: str, mode: str
@@ -77,6 +87,65 @@ class MemorySessionStore:
         )
         return ordered[:limit]
 
+    async def search_runs(
+        self, query: str, limit: int, workspace_digest: str | None = None
+    ) -> list[RunRecord]:
+        """在完整历史中执行字面子串搜索，保持与 SQLite 相同的排序。"""
+        if limit < 0:
+            raise ValueError("limit must be non-negative")
+        needle = query.strip().lower()
+        records = await self.list_runs(len(self.runs))
+        return [
+            record
+            for record in records
+            if not record.run_id.startswith("child-")
+            and (workspace_digest is None or record.workspace_digest == workspace_digest)
+            and needle in f"{record.run_id} {record.goal} {record.status.value}".lower()
+        ][:limit]
+
+    async def record_input(self, workspace: str, text: str) -> None:
+        """追加原始任务输入并限制每个工作区的历史条数。"""
+        history = self._input_history.setdefault(workspace, [])
+        history.append(text)
+        del history[:-INPUT_HISTORY_LIMIT]
+
+    async def load_input_history(self, workspace: str) -> list[str]:
+        """返回历史副本，避免输入框导航修改存储内容。"""
+        return list(self._input_history.get(workspace, ()))
+
+    async def clear_input_history(self, workspace: str) -> None:
+        """删除指定工作区的输入历史，保留会话数据。"""
+        self._input_history.pop(workspace, None)
+
+    async def add_project_note(self, workspace: str, text: str) -> ProjectNote:
+        normalized = normalize_note_text(text)
+        notes = self._project_notes.setdefault(workspace, [])
+        if (
+            len(notes) >= PROJECT_NOTE_LIMIT
+            or sum(len(note.text) for note in notes) + len(normalized) > PROJECT_NOTES_TOTAL_CHARS
+        ):
+            raise ValueError(NOTE_CAPACITY_MESSAGE)
+        note = ProjectNote(
+            id=self._next_note_id,
+            text=normalized,
+            created_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        self._next_note_id += 1
+        notes.append(note)
+        return note
+
+    async def list_project_notes(self, workspace: str) -> tuple[ProjectNote, ...]:
+        return tuple(self._project_notes.get(workspace, ()))
+
+    async def delete_project_note(self, workspace: str, note_id: int) -> bool:
+        notes = self._project_notes.get(workspace, [])
+        remaining = [note for note in notes if note.id != note_id]
+        self._project_notes[workspace] = remaining
+        return len(remaining) != len(notes)
+
+    async def clear_project_notes(self, workspace: str) -> None:
+        self._project_notes.pop(workspace, None)
+
     async def append_event(self, run_id: str, event: ApplicationEvent) -> EventEnvelope:
         """为运行分配递增序号并追加事件，返回带序号的信封。"""
         stream = self.events.setdefault(run_id, [])
@@ -87,6 +156,22 @@ class MemorySessionStore:
     async def load_events(self, run_id: str) -> list[EventEnvelope]:
         """返回运行的完整事件流副本，避免调用方修改存储内部列表。"""
         return list(self.events.get(run_id, []))
+
+    async def append_handoff(self, event: HandoffUpdated, expected_seq: int) -> EventEnvelope:
+        from haven.ports.session import HANDOFF_EDITABLE_STATUSES, HANDOFF_SAVE_CONFLICT
+
+        run = self.runs.get(event.run_id)
+        checkpoint = self.checkpoints.get(event.run_id)
+        if (
+            run is None
+            or run.status not in HANDOFF_EDITABLE_STATUSES
+            or checkpoint is None
+            or checkpoint.parent_run_id
+            or checkpoint.last_seq != event.checkpoint_seq
+            or len(self.events.get(event.run_id, ())) != expected_seq
+        ):
+            raise ValueError(HANDOFF_SAVE_CONFLICT)
+        return await self.append_event(event.run_id, event)
 
     async def save_checkpoint(self, checkpoint: CheckpointV1) -> None:
         """保存检查点，并忽略比现有检查点更旧的乱序写入。"""

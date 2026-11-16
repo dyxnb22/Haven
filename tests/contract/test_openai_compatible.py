@@ -81,6 +81,25 @@ async def test_text_stream_and_usage() -> None:
     assert isinstance(finished, StreamFinished)
 
 
+async def test_historical_native_prefix_is_not_sent_on_follow_up() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        messages = json.loads(req.content)["messages"]
+        assert messages[0] == {"role": "assistant", "content": "Previous reply"}
+        return httpx.Response(200, content=chunk({"content": "Okay"}, finish="stop"))
+
+    model = make_model(handler)
+    follow_up = ModelRequest(
+        messages=(
+            ModelMessage(role="assistant", content="Previous reply", is_prefix=True),
+            ModelMessage(role="user", content="Follow up"),
+        )
+    )
+    try:
+        assert [event async for event in model.generate_stream(follow_up)]
+    finally:
+        await model.aclose()
+
+
 @pytest.mark.parametrize(
     "usage_payload",
     [

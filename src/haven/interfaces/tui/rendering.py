@@ -2,7 +2,9 @@
 
 from dataclasses import dataclass
 
-from haven.interfaces.tui.presenter import PresenterState, TimelineEntry
+from haven.domain.evidence import required_check_states
+from haven.interfaces.process_output import process_result_lines
+from haven.interfaces.tui.presenter import PresenterState, TimelineEntry, sanitize
 
 _ICONS = {
     "user": ">",
@@ -35,6 +37,22 @@ def timeline_text(entry: TimelineEntry) -> str:
     return f"{_ICONS.get(entry.kind, '·')} {entry.text}"
 
 
+def verification_text(state: PresenterState) -> str:
+    if state.verification is None:
+        return "No required verification group for this run."
+    label = f"Required checks ({sanitize(state.verification.group_name, 100)})"
+    if state.agent_mode == "plan":
+        label += " — deferred until implementation"
+    lines = [label]
+    lines.extend(
+        f"  {sanitize(item.recipe_id, 100)}: {item.status}"
+        for item in required_check_states(
+            state.verification.to_domain(), state.verification_checks, state.last_edit_seq
+        )
+    )
+    return "\n".join(lines)
+
+
 def panel_text(state: PresenterState) -> PanelText:
     """将 PresenterState 组装为聊天、差异、证据和追踪四个面板文本。"""
     chat = state.chat_text
@@ -44,10 +62,22 @@ def panel_text(state: PresenterState) -> PanelText:
         chat += f"\n● {state.streaming_text}▌"
     if state.plan_lines:
         plan = "\n".join(state.plan_lines)
-        chat = f"[b]Plan[/b]\n{plan}\n\n{chat}"
+        label = f"Plan ({state.plan_status})" if state.plan_status else "Plan"
+        chat = f"[b]{label}[/b]\n{plan}\n\n{chat}"
+    evidence = "\n".join(state.evidence_rows)
+    if state.verification:
+        evidence = verification_text(state) + ("\n\n" + evidence if evidence else "")
+    if state.process_results:
+        results = "\n".join(
+            sanitize(line, 1200)
+            for event in state.process_results
+            for line in process_result_lines(event)
+        )
+        evidence += "\n\nProcess results (latest 10; observations, not acceptance):\n" + results
+        evidence += "\nUse /output CALL_ID to read the saved log."
     return PanelText(
         chat=chat or "(no conversation yet)",
         diff=state.diff_text or "(no diff yet)",
-        evidence="\n".join(state.evidence_rows) or "(no evidence yet)",
+        evidence=evidence or "(no evidence yet)",
         trace="\n".join(state.trace_rows) or "(no trace yet)",
     )

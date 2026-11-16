@@ -5,19 +5,34 @@ from typing import Literal
 
 from haven.application.skills import MAX_DESCRIPTION_CHARS, SkillCatalog
 from haven.domain.budget import Budget
+from haven.interfaces.model_display import cost_text
 from haven.interfaces.tui.presenter import PresenterState
 
 HELP_TEXT = """\
 Commands:
   /help      show this help
   /mode      show or change approval mode (/mode ask | smart | full)
+  /plan GOAL prepare a read-only implementation plan
+  /implement [ID] confirm and execute the ready plan (current run by default)
+  /answer    reopen the pending question form
   /budget    show remaining budget
   /context   show what the model saw last turn
-  /sessions  list recent runs you can continue or fork
+  /history [clear] view or clear task inputs in this workspace
+  /memory [reload]  inspect guidance; reload while idle for the next run
+  /remember TEXT   save a local project note while idle
+  /memory forget ID | clear  delete one note or all notes for this workspace
+  /verify [use NAME | clear]  inspect or choose required checks for the next run
+  /model [use NAME | clear]  inspect models or choose a preset for new runs
+  /stats     summarize timing, repeated reads and usage for this run
+  /output [CALL_ID]  show Evidence, or read a saved process log
+  /handoff [edit | prepare | clear | history]  review or revise task handoff notes
+  /new       start a fresh conversation
+  /sessions [QUERY] search, open, resume or fork stored sessions
   /skill     list discovered skills, or /skill use NAME... to load some
   /fork ID   start a new turn branched from run ID (fork the session)
   /rewind    undo this session's last run (fail-closed; asks to confirm)
-  /diff      switch to the Diff tab
+  /diff [FILE] browse the recorded changes by file and hunk
+  /review    review and apply a retained verified worktree
   /export    write a markdown report of the current run
   /quit      exit Haven
 Input:
@@ -25,13 +40,35 @@ Input:
              still reads the file itself through repo.read)
 Keys:
   Enter      submit a task
+  Up / Down  browse recent tasks; Down past the newest restores your draft
   a / r      approve / reject (in the approval dialog)
   F1..F4     switch tabs (Chat, Diff, Evidence, Trace)
   Ctrl+C     cancel the running task; press again to quit\
 """
 
 CommandKind = Literal[
-    "log", "sessions", "skill", "fork", "diff", "rewind", "export", "quit", "mode"
+    "log",
+    "sessions",
+    "skill",
+    "fork",
+    "diff",
+    "rewind",
+    "export",
+    "quit",
+    "mode",
+    "plan",
+    "implement",
+    "answer",
+    "review",
+    "new",
+    "history",
+    "memory",
+    "remember",
+    "verification",
+    "model",
+    "stats",
+    "output",
+    "handoff",
 ]
 
 
@@ -59,6 +96,18 @@ def route_command(
     name = command.split()[0].lower()
     if name == "/help":
         return CommandAction("log", HELP_TEXT)
+    if name == "/answer":
+        return CommandAction("answer")
+    if name == "/plan":
+        parts = command.split(maxsplit=1)
+        if len(parts) < 2 or len(parts[1].strip()) < 3:
+            return CommandAction("log", "usage: /plan GOAL (at least 3 characters)")
+        return CommandAction("plan", parts[1].strip())
+    if name == "/implement":
+        parts = command.split()
+        if len(parts) > 2:
+            return CommandAction("log", "usage: /implement [RUN_ID]")
+        return CommandAction("implement", parts[1] if len(parts) == 2 else state.run_id)
     if name == "/mode":
         parts = command.split(maxsplit=1)
         if len(parts) == 1:
@@ -79,28 +128,89 @@ def route_command(
     if name == "/budget":
         if budget is None:
             return CommandAction("log", "budget unavailable before startup completes")
+        estimated = " (estimated)" if state.usage_estimated else ""
         message = (
             f"budget: step {state.step}/{budget.max_steps}, "
             f"tools {state.tool_calls}/{budget.max_tool_calls}, "
             f"tokens in {state.input_tokens}/{budget.max_input_tokens}, "
-            f"out {state.output_tokens}/{budget.max_output_tokens}, "
-            f"cost ${state.cost_usd:.4f}/{budget.max_cost_usd:.2f}"
-            + (" (estimated)" if state.usage_estimated else "")
+            f"out {state.output_tokens}/{budget.max_output_tokens}{estimated}, "
+            f"cost {cost_text(state.cost_usd, state.cost_known)}, limit ${budget.max_cost_usd:.2f}"
         )
         return CommandAction("log", message)
     if name == "/context":
         return CommandAction("log", state.context_summary or "no context recorded yet")
+    if name == "/stats":
+        return (
+            CommandAction("stats")
+            if len(command.split()) == 1
+            else CommandAction("log", "usage: /stats")
+        )
+    if name == "/history":
+        parts = command.split()
+        if len(parts) == 1:
+            return CommandAction("history")
+        if len(parts) == 2 and parts[1].lower() == "clear":
+            return CommandAction("history", "clear")
+        return CommandAction("log", "usage: /history [clear]")
+    if name == "/memory":
+        parts = command.split()
+        if len(parts) == 1:
+            return CommandAction("memory")
+        if len(parts) == 2 and parts[1].lower() == "reload":
+            return CommandAction("memory", "reload")
+        if len(parts) == 2 and parts[1].lower() == "clear":
+            return CommandAction("memory", "clear")
+        if len(parts) == 3 and parts[1].lower() == "forget":
+            return CommandAction("memory", f"forget {parts[2]}")
+        return CommandAction("log", "usage: /memory [reload] | /memory forget ID | /memory clear")
+    if name == "/verify":
+        parts = command.split()
+        if len(parts) == 1:
+            return CommandAction("verification")
+        if len(parts) == 2 and parts[1].lower() == "clear":
+            return CommandAction("verification", "clear")
+        if len(parts) == 3 and parts[1].lower() == "use":
+            return CommandAction("verification", f"use {parts[2]}")
+        return CommandAction("log", "usage: /verify [use NAME | clear]")
+    if name == "/model":
+        parts = command.split()
+        if len(parts) == 1:
+            return CommandAction("model")
+        if len(parts) == 2 and parts[1].lower() == "clear":
+            return CommandAction("model", "clear")
+        if len(parts) == 3 and parts[1].lower() == "use":
+            return CommandAction("model", f"use {parts[2]}")
+        return CommandAction("log", "usage: /model [use NAME | clear]")
+    if name == "/output":
+        return CommandAction("output", command.partition(" ")[2].strip())
+    if name == "/handoff":
+        parts = command.split()
+        if len(parts) == 1:
+            return CommandAction("handoff")
+        if len(parts) == 2 and parts[1] in {"edit", "prepare", "clear", "history"}:
+            return CommandAction("handoff", parts[1])
+        return CommandAction("log", "usage: /handoff [edit | prepare | clear | history]")
+    if name == "/remember":
+        parts = command.split(maxsplit=1)
+        value = parts[1].strip() if len(parts) == 2 else ""
+        if value:
+            return CommandAction("remember", value)
+        return CommandAction("log", "usage: /remember TEXT")
     if name == "/skill":
         return _skill_command(command, skills)
     if name == "/sessions":
-        return CommandAction("sessions")
+        return CommandAction("sessions", command.partition(" ")[2].strip())
+    if name == "/new":
+        return CommandAction("new")
     if name == "/fork":
         parts = command.split(maxsplit=1)
         if len(parts) < 2:
             return CommandAction("log", "usage: /fork RUN_ID (see /sessions)")
         return CommandAction("fork", parts[1].strip())
     if name == "/diff":
-        return CommandAction("diff")
+        return CommandAction("diff", command.partition(" ")[2].strip())
+    if name == "/review":
+        return CommandAction("review")
     if name == "/rewind":
         return CommandAction("rewind", command)
     if name == "/export":

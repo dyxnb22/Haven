@@ -15,6 +15,8 @@ import shutil
 import tempfile
 import time
 from collections import deque
+from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 from haven.application.answer_resolution import (
@@ -26,22 +28,27 @@ from haven.application.context_builder import ContextBuilder
 from haven.application.emitter import EventEmitter
 from haven.application.mcp_client import MCPClientManager
 from haven.application.mcp_resources import load_imported_resources
-from haven.application.model_router import ModelRouter
+from haven.application.model_router import ModelChoice, ModelRouter
 from haven.application.model_stream import ModelStreamer
-from haven.application.profiles import ModelProfile, profile_for
+from haven.application.profiles import DEFAULT_PROFILE, ModelProfile, profile_for
 from haven.application.registry import ToolRegistry
 from haven.application.run_persistence import CheckpointManager, RunFinalizer, RunOutcome
 from haven.application.run_telemetry import RunTelemetry
 from haven.application.skills import Skill, SkillCatalog
 from haven.application.state import RunContext
+from haven.application.tool_execution_types import ToolExecution, clip, error_result
 from haven.application.tool_pipeline import ToolPipeline
 from haven.contracts.capability import CapabilitySnapshot, build_capability_snapshot
 from haven.contracts.events import (
+    ChildFinished,
+    ChildStarted,
     ContextBuilt,
     ModelCompleted,
     Notice,
+    RunCreated,
     SteerQueued,
     StepStarted,
+    ToolCompleted,
 )
 from haven.contracts.mcp import MCPServerConfig
 from haven.contracts.model import (
@@ -49,17 +56,25 @@ from haven.contracts.model import (
     ModelRequest,
     ModelResult,
     ToolCallProposal,
+    ToolSchema,
 )
-from haven.contracts.tools import RecipeSpec
-from haven.domain.budget import check_accumulated_budget, check_budget
+from haven.contracts.model_call import ModelCallInfo
+from haven.contracts.project_memory import render_project_notes
+from haven.contracts.tools import AgentDelegateArgs, RecipeSpec, ToolResult
+from haven.domain.budget import Budget, check_accumulated_budget, check_budget
+from haven.domain.digest import sha256_text
 from haven.domain.enums import (
+    AgentMode,
     ApprovalMode,
     EffectState,
     PermissionMode,
     RunStatus,
     StopReason,
+    ToolErrorCode,
     ToolStatus,
 )
+from haven.domain.ids import RunId
+from haven.domain.policy import CHILD_READ_TOOLS, PLAN_TOOLS
 from haven.domain.pricing import Pricing
 from haven.domain.stuck import StuckLoopDetector, call_fingerprint
 from haven.ports.executor import ExecutorPort
@@ -104,6 +119,9 @@ class RunActor:
         scratch_dir: Path | None = None,
         streamer: ModelStreamer | None = None,
         mcp_servers: tuple[MCPServerConfig, ...] = (),
+        pricing_is_override: bool = True,
+        context_is_override: bool = False,
+        resolve_profile: Callable[[str], ModelProfile] = profile_for,
     ) -> None:
         self._ctx = ctx
         self._model = model
@@ -116,9 +134,18 @@ class RunActor:
         self._recipes = recipes
         self._mode = mode
         self._profile = profile
+        self._profile_for = resolve_profile
         self._context_chars = context_chars
+        self._context_is_override = context_is_override
+        self._overflow_caps: dict[str, int] = {}
+        if isinstance(model, ModelRouter):
+            supports_prefix = supports_prefix and all(
+                self._profile_for(port.model_name).supports_assistant_prefix
+                for port in (model.fast_model, model.deep_model)
+            )
         self._supports_prefix = supports_prefix
         self._pricing = pricing
+        self._pricing_is_override = pricing_is_override
         self._telemetry = telemetry
         self._checkpoints = checkpoints
         self._finalizer = finalizer
@@ -155,6 +182,7 @@ class RunActor:
             skills=skills,
             approval_mode=approval_mode,
             mcp_manager=mcp_manager,
+            delegate=self._delegate,
         )
 
         self._answers = AnswerResolver(
@@ -174,22 +202,203 @@ class RunActor:
 
         self._builder = ContextBuilder(
             goal=ctx.goal,
-            tools=self._snapshot.to_tool_schemas(),
+            tools=self._model_tools(),
             budget=ctx.budget,
             recipe_ids=tuple(self._recipes),
             project_guidance=self._project_guidance,
+            project_notes=(
+                render_project_notes(ctx.guidance_snapshot.notes) if ctx.guidance_snapshot else ""
+            ),
+            verification=ctx.verification,
             skills=self._skills.skills,
             selected_skills=selected_skills,
-            imported_resources=load_imported_resources(workspace.root),
+            imported_resources=() if ctx.parent_run_id else load_imported_resources(workspace.root),
             sandbox_backend=self._launcher.backend if self._launcher is not None else "",
             max_context_chars=self._context_chars,
             reasoning_effort=self._profile.reasoning_effort,
+            agent_mode=ctx.agent_mode,
+            investigation=bool(ctx.parent_run_id),
         )
 
         self._stuck = StuckLoopDetector()
         self._answer = AnswerAssembly()
 
     # -- 属性访问器 -----------------------------------------------------------
+
+    def _model_tools(self) -> tuple[ToolSchema, ...]:
+        """规划仅暴露可观察工具；流水线仍独立检查未暴露的越权调用。"""
+        tools = self._snapshot.to_tool_schemas()
+        if self._ctx.parent_run_id:
+            return tuple(tool for tool in tools if tool.name in CHILD_READ_TOOLS)
+        if self._ctx.agent_mode is not AgentMode.PLAN:
+            return tools
+        read_only_mcp = {
+            tool.namespaced_name
+            for tool in (self._mcp_manager.tools if self._mcp_manager else ())
+            if tool.is_read_only
+        }
+        return tuple(tool for tool in tools if tool.name in PLAN_TOOLS | read_only_mcp)
+
+    async def _delegate(
+        self, parent: RunContext, call: ToolCallProposal, args: AgentDelegateArgs
+    ) -> ToolExecution:
+        scope = []
+        for path in args.file_scope or ():
+            facts = self._workspace.path_facts(path)
+            if not facts.within_workspace or facts.is_protected:
+                return ToolExecution(
+                    error_result(call, ToolErrorCode.DENIED, "invalid child scope")
+                )
+            scope.append(facts.normalized)
+        remaining = (
+            parent.budget.max_wall_time_seconds - parent.usage.wall_time_seconds,
+            parent.budget.max_input_tokens - parent.usage.input_tokens,
+            parent.budget.max_output_tokens - parent.usage.output_tokens,
+            parent.budget.max_cost_usd - parent.usage.cost_usd,
+        )
+        if min(remaining) <= 0:
+            return ToolExecution(
+                error_result(call, ToolErrorCode.DENIED, "parent budget exhausted")
+            )
+        budget = Budget(
+            max_steps=min(args.max_steps, parent.budget.max_steps - parent.usage.steps - 1),
+            max_tool_calls=min(
+                args.max_tool_calls, parent.budget.max_tool_calls - parent.usage.tool_calls - 1
+            ),
+            max_wall_time_seconds=remaining[0],
+            max_input_tokens=int(remaining[1]),
+            max_output_tokens=int(remaining[2]),
+            max_cost_usd=remaining[3],
+        )
+        child_id = RunId(
+            "child-" + sha256_text(f"{parent.run_id}:{parent.usage.steps}:{call.call_id}")[:20]
+        )
+        goal = (
+            f"You are a read-only {args.role}. Investigate this task: {args.task}\n"
+            "Read the relevant code and give substantive findings with file and line citations. "
+            "For reviews, identify defects and their consequences; state uncertainty honestly. "
+            "Do not delegate, ask the user, modify files, or run processes.\n"
+            f"Allowed paths: {', '.join(scope) if scope else 'the workspace'}. "
+            "When scoped, pass one allowed path explicitly to every search/read tool."
+        )
+        child = RunContext(
+            run_id=child_id,
+            goal=goal,
+            mode=PermissionMode.READ_ONLY,
+            budget=budget,
+            parent_run_id=parent.run_id,
+            root_run_id=parent.root_run_id or parent.run_id,
+            file_scope=tuple(scope),
+            model_selection=parent.model_selection,
+        )
+        await self._emitter.emit(
+            parent.run_id,
+            ChildStarted(
+                child_run_id=child_id,
+                parent_run_id=parent.run_id,
+                role=args.role,
+                task=args.task,
+                allocated_steps=budget.max_steps,
+                allocated_tool_calls=budget.max_tool_calls,
+            ),
+        )
+        await self._store.create_run(
+            child_id,
+            str(self._workspace.root),
+            self._workspace.workspace_digest,
+            goal,
+            child.mode.value,
+        )
+        await self._emitter.emit(
+            child_id,
+            RunCreated(
+                run_id=child_id,
+                workspace=str(self._workspace.root),
+                workspace_digest=self._workspace.workspace_digest,
+                goal=goal,
+                mode=child.mode.value,
+                model_name=self._model.model_name,
+                model_preset=child.model_selection.preset_name if child.model_selection else "",
+                parent_run_id=parent.run_id,
+                max_steps=budget.max_steps,
+            ),
+        )
+        checkpoints = CheckpointManager(
+            self._store, self._workspace, self._emitter, include_originals=False
+        )
+        actor = RunActor(
+            ctx=child,
+            model=self._model,
+            workspace=self._workspace,
+            executor=self._executor,
+            store=self._store,
+            emitter=self._emitter,
+            approvals=self._approvals,
+            recipes={},
+            mode=PermissionMode.READ_ONLY,
+            profile=self._profile,
+            context_chars=self._context_chars,
+            supports_prefix=self._supports_prefix,
+            pricing=self._pricing,
+            pricing_is_override=self._pricing_is_override,
+            context_is_override=self._context_is_override,
+            resolve_profile=self._profile_for,
+            telemetry=RunTelemetry(self._emitter, self._pricing),
+            checkpoints=checkpoints,
+            finalizer=RunFinalizer(
+                self._store, self._emitter, checkpoints, cost_known=self._pricing.is_known
+            ),
+            skills=SkillCatalog(),
+        )
+        outcome = None
+        try:
+            outcome = await actor.drive()
+        finally:
+            usage = child.usage
+            parent.usage = replace(
+                parent.usage,
+                steps=parent.usage.steps + usage.steps,
+                tool_calls=parent.usage.tool_calls + usage.tool_calls,
+            ).charge_tokens(
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cost_usd,
+                estimated=usage.usage_estimated,
+                cached_input_tokens=usage.cached_input_tokens,
+                cost_known=usage.cost_known,
+            )
+            await self._emitter.emit(
+                parent.run_id,
+                ChildFinished(
+                    child_run_id=child_id,
+                    parent_run_id=parent.run_id,
+                    role=args.role,
+                    status=outcome.status.value if outcome else "cancelled",
+                    steps_used=usage.steps,
+                    tool_calls_used=usage.tool_calls,
+                    outcome_summary=clip(outcome.final_text if outcome else "cancelled", 300),
+                ),
+            )
+        return ToolExecution(
+            ToolResult(
+                call_id=call.call_id,
+                tool_name=call.tool_name,
+                status=ToolStatus.OK if outcome.status is RunStatus.SUCCEEDED else ToolStatus.ERROR,
+                error_code=None
+                if outcome.status is RunStatus.SUCCEEDED
+                else ToolErrorCode.INTERNAL,
+                payload={
+                    "role": args.role,
+                    "child_run_id": child_id,
+                    "status": outcome.status.value,
+                    "answer": clip(outcome.final_text, 6000),
+                    "evidence": [
+                        {"path": path, "digest": digest}
+                        for path, digest in child.files_read.items()
+                    ],
+                },
+            )
+        )
 
     @property
     def ctx(self) -> RunContext:
@@ -332,19 +541,31 @@ class RunActor:
                         ),
                     )
 
+                choice = self._choose_model(ctx, step)
+                model_name = choice.model.model_name
+                profile = (
+                    self._profile_for(model_name)
+                    if isinstance(self._model, ModelRouter)
+                    else self._profile
+                )
+                max_chars = self._context_chars
+                if not self._context_is_override:
+                    max_chars = min(max_chars, profile.max_context_chars)
+                max_chars = min(max_chars, self._overflow_caps.get(model_name, max_chars))
+                self._builder.configure_model(max_chars, profile.reasoning_effort)
                 step_outcome = await self._call_model_step(
-                    ctx, step, self._builder, envelope_digest, answer.final_text
+                    ctx, step, choice.model, self._builder, envelope_digest, answer.final_text
                 )
                 if isinstance(step_outcome, RunOutcome):
                     return step_outcome
                 request, result, envelope_digest = step_outcome
 
-                pricing = None
-                if isinstance(self._model, ModelRouter) and not self._telemetry._pricing.is_known:
-                    model_profile = profile_for(self._model.active_model.model_name)
-                    if model_profile.pricing.is_known:
-                        pricing = model_profile.pricing
-                self._telemetry.charge_usage(ctx, request, result, pricing=pricing)
+                pricing = self._pricing if self._pricing_is_override else profile.pricing
+                charge = self._telemetry.charge_usage(ctx, request, result, pricing=pricing)
+                usage = charge.usage
+                pricing_source = (
+                    "user" if self._pricing_is_override else f"model-profile:{profile.name}"
+                )
                 ctx.refresh_wall_time(time.monotonic())
                 await self._emitter.emit(
                     ctx.run_id,
@@ -353,14 +574,33 @@ class RunActor:
                         step=step,
                         text=result.text,
                         tool_call_count=len(result.tool_calls),
-                        input_tokens=result.usage.input_tokens,
-                        output_tokens=result.usage.output_tokens,
-                        usage_estimated=result.usage.estimated,
+                        input_tokens=usage.input_tokens,
+                        output_tokens=usage.output_tokens,
+                        usage_estimated=usage.estimated,
                         ttft_ms=result.ttft_ms,
                         duration_ms=result.duration_ms,
                         finish_reason=result.finish_reason,
-                        reasoning_tokens=result.usage.reasoning_tokens,
-                        cached_input_tokens=result.usage.cached_input_tokens,
+                        reasoning_tokens=usage.reasoning_tokens,
+                        cached_input_tokens=usage.cached_input_tokens,
+                        model_info=ModelCallInfo(
+                            model_name=model_name,
+                            selection_reason=choice.reason,
+                            profile_name=profile.name,
+                            profile_source="fallback"
+                            if profile.name == DEFAULT_PROFILE.name
+                            else "builtin",
+                            context_chars=self._builder.max_context_chars,
+                            context_window_tokens=profile.context_window_tokens,
+                            output_limit_tokens=profile.output_limit_tokens,
+                            reasoning_supported=profile.reasoning_supported,
+                            reasoning_effort=request.reasoning_effort,
+                            reasoning_replay=profile.requires_tool_call_reasoning,
+                            prefix_continuation=self._supports_prefix,
+                            usage_source="estimated" if usage.estimated else "provider",
+                            cost_usd=charge.cost_usd,
+                            cost_known=charge.cost_known,
+                            pricing_source=pricing_source if charge.cost_known else "unknown",
+                        ),
                     ),
                 )
                 ctx.transcript.append(
@@ -424,6 +664,7 @@ class RunActor:
         self,
         ctx: RunContext,
         step: int,
+        model: ModelPort,
         builder: ContextBuilder,
         envelope_digest: str,
         answer_final_text: str,
@@ -431,7 +672,9 @@ class RunActor:
         """构建上下文、记录遥测并向模型发起流式请求，对 context_overflow 进行有界恢复。"""
         overflow_retries = 0
         while True:
-            request, segments = builder.build(ctx.transcript, ctx.usage, ctx.plan)
+            request, segments = builder.build(
+                ctx.transcript, ctx.usage, ctx.plan, handoff=ctx.handoff, ledger=ctx.ledger
+            )
             envelope_digest = await self._telemetry.record_envelope(
                 ctx, step, request, envelope_digest
             )
@@ -452,7 +695,7 @@ class RunActor:
                     ctx.budget.max_wall_time_seconds - ctx.usage.wall_time_seconds,
                 )
                 async with asyncio.timeout(remaining):
-                    result = await self._stream_model(ctx, step, request)
+                    result = await self._streamer.stream(model, ctx, step, request)
                 return request, result, envelope_digest
             except TimeoutError:
                 ctx.refresh_wall_time(time.monotonic())
@@ -469,6 +712,7 @@ class RunActor:
                 ):
                     overflow_retries += 1
                     new_budget = builder.reduce_budget(CONTEXT_OVERFLOW_SHRINK)
+                    self._overflow_caps[model.model_name] = new_budget
                     await self._emitter.emit(
                         ctx.run_id,
                         Notice(
@@ -487,20 +731,17 @@ class RunActor:
                     Notice(
                         run_id=ctx.run_id,
                         level="error",
-                        message=f"provider error ({exc.code}): {exc}",
+                        message=f"provider error ({exc.code}): {exc} [model {model.model_name}]",
                     ),
                 )
                 return await self.finish(
                     ctx, RunStatus.FAILED, StopReason.PROVIDER_ERROR, answer_final_text
                 )
 
-    async def _stream_model(self, ctx: RunContext, step: int, request: ModelRequest) -> ModelResult:
-        model = (
-            self._model.select_model(ctx, step)
-            if isinstance(self._model, ModelRouter)
-            else self._model
-        )
-        return await self._streamer.stream(model, ctx, step, request)
+    def _choose_model(self, ctx: RunContext, step: int) -> ModelChoice:
+        if isinstance(self._model, ModelRouter):
+            return self._model.choose_model(ctx, step)
+        return ModelChoice(self._model, "single")
 
     async def handle_tool_calls(
         self,
@@ -512,6 +753,36 @@ class RunActor:
         """严格按顺序通过流水线执行一轮中的工具调用。"""
         detector = stuck if stuck is not None else self._stuck
         ctx = self._ctx
+        # 追问是本批次的屏障：任何同批提案都必须等用户回答后重新提出。
+        ask = next((call for call in calls if call.tool_name == "user.ask"), None)
+        if ask is not None:
+            for skipped in calls:
+                if skipped is ask:
+                    continue
+                result = error_result(
+                    skipped,
+                    ToolErrorCode.DENIED,
+                    "Not executed: user.ask pauses this batch. Reissue after the user answers.",
+                )
+                ctx.transcript.append(
+                    ModelMessage(
+                        role="tool", content=result.to_model_text(), tool_call_id=skipped.call_id
+                    )
+                )
+                await self._emitter.emit(
+                    ctx.run_id,
+                    ToolCompleted(
+                        run_id=ctx.run_id,
+                        call_id=skipped.call_id,
+                        tool_name=skipped.tool_name,
+                        status="error",
+                        error_code="denied",
+                        summary="deferred until user input",
+                        truncated=False,
+                        duration_ms=0,
+                    ),
+                )
+            calls = (ask,)
         for call in calls:
             if ctx.usage.tool_calls >= ctx.budget.max_tool_calls:
                 return await self.finish(
@@ -523,6 +794,11 @@ class RunActor:
             execution = await self._pipeline.execute(ctx, step, call)
             ctx.refresh_wall_time(time.monotonic())
             result = execution.result
+            if ctx.pending_input is not None:
+                # 工具回复在收到答案时补齐；暂停期间不会构建不完整的模型请求。
+                await self._pipeline.close()
+                ctx.refresh_wall_time(time.monotonic())
+                return await self._finalizer.pause_for_input(ctx)
             if (
                 call.tool_name == "recipe.propose"
                 and result.status is ToolStatus.OK

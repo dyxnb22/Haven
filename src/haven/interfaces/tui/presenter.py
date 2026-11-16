@@ -16,14 +16,19 @@ from haven.contracts.events import (
     ApprovalRequested,
     AssistantDelta,
     AssistantReasoning,
+    ChildFinished,
+    ChildStarted,
     ContextBuilt,
     DiffPreview,
     EventEnvelope,
     EvidenceRecorded,
+    HandoffUpdated,
     ModelCompleted,
     Notice,
     PlanUpdated,
     PolicyDecided,
+    ReviewRequested,
+    ReviewResolved,
     RunCreated,
     RunFinished,
     SteerQueued,
@@ -31,7 +36,14 @@ from haven.contracts.events import (
     StreamRestarted,
     ToolCompleted,
     ToolProposed,
+    UserInputAnswered,
+    UserInputRequested,
 )
+from haven.contracts.model_call import ModelCallInfo
+from haven.contracts.user_input import UserInputRequest
+from haven.contracts.verification import VerificationSelection
+from haven.domain.evidence import CheckEvidence
+from haven.interfaces.model_display import cost_text, model_call_text
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
@@ -77,8 +89,12 @@ class PresenterState:
     branch: str = ""
     #: 配置的模型标识符。
     model_name: str = ""
+    model_preset: str = ""
+    last_model_call: ModelCallInfo | None = None
     #: 当前运行的权限模式。
     mode: str = ""
+    #: 行为模式，规划与审批策略独立。
+    agent_mode: str = "agent"
     #: 当前运行的分级审批模式（ask / smart / full）。
     approval_mode: str = "ask"
     #: 会话当前选中的技能名称（ADR 0034）。
@@ -121,14 +137,23 @@ class PresenterState:
     diff_text: str = ""
     #: 渲染后的结构化计划行。
     plan_lines: tuple[str, ...] = field(default_factory=tuple)
+    plan_status: str = ""
+    pending_input: UserInputRequest | None = None
+    review_pending: bool = False
     #: 最近一次上下文选择摘要。
     context_summary: str = ""
     #: 按顺序排列的展示时间线。
     timeline: tuple[TimelineEntry, ...] = field(default_factory=tuple)
     #: Evidence 标签页展示的证据行。
     evidence_rows: tuple[str, ...] = field(default_factory=tuple)
+    process_results: tuple[ToolCompleted, ...] = ()
     #: Trace 标签页展示的追踪行。
     trace_rows: tuple[str, ...] = field(default_factory=tuple)
+    verification: VerificationSelection | None = None
+    verification_checks: tuple[CheckEvidence, ...] = ()
+    last_edit_seq: int = -1
+    next_check_group: str | None = None
+    next_model_preset: str | None = None
 
     def header_line(self) -> str:
         """生成标题栏中的工作区、分支、模型、模式、步数和费用摘要。"""
@@ -137,27 +162,43 @@ class PresenterState:
             if self.mode == "interactive" and self.approval_mode
             else self.mode
         )
+        if self.agent_mode == "plan":
+            mode_str = f"plan ({mode_str})"
         skills_str = f"skills: [{', '.join(self.selected_skills)}]" if self.selected_skills else ""
         parts = [
             "Haven",
             self.workspace.rsplit("/", 1)[-1] if self.workspace else "",
             self.branch,
-            self.model_name,
+            sanitize(
+                self.last_model_call.model_name if self.last_model_call else self.model_name, 100
+            ),
             mode_str,
             skills_str,
         ]
+        if self.model_preset:
+            parts.append(f"preset: {sanitize(self.model_preset, 48)}")
+        if self.next_model_preset and self.next_model_preset != self.model_preset:
+            parts.append(f"next model: {sanitize(self.next_model_preset, 48)}")
+        if self.verification:
+            parts.append(f"checks: {sanitize(self.verification.group_name, 100)}")
+        if self.next_check_group is not None and (
+            self.verification is None or self.next_check_group != self.verification.group_name
+        ):
+            parts.append(f"next checks: {sanitize(self.next_check_group, 100) or 'none'}")
         step = f"step {self.step}/{self.max_steps}" if self.max_steps else ""
-        cost = (
-            f"${self.cost_usd:.4f}" + ("~" if self.usage_estimated else "")
-            if self.cost_known
-            else "cost n/a"
-        )
+        cost = f"cost {cost_text(self.cost_usd, self.cost_known)}" if self.run_id else ""
         return " ─ ".join(p for p in [*parts, step, cost] if p)
 
     def status_line(self) -> str:
         """根据运行状态生成状态栏文案和取消提示。"""
+        if self.pending_input is not None:
+            return "waiting for your answer — /answer to reopen the question form"
+        if self.review_pending:
+            return "verified changes await review — /review to apply or keep isolated"
         if self.running:
             return f"status: {self.status} — Ctrl+C cancels the run"
+        if self.plan_status == "ready":
+            return "plan ready — /implement to execute, or send a message to revise it"
         if self.stop_reason:
             return f"finished: {self.status} ({self.stop_reason})"
         return "idle — type a task and press Enter, /help for commands"
@@ -177,9 +218,12 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
             run_id=event.run_id,
             goal=event.goal,
             mode=event.mode,
+            agent_mode=event.agent_mode,
             workspace=event.workspace,
             branch=event.git_branch,
             model_name=event.model_name,
+            model_preset=event.model_preset,
+            last_model_call=None,
             max_steps=event.max_steps,
             status="running",
             stop_reason="",
@@ -198,10 +242,53 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
             cost_known=True,
             usage_estimated=False,
             plan_lines=(),
+            plan_status="",
+            pending_input=None,
+            review_pending=False,
             evidence_rows=(),
+            process_results=(),
             trace_rows=(),
+            verification=event.verification,
+            verification_checks=(),
+            last_edit_seq=-1,
         )
         return _push(state, TimelineEntry("user", sanitize(event.goal)))
+
+    if isinstance(event, ChildStarted):
+        return _push(
+            state,
+            TimelineEntry("system", f"{event.role} investigating: {sanitize(event.task, 200)}"),
+        )
+    if isinstance(event, ChildFinished):
+        return _push(
+            state,
+            TimelineEntry(
+                "system", f"{event.role} {event.status}: {sanitize(event.outcome_summary, 300)}"
+            ),
+        )
+    if isinstance(event, ReviewRequested):
+        return replace(state, review_pending=True)
+    if isinstance(event, ReviewResolved):
+        return replace(state, review_pending=False)
+    if isinstance(event, UserInputRequested):
+        return _push(
+            replace(
+                state,
+                run_id=event.run_id,
+                pending_input=event.request,
+                status="waiting_user",
+                running=False,
+            ),
+            TimelineEntry("notice", "waiting for your answer"),
+        )
+
+    if isinstance(event, UserInputAnswered):
+        return replace(
+            state,
+            pending_input=None,
+            running=event.response.action != "cancel",
+            status="running_model" if event.response.action == "submit" else "cancelled",
+        )
 
     if isinstance(event, StepStarted):
         return replace(state, step=event.step, status="running_model")
@@ -218,6 +305,7 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
         return replace(state, reasoning_text=state.reasoning_text + sanitize(event.text, 10000))
 
     if isinstance(event, ModelCompleted):
+        info = event.model_info
         state = replace(
             state,
             streaming_text="",
@@ -225,6 +313,9 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
             input_tokens=state.input_tokens + event.input_tokens,
             output_tokens=state.output_tokens + event.output_tokens,
             usage_estimated=state.usage_estimated or event.usage_estimated,
+            last_model_call=info,
+            cost_usd=state.cost_usd + (info.cost_usd if info else 0.0),
+            cost_known=state.cost_known and (info.cost_known if info else False),
         )
         extra = ""
         if event.reasoning_tokens:
@@ -238,6 +329,7 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
                 f"step {event.step}: model ttft={event.ttft_ms}ms "
                 f"dur={event.duration_ms}ms tokens={event.input_tokens}/"
                 f"{event.output_tokens}{extra} finish={event.finish_reason}",
+                *((sanitize(model_call_text(info), 800),) if info else ()),
             ),
         )
         if event.text:
@@ -248,6 +340,11 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
             )
             state = _push(state, TimelineEntry("agent", sanitize(event.text, 300)))
         return state
+
+    if isinstance(event, HandoffUpdated):
+        return _push(
+            state, TimelineEntry("notice", "handoff notes revised; use /handoff to review")
+        )
 
     if isinstance(event, ToolProposed):
         state = replace(state, tool_calls=state.tool_calls + 1, status="tool")
@@ -279,6 +376,9 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
         outcome = event.status if not event.error_code else f"error:{event.error_code}"
         state = replace(
             state,
+            process_results=(
+                (*state.process_results, event)[-10:] if event.process else state.process_results
+            ),
             trace_rows=(
                 *state.trace_rows,
                 f"tool {event.tool_name} -> {outcome} ({event.duration_ms}ms)",
@@ -298,10 +398,16 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
     if isinstance(event, EvidenceRecorded):
         return replace(
             state,
+            last_edit_seq=envelope.seq if event.evidence_kind == "edit" else state.last_edit_seq,
+            verification_checks=(
+                (*state.verification_checks, event.check.to_domain(envelope.seq))
+                if event.evidence_kind == "check" and event.check
+                else state.verification_checks
+            ),
             evidence_rows=(
                 *state.evidence_rows,
                 f"[{event.evidence_kind}] {sanitize(event.summary, 200)}",
-            ),
+            )[-50:],
         )
 
     if isinstance(event, ContextBuilt):
@@ -313,12 +419,25 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
         return replace(state, context_summary="\n".join(lines))
 
     if isinstance(event, PlanUpdated):
-        marks = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]"}
+        marks = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]", "blocked": "[!]"}
         plan_lines = tuple(
             f"{marks.get(step.status, '[ ]')} {index}. {sanitize(step.title, 120)}"
+            + (f" ({sanitize(step.id, 40)})" if step.id else "")
+            + (
+                f" — depends: {sanitize(', '.join(step.depends_on), 300)}"
+                if step.depends_on
+                else ""
+            )
+            + (
+                f"\n    acceptance: {sanitize('; '.join(step.acceptance), 1500)}"
+                if step.acceptance
+                else ""
+            )
+            + (f" — blocked: {sanitize(step.blocked_reason, 300)}" if step.blocked_reason else "")
+            + (f" — verified: {sanitize(', '.join(step.evidence), 300)}" if step.evidence else "")
             for index, step in enumerate(event.steps, start=1)
         )
-        state = replace(state, plan_lines=plan_lines)
+        state = replace(state, plan_lines=plan_lines, plan_status=event.plan_status)
         done = sum(1 for step in event.steps if step.status == "done")
         return _push(state, TimelineEntry("plan", f"plan updated: {done}/{len(event.steps)} done"))
 
@@ -349,7 +468,7 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
             streaming_text="",
             reasoning_text="",
         )
-        cost = f"cost=${event.cost_usd:.4f}" if event.cost_known else "cost=unknown"
+        cost = f"cost={cost_text(event.cost_usd, event.cost_known)}"
         return _push(
             state,
             TimelineEntry(

@@ -10,7 +10,7 @@ Haven 实际上面向一个模型，但核心仍保持与模型无关：模型�
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from haven.domain.pricing import Pricing
 
@@ -49,6 +49,10 @@ class ModelProfile:
     #: 推理模型）。运行整体仍由墙上时钟预算限制，因此这里仅需足够长，以区分
     #: 真正卡住和缓慢但仍在生成的情况。
     stream_idle_timeout_s: float = 120.0
+    reasoning_supported: bool | None = None
+    output_limit_tokens: int = 0
+    documentation_status: str = ""
+    use_max_completion_tokens: bool = False
 
     def prefix_continuation_enabled(self, base_url: str) -> bool:
         """判断是否可以针对 `base_url` 使用原生前缀续写。
@@ -75,6 +79,38 @@ MEASURED_MIN_CHARS_PER_TOKEN = 1.0
 
 DEFAULT_PROFILE = ModelProfile(name="default")
 
+# 标准文本费率与模型能力见 OpenAI 的 GPT-4o mini 型号文档（2026-11 核对）。
+OPENAI_GPT_4O_MINI = ModelProfile(
+    name="gpt-4o-mini",
+    pricing=Pricing(
+        input_per_1m_usd=0.15,
+        output_per_1m_usd=0.60,
+        cached_input_per_1m_usd=0.075,
+    ),
+    context_window_tokens=128_000,
+    reasoning_supported=False,
+    output_limit_tokens=16_384,
+    documentation_status="OpenAI announced shutdown for 2027-01-14",
+)
+
+# Chat Completions 的 function calling 需要显式 reasoning_effort=none。
+# Luna 有缓存写入和长上下文阶梯计价，Haven 的三档费率卡无法表达完整规则。
+OPENAI_GPT_6_LUNA = ModelProfile(
+    name="gpt-6-luna",
+    reasoning_effort="none",
+    context_window_tokens=1_050_000,
+    reasoning_supported=True,
+    output_limit_tokens=128_000,
+    use_max_completion_tokens=True,
+    documentation_status="Chat Completions tool calls require effort none",
+)
+
+_OPENAI_PROFILES = {
+    OPENAI_GPT_4O_MINI.name: OPENAI_GPT_4O_MINI,
+    "gpt-4o-mini-2024-07-18": OPENAI_GPT_4O_MINI,
+    OPENAI_GPT_6_LUNA.name: OPENAI_GPT_6_LUNA,
+}
+
 #: 截至 2026-08 的已发布行为：输入和输出共享 1M token 窗口，缓存命中价格
 #: 是未命中的五十分之一。
 #:
@@ -91,6 +127,7 @@ DEEPSEEK_V4_FLASH = ModelProfile(
         cached_input_per_1m_usd=0.0028,
     ),
     requires_tool_call_reasoning=True,
+    reasoning_supported=True,
     # 1M token 窗口（2026-08 发布）。按测得的最坏情况 1.0 字符/token，
     # 480k 字符约等于 480k token——不到窗口的一半；实际约 1.8 字符/token
     # 时则接近 270k。字符预算是成本/延迟选择（ADR 0011），不是安全上限；
@@ -150,3 +187,27 @@ def profile_for(model_name: str) -> ModelProfile:
         )
 
     return DEFAULT_PROFILE
+
+
+def provider_profile_for(model_name: str, base_url: str) -> ModelProfile:
+    """官方费率和文档能力只匹配公开服务的地址。"""
+    endpoint = base_url.rstrip("/")
+    if model_name in _OPENAI_PROFILES:
+        return (
+            _OPENAI_PROFILES[model_name]
+            if endpoint == "https://api.openai.com/v1"
+            else DEFAULT_PROFILE
+        )
+    profile = profile_for(model_name)
+    if profile is DEEPSEEK_V4_FLASH and endpoint not in {
+        "https://api.deepseek.com",
+        "https://api.deepseek.com/v1",
+        "https://api.deepseek.com/beta",
+    }:
+        # 保留已知 DeepSeek 兼容代理的线协议与流超时行为，费率和窗口由端点决定。
+        return replace(
+            DEFAULT_PROFILE,
+            requires_tool_call_reasoning=profile.requires_tool_call_reasoning,
+            stream_idle_timeout_s=profile.stream_idle_timeout_s,
+        )
+    return profile

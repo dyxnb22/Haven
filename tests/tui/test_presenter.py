@@ -8,6 +8,8 @@ from haven.contracts.events import (
     EvidenceRecorded,
     ModelCompleted,
     Notice,
+    PlanStepView,
+    PlanUpdated,
     PolicyDecided,
     RunCreated,
     RunFinished,
@@ -58,6 +60,37 @@ def test_header_line_displays_active_skills() -> None:
     state = PresenterState(workspace="/home/user/project", selected_skills=("tdd", "review"))
     header = state.header_line()
     assert "skills: [tdd, review]" in header
+
+
+def test_plan_exposes_acceptance_dependencies_and_blockers() -> None:
+    state = reduce(
+        PresenterState(),
+        wrap(
+            PlanUpdated(
+                run_id="run-1",
+                steps=(
+                    PlanStepView(
+                        id="fix",
+                        title="Fix parser",
+                        status="blocked",
+                        depends_on=("inspect",),
+                        acceptance=("Handles empty input",),
+                        blocked_reason="Need sample",
+                        evidence=("read:parser.py",),
+                    ),
+                ),
+            )
+        ),
+    )
+    plan = "\n".join(state.plan_lines)
+    for expected in (
+        "fix",
+        "depends: inspect",
+        "Handles empty input",
+        "Need sample",
+        "read:parser.py",
+    ):
+        assert expected in plan
 
 
 def test_streaming_then_completion() -> None:

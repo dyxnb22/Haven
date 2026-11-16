@@ -7,6 +7,9 @@
     uv run python scripts/refresh_metrics.py            # 重写区块
     uv run python scripts/refresh_metrics.py --check    # 过时时失败（CI）
 
+可用 --coverage-data 与 --offline-report 指定本次测量输入；
+--preserve-historical-live 保留已有表格的历史实时成绩，不读取真实评测目录。
+
 `--check` 是守卫：它重新计算并比较，如果已提交区块与新测量的事实不同就以非零码
 退出。
 """
@@ -16,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -60,25 +64,36 @@ def _coverage_data_is_stale(data: Path, inputs: list[Path]) -> bool:
     return data.stat().st_mtime < newest
 
 
-def _coverage_pct() -> int | None:
+def _coverage_pct(data_file: Path | None = None) -> int | None:
     """通过文档所引用的相同命令，获取文档中的仅 src 覆盖率数字。
 
     `coverage report` 读取 `.coverage` 当前已有的内容，不会重新运行套件。如果从
     过时的数据文件报告，错误数字（上次运行后新增的行会被当作未覆盖）会悄悄写入
     CI 随后强制执行的表格，因此这里会明确因过时而失败。
     """
-    data = ROOT / ".coverage"
+    data = data_file.resolve() if data_file is not None else ROOT / ".coverage"
     if _coverage_data_is_stale(data, [*_src_files(), *_test_files()]):
         raise SystemExit(
             "coverage data is missing or older than the newest source/test file, so the "
-            "reported figure would be wrong. Run `uv run coverage run -m pytest` first."
+            "reported figure would be wrong. Run `uv run coverage run -m pytest` first "
+            "(use COVERAGE_FILE for a custom data path)."
         )
     result = subprocess.run(
-        [sys.executable, "-m", "coverage", "report", "--include=src/*"],
+        [
+            sys.executable,
+            "-m",
+            "coverage",
+            "report",
+            "--data-file",
+            str(data),
+            "--include=src/*",
+        ],
         cwd=ROOT,
         capture_output=True,
         text=True,
     )
+    if result.returncode:
+        raise SystemExit(f"could not read coverage data: {data}")
     match = re.search(r"^TOTAL.*?(\d+)%\s*$", result.stdout, re.MULTILINE)
     return int(match.group(1)) if match else None
 
@@ -95,11 +110,21 @@ def _test_files() -> list[Path]:
     return [p for p in ROOT.glob("tests/**/*.py") if "__pycache__" not in p.parts]
 
 
-def _eval_summary() -> dict[str, object]:
-    report = ROOT / "eval_report" / "report.json"
-    if not report.is_file():
+def _eval_summary(report_path: Path | None = None) -> dict[str, object]:
+    report = report_path if report_path is not None else ROOT / "eval_report" / "report.json"
+    if not report.is_file() and report_path is None:
         return {}
-    data = json.loads(report.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(report.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"could not read offline report: {report}") from exc
+    if report_path is not None and (
+        not isinstance(data, dict)
+        or any(type(data.get(key)) is not int for key in ("passed", "total", "security_violations"))
+        or not 0 <= data["passed"] <= data["total"]
+        or data["security_violations"] < 0
+    ):
+        raise SystemExit(f"invalid offline report: {report}")
     return data if isinstance(data, dict) else {}
 
 
@@ -120,15 +145,21 @@ def _thousands(n: int) -> str:
     return f"~{n / 1000:.1f}k"
 
 
-def render_block(language: str = "en") -> str:
+def render_block(
+    language: str = "en",
+    *,
+    coverage_data: Path | None = None,
+    offline_report: Path | None = None,
+    historical_live_rows: tuple[str, ...] | None = None,
+) -> str:
     """从测试、覆盖率、评估和文档来源生成指标 Markdown 区块。"""
     tests = _count_tests()
-    coverage = _coverage_pct()
+    coverage = _coverage_pct(coverage_data)
     src_files = _src_files()
     src_lines = _line_total(src_files)
     test_lines = _line_total(_test_files())
     adrs = len(list((ROOT / "docs" / "adr").glob("*.md")))
-    ev = _eval_summary()
+    ev = _eval_summary(offline_report)
 
     if language == "zh":
         rows = [
@@ -178,7 +209,7 @@ def render_block(language: str = "en") -> str:
             )
             rows.append(("Eval categories", cats))
 
-    live = _live_summary()
+    live = _live_summary() if historical_live_rows is None else {}
     if live:
         tiers = live.get("tiers", [])
         assert isinstance(tiers, list)
@@ -188,7 +219,7 @@ def render_block(language: str = "en") -> str:
         if language == "zh":
             rows.append(
                 (
-                    f"实时真实仓库套件（{live['model']}）",
+                    f"历史实时真实仓库套件（{live['model']}）",
                     f"修复后 {passed}/{total}（{parts}）；"
                     f"{live['security_violations']} 个安全违规——原始运行和根因见 "
                     "docs/EVAL_LIVE.md",
@@ -197,7 +228,7 @@ def render_block(language: str = "en") -> str:
         else:
             rows.append(
                 (
-                    f"Live real-repo suite ({live['model']})",
+                    f"Historical live real-repo suite ({live['model']})",
                     f"{passed}/{total} after fixes ({parts}); "
                     f"{live['security_violations']} security violations — "
                     "as-found runs and root causes in docs/EVAL_LIVE.md",
@@ -208,7 +239,7 @@ def render_block(language: str = "en") -> str:
             if language == "zh":
                 rows.append(
                     (
-                        "同版本完整重跑",
+                        "历史同版本完整重跑",
                         f"一次不间断运行中 {rerun['passed']}/{rerun['total']}"
                         "（失败归因见 docs/EVAL_LIVE.md）",
                     )
@@ -216,7 +247,7 @@ def render_block(language: str = "en") -> str:
             else:
                 rows.append(
                     (
-                        "Same-version full rerun",
+                        "Historical same-version full rerun",
                         f"{rerun['passed']}/{rerun['total']} in one uninterrupted run "
                         "(failure attribution in docs/EVAL_LIVE.md)",
                     )
@@ -225,8 +256,31 @@ def render_block(language: str = "en") -> str:
     header = "| 指标 | 数值 |" if language == "zh" else "| Metric | Value |"
     lines = [BEGIN, "", header, "|---|---|"]
     lines += [f"| {label} | {value} |" for label, value in rows]
+    if historical_live_rows is not None:
+        lines.extend(historical_live_rows)
     lines += ["", END]
     return "\n".join(lines)
+
+
+def _historical_live_rows(text: str) -> tuple[str, ...]:
+    """只保留已有生成区块中的实时成绩，并显式标注为历史数据。"""
+    block = text.partition(BEGIN)[2].partition(END)[0]
+    labels = (
+        ("| Live real-repo suite ", "| Historical live real-repo suite "),
+        ("| Same-version full rerun |", "| Historical same-version full rerun |"),
+        ("| 实时真实仓库套件", "| 历史实时真实仓库套件"),
+        ("| 同版本完整重跑 |", "| 历史同版本完整重跑 |"),
+    )
+    rows = []
+    for line in block.splitlines():
+        for original, historical in labels:
+            if line.startswith(original):
+                rows.append(historical + line[len(original) :])
+                break
+            if line.startswith(historical):
+                rows.append(line)
+                break
+    return tuple(rows)
 
 
 def _replace_block(text: str, block: str) -> str:
@@ -243,13 +297,27 @@ def main() -> int:
     """生成或校验各摘要文档中的指标区块，并返回退出码。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="fail if any block is stale")
+    parser.add_argument("--coverage-data", type=Path, help="use this fresh coverage data file")
+    parser.add_argument("--offline-report", type=Path, help="use this offline report JSON")
+    parser.add_argument(
+        "--preserve-historical-live",
+        action="store_true",
+        help="keep historical live rows already in each document without reading live results",
+    )
     args = parser.parse_args()
 
     stale: list[str] = []
     for rel, language in TARGETS.items():
-        block = render_block(language)
         path = ROOT / rel
         current = path.read_text(encoding="utf-8")
+        block = render_block(
+            language,
+            coverage_data=args.coverage_data,
+            offline_report=args.offline_report,
+            historical_live_rows=_historical_live_rows(current)
+            if args.preserve_historical_live
+            else None,
+        )
         updated = _replace_block(current, block)
         if args.check:
             if updated != current:
@@ -260,7 +328,18 @@ def main() -> int:
 
     if args.check and stale:
         print("stale metrics in: " + ", ".join(stale))
-        print("run: uv run python scripts/refresh_metrics.py")
+        print(
+            "run: "
+            + shlex.join(
+                [
+                    "uv",
+                    "run",
+                    "python",
+                    "scripts/refresh_metrics.py",
+                    *(arg for arg in sys.argv[1:] if arg != "--check"),
+                ]
+            )
+        )
         return 1
     return 0
 

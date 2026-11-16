@@ -10,6 +10,7 @@ class RunStatus(StrEnum):
     RUNNING_MODEL = "running_model"
     VALIDATING_TOOL = "validating_tool"
     WAITING_APPROVAL = "waiting_approval"
+    WAITING_USER = "waiting_user"
     EXECUTING_TOOL = "executing_tool"
     VERIFYING = "verifying"
     SUCCEEDED = "succeeded"
@@ -26,6 +27,7 @@ ACTIVE_STATUSES = frozenset(
         RunStatus.RUNNING_MODEL,
         RunStatus.VALIDATING_TOOL,
         RunStatus.WAITING_APPROVAL,
+        RunStatus.WAITING_USER,
         RunStatus.EXECUTING_TOOL,
         RunStatus.VERIFYING,
     }
@@ -33,6 +35,7 @@ ACTIVE_STATUSES = frozenset(
 
 
 class StopReason(StrEnum):
+    NEEDS_INPUT = "needs_input"
     FINAL_ANSWER = "final_answer"
     EVIDENCE_SATISFIED = "evidence_satisfied"
     EVIDENCE_MISSING = "evidence_missing"
@@ -54,6 +57,22 @@ class PermissionMode(StrEnum):
 
     INTERACTIVE = "interactive"
     READ_ONLY = "read_only"
+
+
+class AgentMode(StrEnum):
+    """行为模式；规划只能观察，切换执行需要独立的用户入口。"""
+
+    AGENT = "agent"
+    PLAN = "plan"
+
+
+class PlanStatus(StrEnum):
+    """结构化计划的生命周期，独立于步骤进度和运行终态。"""
+
+    DRAFTING = "drafting"
+    READY = "ready"
+    EXECUTING = "executing"
+    COMPLETED = "completed"
 
 
 class ApprovalMode(StrEnum):

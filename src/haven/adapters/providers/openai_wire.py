@@ -127,6 +127,10 @@ def sanitize_history(messages: Sequence[ModelMessage]) -> list[ModelMessage]:
             for call in message.tool_calls:
                 pending[call.call_id] = len(out) - 1
     flush_pending()
+    # 原生续写标记只适用于请求末尾。继续会话或更换模型时，历史中的标记必须移除。
+    for index, message in enumerate(out[:-1]):
+        if message.is_prefix:
+            out[index] = message.model_copy(update={"is_prefix": False})
     return out
 
 

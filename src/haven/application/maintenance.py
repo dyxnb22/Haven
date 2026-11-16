@@ -11,7 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from haven.domain.enums import ACTIVE_STATUSES
+from haven.contracts.events import ToolCompleted
+from haven.domain.enums import ACTIVE_STATUSES, RunStatus
 from haven.ports.session import SessionStorePort
 
 #: 枚举运行时的上限，远高于任何现实中的本地日志规模。
@@ -52,6 +53,8 @@ async def collect_garbage(
         raise ValueError("keep must be >= 0")
     if older_than_days is not None and older_than_days < 0:
         raise ValueError("older_than_days must be >= 0")
+    # 清扫只考虑开始前已有的构件，避免删除快照后新启动运行写入的日志。
+    initial_artifacts = await store.list_artifacts()
     runs = await store.list_runs(_ALL_RUNS)  # 按最新在前排列
     cutoff = None
     if older_than_days is not None:
@@ -63,6 +66,24 @@ async def collect_garbage(
     terminal_seen = 0
     for run in runs:
         if run.status in ACTIVE_STATUSES:
+            skipped_active.append(run.run_id)
+            continue
+        checkpoint = await store.load_checkpoint(run.run_id)
+        if (
+            checkpoint
+            and (
+                (
+                    checkpoint.require_review
+                    and run.status is RunStatus.SUCCEEDED
+                    and checkpoint.evidence.edits
+                )
+                or checkpoint.review
+            )
+            and (
+                checkpoint.review is None
+                or not (checkpoint.review.applied or checkpoint.review.discarded)
+            )
+        ):
             skipped_active.append(run.run_id)
             continue
         if terminal_seen < keep:
@@ -90,7 +111,18 @@ async def collect_garbage(
         checkpoint = await store.load_checkpoint(run_id)
         if checkpoint is not None:
             referenced.update(digest for digest in checkpoint.original_artifacts.values() if digest)
-    orphaned = [digest for digest in await store.list_artifacts() if digest not in referenced]
+            referenced.update(
+                diff.diff_digest for diff in checkpoint.evidence.diffs if diff.diff_digest
+            )
+        for envelope in await store.load_events(run_id):
+            event = envelope.event
+            if isinstance(event, ToolCompleted) and event.process:
+                referenced.add(event.process.output_digest)
+    # 进程日志先写构件，再追加完成事件；活动运行中不清扫这类尚未引用的构件。
+    active = any(run.status in ACTIVE_STATUSES for run in runs)
+    orphaned = (
+        [] if active else [digest for digest in initial_artifacts if digest not in referenced]
+    )
     if apply:
         for digest in orphaned:
             await store.delete_artifact(digest)
@@ -98,6 +130,8 @@ async def collect_garbage(
     notes: list[str] = []
     if skipped_active:
         notes.append(f"{len(skipped_active)} active run(s) were left untouched")
+    if active:
+        notes.append("artifact sweep deferred while runs are active")
     return GcReport(
         kept=tuple(kept),
         deleted=tuple(deleted),

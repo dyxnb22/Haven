@@ -18,6 +18,7 @@ from haven.contracts.events import (
     ToolCompleted,
     ToolProposed,
 )
+from haven.interfaces.model_display import cost_text, model_call_text
 from haven.ports.session import RunRecord
 
 #: 名称以其中任一后缀结尾的环境变量都会视为秘密，因此无需维护列表就能
@@ -104,8 +105,11 @@ def render_markdown(run: RunRecord, envelopes: list[EventEnvelope]) -> str:
         event = env.event
         if isinstance(event, StepStarted):
             lines.append(f"**Step {event.step}**")
-        elif isinstance(event, ModelCompleted) and event.text:
-            lines.append(f"- assistant: {event.text}")
+        elif isinstance(event, ModelCompleted):
+            if event.model_info:
+                lines.append(f"- model {model_call_text(event.model_info)}")
+            if event.text:
+                lines.append(f"- assistant: {event.text}")
         elif isinstance(event, ToolProposed):
             lines.append(f"- tool `{event.tool_name}` {event.args_summary}")
         elif isinstance(event, PolicyDecided) and event.decision != "allow":
@@ -138,11 +142,7 @@ def render_markdown(run: RunRecord, envelopes: list[EventEnvelope]) -> str:
                     f"- steps: {event.steps}, tool calls: {event.tool_calls}",
                     f"- tokens: {event.input_tokens} in / {event.output_tokens} out"
                     + (" (estimated)" if event.usage_estimated else ""),
-                    (
-                        f"- cost: ${event.cost_usd:.4f}"
-                        if event.cost_known
-                        else "- cost: unknown (pricing unavailable)"
-                    ),
+                    f"- cost: {cost_text(event.cost_usd, event.cost_known)}",
                 ]
             )
     return _redact("\n".join(lines) + "\n")

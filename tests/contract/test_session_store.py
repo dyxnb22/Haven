@@ -1,7 +1,10 @@
 """针对两个存储实现运行的契约测试，以保持二者行为一致。"""
 
 import asyncio
+import json
+import sqlite3
 from collections.abc import AsyncIterator
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -14,9 +17,11 @@ from haven.contracts.checkpoint import (
     EvidenceSnapshot,
     UsageSnapshot,
 )
-from haven.contracts.events import RunCreated, StepStarted
+from haven.contracts.events import HandoffUpdated, RunCreated, StepStarted
+from haven.contracts.handoff import HandoffNotes
 from haven.domain.budget import Budget, BudgetUsage
-from haven.domain.enums import ApprovalDecision, EffectState, RunStatus
+from haven.domain.digest import sha256_text
+from haven.domain.enums import AgentMode, ApprovalDecision, EffectState, RunStatus
 from haven.ports.session import ExecutionRecord, SessionStorePort
 
 
@@ -65,6 +70,267 @@ async def test_run_lifecycle(store: SessionStorePort) -> None:
     assert await store.list_runs(0) == []
     with pytest.raises(ValueError, match="non-negative"):
         await store.list_runs(-1)
+
+
+async def test_handoff_revision_is_atomic_and_leaves_checkpoint_and_status_untouched(
+    store: SessionStorePort,
+) -> None:
+    await store.create_run("run-1", "/tmp/ws", "ws", "task", "interactive")
+    await store.append_event("run-1", StepStarted(run_id="run-1", step=1))
+    saved = checkpoint(last_seq=1)
+    await store.save_checkpoint(saved)
+    await store.update_run_status("run-1", RunStatus.WAITING_USER, "needs_input")
+    event = HandoffUpdated(
+        run_id="run-1",
+        notes=HandoffNotes(decisions="Keep the existing API: callers depend on it"),
+        checkpoint_seq=1,
+    )
+    outcomes = await asyncio.gather(
+        store.append_handoff(event, 1), store.append_handoff(event, 1), return_exceptions=True
+    )
+    assert sum(isinstance(item, ValueError) for item in outcomes) == 1
+    assert (await store.load_events("run-1"))[-1].seq == 2
+    assert await store.load_checkpoint("run-1") == saved
+    record = await store.get_run("run-1")
+    assert record is not None and record.status is RunStatus.WAITING_USER
+    cleared = await store.append_handoff(event.model_copy(update={"notes": None}), 2)
+    assert cleared.seq == 3
+    assert await store.load_checkpoint("run-1") == saved
+
+
+async def test_handoff_refuses_active_or_delegated_runs(store: SessionStorePort) -> None:
+    await store.create_run("run-1", "/tmp/ws", "ws", "task", "interactive")
+    await store.save_checkpoint(checkpoint(last_seq=0))
+    event = HandoffUpdated(
+        run_id="run-1", notes=HandoffNotes(next_steps="Inspect"), checkpoint_seq=0
+    )
+    with pytest.raises(ValueError, match="run is active"):
+        await store.append_handoff(event, 0)
+    await store.update_run_status("run-1", RunStatus.STOPPED, "stopped")
+    await store.save_checkpoint(
+        checkpoint(last_seq=0).model_copy(update={"parent_run_id": "parent"})
+    )
+    with pytest.raises(ValueError, match="run is active"):
+        await store.append_handoff(event, 0)
+    assert await store.load_events("run-1") == []
+
+
+async def test_external_handoff_writers_cannot_reuse_event_sequences(tmp_path: Path) -> None:
+    first = await SqliteSessionStore.open(tmp_path / "store.db", tmp_path / "artifacts")
+    second = await SqliteSessionStore.open(tmp_path / "store.db", tmp_path / "artifacts")
+    try:
+        await first.create_run("run-1", "/tmp/ws", "ws", "task", "interactive")
+        await first.append_event("run-1", StepStarted(run_id="run-1", step=1))
+        await first.save_checkpoint(checkpoint(last_seq=1))
+        await first.update_run_status("run-1", RunStatus.STOPPED, "stopped")
+        event = HandoffUpdated(
+            run_id="run-1", notes=HandoffNotes(decisions="Decision"), checkpoint_seq=1
+        )
+        results = await asyncio.gather(
+            first.append_handoff(event, 1), second.append_handoff(event, 1), return_exceptions=True
+        )
+        assert sum(isinstance(item, ValueError) for item in results) == 1
+        await asyncio.gather(
+            first.append_event("run-1", StepStarted(run_id="run-1", step=2)),
+            second.append_event("run-1", StepStarted(run_id="run-1", step=3)),
+        )
+        assert [item.seq for item in await second.load_events("run-1")] == [1, 2, 3, 4]
+    finally:
+        await first.close()
+        await second.close()
+
+
+async def test_session_search_matches_full_history_and_literal_patterns(
+    store: SessionStorePort,
+) -> None:
+    await store.create_run("older", "/ws", "same", "fix 100%_ready", "interactive")
+    for index in range(12):
+        await store.create_run(f"new-{index}", "/ws", "same", "recent", "interactive")
+    await store.create_run("elsewhere", "/other", "different", "100%_ready", "interactive")
+    await store.create_run("child-123", "/ws", "same", "100%_ready", "read_only")
+    assert [r.run_id for r in await store.search_runs("%_", 2, "same")] == ["older"]
+    assert [r.run_id for r in await store.search_runs("OLDER", 2)] == ["older"]
+    await store.update_run_status("older", RunStatus.SUCCEEDED, "done")
+    assert [r.run_id for r in await store.search_runs("succeeded", 1)] == ["older"]
+    assert await store.search_runs("", 0) == []
+    with pytest.raises(ValueError, match="non-negative"):
+        await store.search_runs("", -1)
+
+
+async def test_input_history_is_bounded_ordered_and_workspace_scoped(
+    store: SessionStorePort,
+) -> None:
+    assert await store.load_input_history("/first") == []
+    await store.record_input("/other", "another workspace's task")
+    for index in range(25):
+        await store.record_input("/first", f"任务 {index}: inspect @src/parser.py")
+    expected = [f"任务 {index}: inspect @src/parser.py" for index in range(5, 25)]
+    assert await store.load_input_history("/first") == expected
+    assert await store.load_input_history("/other") == ["another workspace's task"]
+    loaded = await store.load_input_history("/first")
+    loaded.clear()
+    assert await store.load_input_history("/first") == expected
+    assert await store.list_runs(20) == []
+
+
+async def test_clearing_input_history_preserves_other_workspaces_and_runs(
+    store: SessionStorePort,
+) -> None:
+    await store.create_run("run-1", "/first", "ws", "saved goal", "interactive")
+    await store.save_checkpoint(checkpoint())
+    await store.record_input("/first", "clear this task")
+    await store.record_input("/other", "keep this task")
+    await store.clear_input_history("/first")
+    await store.clear_input_history("/first")
+    assert await store.load_input_history("/first") == []
+    assert await store.load_input_history("/other") == ["keep this task"]
+    assert await store.get_run("run-1") is not None
+    assert await store.load_checkpoint("run-1") == checkpoint()
+
+
+async def test_v4_database_adds_input_history_without_losing_runs(tmp_path: Path) -> None:
+    from haven.adapters.sqlite_session import DB_SCHEMA_VERSION
+
+    db, artifacts = tmp_path / "sessions.db", tmp_path / "artifacts"
+    original = await SqliteSessionStore.open(db, artifacts)
+    await original.create_run("saved-run", "/ws", "digest", "original goal", "interactive")
+    # v4 与当前 runs 结构一致，但没有输入历史表。
+    await original._db.execute("DROP TABLE input_history")  # noqa: SLF001
+    await original._db.execute("UPDATE schema_meta SET version = 4")  # noqa: SLF001
+    await original._db.commit()  # noqa: SLF001
+    await original.close()
+
+    migrated = await SqliteSessionStore.open(db, artifacts)
+    try:
+        run = await migrated.get_run("saved-run")
+        assert run is not None and run.goal == "original goal"
+        assert await migrated.load_input_history("/ws") == []
+        await migrated.record_input("/ws", "a new task")
+        cursor = await migrated._db.execute("SELECT version FROM schema_meta")  # noqa: SLF001
+        row = await cursor.fetchone()
+        assert row is not None and row["version"] == DB_SCHEMA_VERSION
+    finally:
+        await migrated.close()
+
+    reopened = await SqliteSessionStore.open(db, artifacts)
+    try:
+        assert await reopened.load_input_history("/ws") == ["a new task"]
+    finally:
+        await reopened.close()
+
+
+async def test_project_notes_are_scoped_and_separate_from_runs_and_history(
+    store: SessionStorePort,
+) -> None:
+    await store.create_run("run-1", "/first", "ws", "saved goal", "interactive")
+    await store.save_checkpoint(checkpoint())
+    await store.record_input("/first", "a previous task")
+    first = await store.add_project_note("/first", "  项目命令：uv run pytest  ")
+    other = await store.add_project_note("/other", "another project's note")
+    assert first.text == "项目命令：uv run pytest"
+    assert first.id != other.id and first.created_at.endswith("Z")
+    assert await store.list_project_notes("/first") == (first,)
+    assert not await store.delete_project_note("/first", other.id)
+    assert not await store.delete_project_note("/first", -1)
+    assert await store.delete_project_note("/first", first.id)
+    assert not await store.delete_project_note("/first", first.id)
+    await store.clear_project_notes("/first")
+    await store.clear_project_notes("/first")
+    assert await store.list_project_notes("/first") == ()
+    assert await store.list_project_notes("/other") == (other,)
+    assert await store.load_input_history("/first") == ["a previous task"]
+    assert await store.get_run("run-1") is not None
+    assert await store.load_checkpoint("run-1") == checkpoint()
+
+
+@pytest.mark.parametrize("text", ["", "  ", "x" * 501, "note\x00hidden"])
+async def test_invalid_project_notes_do_not_write(store: SessionStorePort, text: str) -> None:
+    with pytest.raises(ValueError, match="1–500"):
+        await store.add_project_note("/first", text)
+    assert await store.list_project_notes("/first") == ()
+
+
+async def test_project_note_capacity_rejects_new_entries_without_evicting_old_ones(
+    store: SessionStorePort,
+) -> None:
+    for _ in range(20):
+        await store.add_project_note("/first", "short note")
+    original = await store.list_project_notes("/first")
+    with pytest.raises(ValueError, match="full"):
+        await store.add_project_note("/first", "one too many")
+    assert await store.list_project_notes("/first") == original
+    await store.clear_project_notes("/first")
+    for _ in range(4):
+        await store.add_project_note("/first", "约" * 500)
+    original = await store.list_project_notes("/first")
+    with pytest.raises(ValueError, match="full"):
+        await store.add_project_note("/first", "界")
+    assert await store.list_project_notes("/first") == original
+    assert await store.delete_project_note("/first", original[0].id)
+    await store.add_project_note("/first", "now there is room")
+    assert len(await store.list_project_notes("/first")) == 4
+
+
+async def test_v5_migration_adds_notes_and_preserves_history_and_checkpoints(
+    tmp_path: Path,
+) -> None:
+    from haven.adapters.sqlite_session import DB_SCHEMA_VERSION
+
+    db, artifacts = tmp_path / "sessions.db", tmp_path / "artifacts"
+    old = await SqliteSessionStore.open(db, artifacts)
+    await old.create_run("run-1", "/ws", "digest", "saved goal", "interactive")
+    await old.save_checkpoint(checkpoint())
+    await old.record_input("/ws", "saved task input")
+    await old._db.execute("DROP TABLE project_notes")  # noqa: SLF001
+    await old._db.execute("UPDATE schema_meta SET version = 5")  # noqa: SLF001
+    await old._db.commit()  # noqa: SLF001
+    await old.close()
+    migrated = await SqliteSessionStore.open(db, artifacts)
+    try:
+        assert await migrated.list_project_notes("/ws") == ()
+        note = await migrated.add_project_note("/ws", "keep this after restarting")
+        assert await migrated.load_input_history("/ws") == ["saved task input"]
+        assert await migrated.load_checkpoint("run-1") == checkpoint()
+        cursor = await migrated._db.execute("SELECT version FROM schema_meta")  # noqa: SLF001
+        row = await cursor.fetchone()
+        assert row is not None and row["version"] == DB_SCHEMA_VERSION
+    finally:
+        await migrated.close()
+    reopened = await SqliteSessionStore.open(db, artifacts)
+    try:
+        assert await reopened.list_project_notes("/ws") == (note,)
+        assert await reopened.delete_project_note("/ws", note.id)
+    finally:
+        await reopened.close()
+    again = await SqliteSessionStore.open(db, artifacts)
+    try:
+        assert await again.list_project_notes("/ws") == ()
+        assert await again.get_run("run-1") is not None
+    finally:
+        await again.close()
+
+
+async def test_concurrent_connections_cannot_overfill_project_notes(tmp_path: Path) -> None:
+    db, artifacts = tmp_path / "sessions.db", tmp_path / "artifacts"
+    first = await SqliteSessionStore.open(db, artifacts)
+    second = await SqliteSessionStore.open(db, artifacts)
+    try:
+        attempts = await asyncio.gather(
+            *(
+                (first if index % 2 else second).add_project_note("/ws", f"note {index}")
+                for index in range(30)
+            ),
+            return_exceptions=True,
+        )
+        assert sum(isinstance(result, ValueError) for result in attempts) == 10
+        assert all(
+            not isinstance(result, Exception) or isinstance(result, ValueError)
+            for result in attempts
+        )
+        assert len(await first.list_project_notes("/ws")) == 20
+    finally:
+        await first.close()
+        await second.close()
 
 
 async def test_event_journal_is_ordered_and_typed(store: SessionStorePort) -> None:
@@ -301,6 +567,60 @@ async def test_artifact_listing_and_deletion(store: SessionStorePort) -> None:
 
 
 class TestSqliteSpecific:
+    async def test_concurrent_fresh_opens_share_one_schema_version(self, tmp_path: Path) -> None:
+        from haven.adapters.sqlite_session import DB_SCHEMA_VERSION
+
+        db, artifacts = tmp_path / "haven.db", tmp_path / "artifacts"
+
+        async def open_and_close() -> None:
+            store = await SqliteSessionStore.open(db, artifacts)
+            await store.close()
+
+        await asyncio.gather(*(open_and_close() for _ in range(8)))
+        with closing(sqlite3.connect(db)) as raw:
+            assert raw.execute("SELECT version FROM schema_meta").fetchall() == [
+                (DB_SCHEMA_VERSION,)
+            ]
+
+    async def test_legacy_checkpoint_defaults_do_not_invalidate_its_stored_checksum(
+        self, tmp_path: Path
+    ) -> None:
+        db, art = tmp_path / "haven.db", tmp_path / "artifacts"
+        store = await SqliteSessionStore.open(db, art)
+        try:
+            original = checkpoint().model_dump(mode="json")
+            original.pop("agent_mode")
+            original.pop("plan_status")
+            original.pop("guidance_snapshot")
+            original.pop("verification")
+            payload = json.dumps(original, separators=(",", ":"), ensure_ascii=False)
+            await store._db.execute(  # noqa: SLF001
+                "INSERT INTO checkpoints VALUES (?, ?, ?, ?, ?)",
+                ("run-1", 3, payload, sha256_text(payload), "2026-10-28T00:00:00Z"),
+            )
+            await store._db.commit()  # noqa: SLF001
+        finally:
+            await store.close()
+
+        reopened = await SqliteSessionStore.open(db, art)
+        try:
+            loaded = await reopened.load_checkpoint("run-1")
+            assert loaded is not None
+            assert loaded.agent_mode is AgentMode.AGENT
+            assert loaded.plan_status is None
+            assert loaded.guidance_snapshot is None
+            assert loaded.verification is None
+
+            corrupted = payload.replace('"fix bug"', '"tampered goal"')
+            await reopened._db.execute(  # noqa: SLF001
+                "UPDATE checkpoints SET state_json = ? WHERE run_id = 'run-1'", (corrupted,)
+            )
+            await reopened._db.commit()  # noqa: SLF001
+            with pytest.raises(StoreError, match="checksum"):
+                await reopened.load_checkpoint("run-1")
+        finally:
+            await reopened.close()
+
     async def test_events_survive_reopen(self, tmp_path: Path) -> None:
         db, art = tmp_path / "haven.db", tmp_path / "artifacts"
         store = await SqliteSessionStore.open(db, art)
@@ -348,15 +668,72 @@ class TestSqliteSpecific:
 
     async def test_schema_version_mismatch_fails_closed(self, tmp_path: Path) -> None:
         db, art = tmp_path / "haven.db", tmp_path / "artifacts"
-        store = await SqliteSessionStore.open(db, art)
-        await store._db.execute("UPDATE schema_meta SET version = 999")  # noqa: SLF001
-        await store._db.commit()  # noqa: SLF001
-        await store.close()
+        with closing(sqlite3.connect(db)) as raw, raw:
+            raw.execute("CREATE TABLE schema_meta (version INTEGER, migrated_at TEXT)")
+            raw.execute("INSERT INTO schema_meta VALUES (999, 'future')")
+        original = db.read_bytes()
 
         with pytest.raises(StoreError, match="schema"):
             await SqliteSessionStore.open(db, art)
+        assert db.read_bytes() == original
+        assert not art.exists()
 
-    async def test_v1_database_migrates_in_place(self, tmp_path: Path) -> None:
+    async def test_failed_migration_rolls_back_and_can_retry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import aiosqlite
+
+        from haven.adapters.sqlite_session import DB_SCHEMA_VERSION
+
+        db, art = tmp_path / "haven.db", tmp_path / "artifacts"
+        original = await SqliteSessionStore.open(db, art)
+        await original.create_run("run-1", "/ws", "ws", "old run", "interactive")
+        await original.close()
+        with closing(sqlite3.connect(db)) as raw:
+            raw.executescript(
+                "DROP TABLE project_notes; "
+                "ALTER TABLE executions DROP COLUMN dest_path; "
+                "UPDATE schema_meta SET version = 2;"
+            )
+
+        connect = aiosqlite.connect
+        opened = []
+
+        def tracked_connect(*args, **kwargs):  # type: ignore[no-untyped-def]
+            connection = connect(*args, **kwargs)
+            opened.append(connection)
+            return connection
+
+        with monkeypatch.context() as patch:
+            patch.setattr(aiosqlite, "connect", tracked_connect)
+            try:
+                with pytest.raises(sqlite3.OperationalError, match="dest_path"):
+                    await SqliteSessionStore.open(db, art)
+                with pytest.raises(ValueError, match="no active connection"):
+                    await opened[0].execute("SELECT 1")
+            finally:
+                for connection in opened:
+                    await connection.close()
+
+        with closing(sqlite3.connect(db)) as raw:
+            assert raw.execute("SELECT version FROM schema_meta").fetchall() == [(2,)]
+            tables = {row[0] for row in raw.execute("SELECT name FROM sqlite_schema")}
+            assert not {"executions_v3", "project_notes"} & tables
+            raw.execute("ALTER TABLE executions ADD COLUMN dest_path TEXT NOT NULL DEFAULT ''")
+
+        migrated = await SqliteSessionStore.open(db, art)
+        try:
+            assert await migrated.get_run("run-1") is not None
+            assert await migrated.list_project_notes("/ws") == ()
+            with closing(sqlite3.connect(db)) as raw:
+                assert raw.execute("SELECT version FROM schema_meta").fetchall() == [
+                    (DB_SCHEMA_VERSION,)
+                ]
+        finally:
+            await migrated.close()
+
+    @pytest.mark.parametrize("open_count", [1, 2])
+    async def test_v1_database_migrates_in_place(self, tmp_path: Path, open_count: int) -> None:
         """v1 存储（没有 dest_path 列）必须能够打开、获得该列，并读回迁移前写入的
         记录。"""
         import aiosqlite
@@ -396,20 +773,25 @@ class TestSqliteSpecific:
         await raw.commit()
         await raw.close()
 
-        store = await SqliteSessionStore.open(db_path, art)
-        records = await store.load_executions("run-1")
-        assert records[0].dest_path == ""
-        cursor = await store._db.execute("SELECT version FROM schema_meta")  # noqa: SLF001
-        row = await cursor.fetchone()
-        assert row is not None and int(row["version"]) == DB_SCHEMA_VERSION
+        async def inspect_migrated() -> None:
+            store = await SqliteSessionStore.open(db_path, art)
+            try:
+                records = await store.load_executions("run-1")
+                assert records[0].dest_path == ""
+                with closing(sqlite3.connect(db_path)) as migrated:
+                    assert migrated.execute("SELECT version FROM schema_meta").fetchall() == [
+                        (DB_SCHEMA_VERSION,)
+                    ]
+                    assert (
+                        migrated.execute(
+                            "SELECT name FROM sqlite_schema WHERE name='idx_executions_tool_name'"
+                        ).fetchone()
+                        is not None
+                    )
+            finally:
+                await store.close()
 
-        # 验证索引迁移成功建立
-        idx_cursor = await store._db.execute(  # noqa: SLF001
-            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_runs_created_at'"
-        )
-        assert await idx_cursor.fetchone() is not None
-
-        await store.close()
+        await asyncio.gather(*(inspect_migrated() for _ in range(open_count)))
 
 
 async def test_sqlite_put_artifact_handles_exdev(

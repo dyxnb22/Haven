@@ -54,6 +54,13 @@ def normalize(envelopes: list[EventEnvelope]) -> list[dict[str, Any]]:
     for envelope in envelopes:
         payload = envelope.event.model_dump(mode="json")
         stable = {k: v for k, v in payload.items() if k not in _VOLATILE}
+        if stable.get("process"):
+            # 输出构件包含实际工作目录；保留元数据行为，只屏蔽路径与内容地址。
+            stable["process"] = {
+                **stable["process"],
+                "cwd": "<workspace>",
+                "output_digest": "<digest>",
+            }
         if "summary" in stable and isinstance(stable["summary"], str):
             # 人类摘要中会出现摘要和字节数
             stable["summary"] = _mask(stable["summary"])

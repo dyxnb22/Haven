@@ -135,11 +135,13 @@ that exactly one class enjoys that exception.
 | `repo.search` | read-only | allow | allow | ripgrep when available (honours `.gitignore`), Python fallback; result, line, and byte caps |
 | `repo.symbol` | read-only | allow | allow | workspace source files, locates definitions and references with line previews (ADR 0035) |
 | `skill.read` | read-only | allow | allow | a discovered skill's own directory only: relative paths, symlinks refused, byte cap; companion manifest discovery (ADR 0032, 0034) |
+| `task.input` | effect | ask | deny | exact input/EOF approval; current run's sandboxed process only; bounded writes |
 | `task.logs` | read-only | allow | allow | reads bounded tail lines from background task stdout/stderr ring buffer (ADR 0037) |
 | `task.plan` | state | allow | allow | touches only run state; no path, no external effect |
 | `task.start` | exec | ask | deny | managed long-running process in OS sandbox; non-blocking ring buffer; auto-cleaned (ADR 0037) |
 | `task.status` | read-only | allow | allow | inspects running status and exit code of a task in this run's job pool (ADR 0037) |
 | `task.stop` | state | allow | allow | graceful SIGTERM/SIGKILL termination of a managed background task (ADR 0037) |
+| `user.ask` | state | allow | allow | durable pause; schema-bound human answers; no permission elevation |
 | `web.fetch` | read-only | allow | allow | read-only web fetch converted to markdown, byte-capped, SSRF protected (ADR 0038) |
 | `web.search` | read-only | allow | allow | read-only web documentation search, bounded results, untrusted data framing (ADR 0038) |
 

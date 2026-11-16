@@ -41,6 +41,9 @@ Open a local Git repo
 
 ## Quick start (offline, no API key)
 
+For a runtime-only install, platform checks and session upgrades, see the
+[installation and upgrade guide](docs/INSTALL_UPGRADE.md).
+
 ```bash
 uv sync --locked
 
@@ -135,18 +138,18 @@ See `docs/ARCHITECTURE.md` for the layering and state-machine diagrams, and
 - A **reproducible offline eval suite** spanning task, robustness, security,
   injection, budget, and recovery cases (count in the generated table above)
   with JSON + Markdown reports and a hard security gate.
-- **Benefit gates before features**: capabilities common in comparable
-  products (MCP, a model-driven reviewer subagent, a planner/FSM layer,
-  subagent orchestration, a full LSP integration) were evaluated against
-  measured failure data and deliberately *not* built; the reasoning is
-  recorded in ADR 0007 and, after the live evaluation tiers, ADR 0023.
+- Read-only scout/reviewer model loops with independent context and parent budget
+  accounting, structured plans with dependencies and evidence, controlled MCP
+  tools, and explicit worktree review. Historical feature tradeoffs are recorded
+  in ADR 0007 and ADR 0023; current behavior is described in
+  [capabilities](docs/REMAINING_CAPABILITIES.md).
 
 ## Non-goals (v1)
 
-Multi-agent orchestration · RAG/GraphRAG · browser/computer-use/voice/image ·
+Unrestricted multi-agent orchestration · RAG/GraphRAG · browser/computer-use/voice/image ·
 cloud accounts or remote execution · an unconfined shell (`repo.exec` is argv
 only; an explicit shell interpreter always asks and stays sandboxed) · auto
-commit/push/PR · multi-provider routing · MCP. These are deliberately out of
+commit/push/PR · multi-provider routing. These are deliberately out of
 scope so the core guarantees can be proven rather than gestured at.
 
 ## Command surface
@@ -160,6 +163,12 @@ haven init --workspace PATH [--accept]   # one-step onboarding: env summary + re
 haven run GOAL --workspace PATH      # headless; read-only by default
 haven run GOAL --write --approval-policy reject|trusted-recipe|all [--jsonl] [--events F]
 haven run GOAL --skill NAME          # load a discovered skill (repeatable)
+haven run GOAL --plan                # prepare a read-only plan for review
+haven run GOAL --write --worktree --review   # retain verified changes for human review
+haven review RUN_ID [--file PATH --hunk N]   # browse retained changes without a model
+haven review RUN_ID --apply|--discard --binding DIGEST   # resolve the reviewed snapshot
+haven implement RUN_ID --approval-policy reject|trusted-recipe|all   # confirm a ready plan
+haven answer RUN_ID --request ID --answers '{"scope":"Parser"}'  # answer a saved question
 haven continue RUN_ID FOLLOW_UP      # a follow-up turn that keeps prior context
 haven skills list | init | info | validate   # manage, scaffold, inspect, and check skills
 haven mcp list | inspect | pin | serve SERVER_NAME   # manage and pin controlled MCP servers
@@ -168,11 +177,14 @@ haven discover --workspace PATH [--accept]   # suggest (or persist) .haven.toml 
 haven doctor --workspace PATH        # environment check, no side effects
 haven gc [--keep N] [--older-than-days D] [--yes]   # prune old runs (dry run by default)
 haven sessions list | show RUN_ID
+haven sessions list --search QUERY   # search full history by ID, goal or status
 haven replay RUN_ID                  # pure journal projection, no model/tools
 haven resume RUN_ID                  # recovery checks, then TUI
 haven rewind RUN_ID                  # undo a finished run's file changes (fail-closed)
 haven reconcile RUN_ID CALL_ID --as confirmed|not_run|abandon
 haven export RUN_ID --format jsonl|markdown
+haven output RUN_ID [CALL_ID]        # check status, diagnostic locations and saved process logs
+haven handoff RUN_ID [--prepare|--set FILE --expected-seq N|--history|--clear]
 haven debug-context GOAL             # what the model would see, and why
 haven debug-context --run RUN_ID     # the context recorded at each step
 haven eval --offline [--category task,security]
@@ -183,14 +195,98 @@ haven config explain --workspace PATH
 
 <!-- END CLI COMMAND SURFACE -->
 
-Inside the TUI, `/help`, `/mode`, `/budget`, `/context`, `/sessions`, `/skill`, `/fork`,
-`/rewind`, `/diff`, `/export`, and `/quit` expose the interactive controls.
+Inside the TUI, `/help`, `/mode`, `/budget`, `/context`, `/new`, `/sessions`, `/skill`,
+`/fork`, `/rewind`, `/diff`, `/review`, `/export`, and `/quit` expose the interactive controls.
+`/sessions` opens a searchable picker to open history, resume an interrupted task,
+or fork it. `/new` starts a fresh conversation. `/diff` browses files and hunks.
+Isolated TUI changes require confirmation before reconciliation; `/review` reopens
+a retained review. Pending questions and reviews block starting another task.
+Managed processes accept stdin through `task.input`; `task.start(terminal=true)`
+uses a POSIX PTY. See [capabilities](docs/REMAINING_CAPABILITIES.md) for tools and limits.
+Use `/plan` with a goal to prepare a read-only plan, review or revise it in chat, then
+explicitly confirm with `/implement` (or `/implement RUN_ID`). Ordinary follow-ups
+and `/mode` approval changes keep planning read-only. See [Plan mode](docs/PLAN_MODE.md)
+for the runtime API and persistence guarantees.
+When the agent needs clarification, the TUI displays a form; `/answer` reopens it.
+Headless runs return `needs_input` with exit code `8` and save the question for
+`haven answer`. Answers resume the same run with its budget and evidence intact.
+See [User input](docs/USER_INPUT.md) for cancellation, JSON, and worktree recovery.
 `@path` file mentions point the agent at a file without bypassing `repo.read`;
 typing while a run is active queues the input for the next turn rather than
 interrupting it.
 
 Exit codes are stable: `0` success · `2` usage · `3` policy/permission ·
-`4` provider · `5` tool · `6` budget/stopped · `7` recovery required.
+`4` provider · `5` tool · `6` budget/stopped · `7` recovery required · `8` needs input.
+
+In the main TUI input, Up/Down recalls the last 20 submitted task prompts.
+Down past the newest entry restores the draft you were writing before browsing.
+History is saved per workspace in the existing session database and restored on
+restart; drafts stay in memory. Slash commands and question-form answers are not
+added to this history.
+Use `/history` to view it, or `/history clear` to remove only this workspace's
+input history. These commands preserve a draft saved while browsing history.
+Use `/memory` to inspect the loaded guidance for new runs, with source,
+scope, missing/unavailable files, and truncation details. It shows the loaded
+snapshot without reading files again or calling the model.
+Use `/memory reload` while idle to load external edits for the next run or follow-up.
+Active tasks, pending questions and pending reviews block reload. Resuming a saved
+task uses its own guidance snapshot; older checkpoints without a snapshot warn and
+use the current guidance. Reload reads the active workspace (the isolated worktree
+when enabled) and leaves permissions, skills, recipes and MCP configuration unchanged.
+Use `/remember` followed by the note text while idle to save it in Haven's local user data.
+`/memory` lists its ID and creation time; `/memory forget ID` deletes one note and
+`/memory clear` clears this project's notes. Limits are 20 notes, 500 characters
+per note and 2000 text characters in total; reaching a limit rejects the new entry.
+Notes are separate from repository guidance and enter new runs as untrusted data.
+They persist across restarts and isolated worktrees for the same main workspace.
+Deleting notes leaves historical task snapshots intact. Note edits do not re-read
+repository guidance; use `/memory reload` for external file changes.
+
+Use `/verify` to inspect configured verification groups and current results.
+`/verify use NAME` selects required checks for the next run; `/verify clear`
+explicitly clears that next selection. Headless runs accept `--check-group NAME`;
+follow-ups inherit the saved selection unless explicitly changed or cleared.
+Every selected check must pass with its configured command after the last write.
+Missing, failed, stale or filtered results cannot satisfy it. See
+[verification groups](docs/VERIFICATION_GROUPS.md) for configuration, approvals,
+Plan mode, recovery and `--clear-check-group`.
+
+For a Python project using pytest and Ruff, see the
+[Python workflow](docs/PYTHON_WORKFLOW.md): preview and confirm fixed recipes,
+inspect their environment and permissions, then verify and review an isolated change.
+`doctor` reports missing pytest/Ruff modules when the recipe uses Haven's Python environment;
+other interpreters are explicitly reported as unverified.
+
+The Evidence tab now groups required-check states with recent process results,
+diagnostic locations and saved-output commands. `/output` opens that tab;
+`/output CALL_ID` opens a paginated log without a model call. Headless users can
+use `haven output RUN_ID` for an overview, or add `CALL_ID` to read the saved log.
+See [process output](docs/PROCESS_OUTPUT.md) for capture limits, paging and export.
+
+Use `/handoff` to review a task's ledger facts and saved working notes;
+`/handoff prepare`, `/handoff edit`, `/handoff history` and `/handoff clear`
+maintain an explicit record while a task is paused or finished. Notes preserve
+decisions, attempts and next steps across compaction and recovery; they remain
+untrusted context. Required checks are always calculated from the ledger.
+The question dialog's **Keep paused** button returns to the main view without
+consuming an answer; `/answer` reopens it. See [task handoff](docs/HANDOFF.md).
+
+Use `/model` to inspect presets and the last call, and `/model use NAME` to
+choose a preset for new runs. Headless runs accept `--model-preset NAME`.
+Saved runs resume with their original route. See [model presets](docs/MODEL_PRESETS.md).
+
+Use `/stats` or `haven sessions stats RUN_ID` to inspect a run's recorded model
+and tool times, repeated read ranges, context builds, tokens, and estimated cost.
+The slowest calls include event numbers for lookup in a JSONL export. Tool times
+include approval wait. Context compression counts builds that recorded a digest
+or a budget truncation. Reports for ongoing runs use the events available so far.
+
+Task completion, failure, and requests for your input ring the terminal bell in
+the TUI and interactive human-readable headless runs. Set `HAVEN_BELL=0` to disable
+the sound; terminal settings control whether it is audible or visual. Redirected
+output, JSON output, replay, and delegated child completions do not ring.
+Common credential, verification-recipe, and permission errors include a next-step
+hint. Run the suggested configuration commands in the task's workspace.
 
 ## Development
 
@@ -208,22 +304,27 @@ is the default model, and no test touches the network or a real API key.
 
 ## Measured results
 
-All reproducible from a clean checkout with no API key. The numbers below are
-generated by `scripts/refresh_metrics.py` and CI fails if they drift:
+Offline tests, coverage and evaluations can be reproduced without an API key.
+Live-model scores are historical measurements, not re-runs of this version.
+The table is generated by `scripts/refresh_metrics.py` and CI checks for drift.
+For reports stored outside the workspace, use `--coverage-data PATH` and
+`--offline-report PATH`; add `--preserve-historical-live` to keep the existing
+historical rows without reading the live results directory. Use the same options
+with `--check` to verify the generated table.
 
 <!-- BEGIN GENERATED METRICS (scripts/refresh_metrics.py; do not edit by hand) -->
 
 | Metric | Value |
 |---|---|
-| Automated tests | 1232 |
-| Line coverage (`src/`) | 89% |
-| Source / test size | ~24.1k / ~18.8k lines |
-| Typed modules (`mypy --strict`) | 123 |
-| Architecture decision records | 43 |
+| Automated tests | 1484 |
+| Line coverage (`src/`) | 90% |
+| Source / test size | ~30.3k / ~25.0k lines |
+| Typed modules (`mypy --strict`) | 153 |
+| Architecture decision records | 49 |
 | Offline eval | 40/40 passed, 0 security violations |
 | Eval categories | security 16 · task 10 · robustness 6 · injection 4 · budget 2 · recovery 2 |
-| Live real-repo suite (deepseek-v4-flash) | 75/79 after fixes (31/31 + 9/9 + 5/5 + 20/20 + 9/13 + 1/1); 0 security violations — as-found runs and root causes in docs/EVAL_LIVE.md |
-| Same-version full rerun | 61/65 in one uninterrupted run (failure attribution in docs/EVAL_LIVE.md) |
+| Historical live real-repo suite (deepseek-v4-flash) | 75/79 after fixes (31/31 + 9/9 + 5/5 + 20/20 + 9/13 + 1/1); 0 security violations — as-found runs and root causes in docs/EVAL_LIVE.md |
+| Historical same-version full rerun | 61/65 in one uninterrupted run (failure attribution in docs/EVAL_LIVE.md) |
 
 <!-- END GENERATED METRICS -->
 
@@ -256,6 +357,7 @@ including one where the security gate itself was wrong.
 | `docs/notes/` | lightweight decisions, experiments, and deferrals below the ADR threshold |
 | `docs/adr/` | immutable architecture decision records (count in the metrics table) |
 | `docs/ROADMAP.md` (+ `ROADMAP2/3`) | the executed improvement plans, kept as the record of what was built in which order and why |
+| [`docs/PERSONAL_ROADMAP.md`](docs/PERSONAL_ROADMAP.md) | proposed personal-development roadmap: priorities, phases, acceptance criteria, and scope |
 
 ## Learn from this repo
 
@@ -288,8 +390,8 @@ source. See `docs/adr/` for the decisions and trade-offs, and
   denied. This is **not** a container or VM: IPC is open and secrets outside
   `$HOME` can remain readable. See [ADR 0009](docs/adr/0009-os-sandbox-and-general-exec.md)
   and [ADR 0013](docs/adr/0013-sandbox-scope-exec-vs-check.md).
-- Token/cost accounting is exact when the provider returns usage and clearly
-  marked `estimated` otherwise.
+- Token usage comes from the provider or a labeled estimate. Cost is a
+  rate-card estimate when rates are available, and `unknown` otherwise.
 - Single repository, single provider, fixed verification recipes, no automatic Git
   history changes.
 

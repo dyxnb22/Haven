@@ -11,7 +11,7 @@ from haven.application.run_persistence import RunOutcome
 from haven.application.state import RunContext
 from haven.contracts.events import Notice
 from haven.contracts.model import ModelMessage, ModelResult
-from haven.domain.enums import RunStatus, StopReason
+from haven.domain.enums import AgentMode, RunStatus, StopReason
 from haven.domain.evidence import evaluate_evidence_gate
 from haven.ports.workspace import WorkspacePort
 
@@ -172,16 +172,41 @@ class AnswerResolver:
                     ),
                 ),
             )
+        if ctx.agent_mode is AgentMode.PLAN and not ctx.plan:
+            ctx.nudges += 1
+            if ctx.nudges > MAX_EVIDENCE_NUDGES:
+                return await self._finish(
+                    ctx,
+                    RunStatus.STOPPED,
+                    StopReason.NO_PROGRESS,
+                    answer.final_text,
+                    "plan_missing",
+                )
+            detail = "Record your implementation plan with task.plan before finishing planning."
+            ctx.transcript.append(ModelMessage(role="user", content=detail))
+            await self._emitter.emit(
+                ctx.run_id, Notice(run_id=ctx.run_id, level="warning", message=detail)
+            )
+            await self._checkpoint(ctx)
+            return None
         ctx.move_to(RunStatus.VERIFYING)
         diff_text = (await self._workspace.run_diff()).diff if ctx.ledger.has_edits else ""
         gate = evaluate_evidence_gate(
             ctx.ledger,
             diff_text,
             verification_available=self._verification_available(),
+            required_checks=(
+                ctx.verification.to_domain()
+                if ctx.verification and ctx.agent_mode is not AgentMode.PLAN
+                else ()
+            ),
         )
         if gate.passed:
             reason = (
-                StopReason.EVIDENCE_SATISFIED if ctx.ledger.has_edits else StopReason.FINAL_ANSWER
+                StopReason.EVIDENCE_SATISFIED
+                if ctx.ledger.has_edits
+                or (ctx.verification and ctx.agent_mode is not AgentMode.PLAN)
+                else StopReason.FINAL_ANSWER
             )
             return await self._finish(
                 ctx, RunStatus.SUCCEEDED, reason, answer.final_text, gate.reason_code

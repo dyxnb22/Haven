@@ -9,10 +9,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from haven.contracts.capability import CapabilitySnapshot
+from haven.contracts.guidance import GuidanceSnapshot
+from haven.contracts.handoff import HandoffSnapshot
 from haven.contracts.model import ModelMessage
+from haven.contracts.model_call import ModelSelection
 from haven.contracts.tools import PlanStep
+from haven.contracts.user_input import UserInputRequest
+from haven.contracts.verification import VerificationSelection
 from haven.domain.budget import Budget, BudgetUsage
-from haven.domain.enums import PermissionMode, RunStatus
+from haven.domain.enums import AgentMode, PermissionMode, PlanStatus, RunStatus
 from haven.domain.evidence import EvidenceLedger
 from haven.domain.ids import RunId
 from haven.domain.transitions import transition
@@ -43,6 +48,12 @@ class RunContext:
     #: 代理当前的计划。它位于 State 而不是 transcript 中，因此每轮都会重新
     #: 渲染到 Context，不会被截断丢弃。
     plan: tuple[PlanStep, ...] = ()
+    #: 规划模式不会因模型输出或审批策略切换而获得执行权限。
+    agent_mode: AgentMode = AgentMode.AGENT
+    #: 计划整体的生命周期；旧运行没有计划时为空。
+    plan_status: PlanStatus | None = None
+    #: 等待回答时独立保存，模型循环不会继续推进。
+    pending_input: UserInputRequest | None = None
     #: 本次运行已授权的常驻审批：授权键 -> 请求它的技能名，或 ADR 0025 的哨兵值
     #: （ADR 0025 推广到 ADR 0032）。命中时带着日志记录自动批准，而不会再次询问。
     #: 它仅在本次运行的内存范围内有效——特意不写入 checkpoint，因此恢复后的运行
@@ -60,9 +71,19 @@ class RunContext:
     #: 本次运行冻结的能力快照与摘要（ADR 规划书 P2）。
     catalog_digest: str = ""
     capabilities: CapabilitySnapshot | None = None
+    #: 运行开始时冻结的项目资料；恢复不能混入后来的指引或笔记。
+    #: None 仅用于没有保存此信息的旧检查点。
+    guidance_snapshot: GuidanceSnapshot | None = None
     #: 父运行与根运行关系（ADR 规划书 Phase P5 子 Agent）。
     parent_run_id: str | None = None
     root_run_id: str | None = None
+    #: 子运行的读取白名单；普通会话后续轮次不使用此限制。
+    file_scope: tuple[str, ...] = ()
+    require_review: bool = False
+    #: 用户选定的必需检查与配方摘要，模型工具不能修改。
+    verification: VerificationSelection | None = None
+    model_selection: ModelSelection | None = None
+    handoff: HandoffSnapshot | None = None
     #: 以下两项仅用于当前进程的单调时钟，不写入检查点；恢复时会从 usage 中
     #: 已保存的累计墙钟重新起算。
     _timing_started_at: float | None = field(default=None, repr=False)

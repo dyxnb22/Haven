@@ -46,6 +46,7 @@ build-backend = "uv_build"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+extend-exclude = ["evals/real", "evals/headtohead", "eval_report"]
 
 [tool.ruff.format]
 # Ruff 会格式化 Markdown 中围栏里的 Python。对于随项目发布的 prose 这很合适，

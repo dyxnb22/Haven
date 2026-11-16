@@ -3,14 +3,22 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 
 from haven.application.compaction import message_chars
 from haven.application.emitter import EventEmitter
 from haven.application.state import RunContext
 from haven.contracts.events import RequestEnvelope
-from haven.contracts.model import ModelRequest, ModelResult
+from haven.contracts.model import ModelRequest, ModelResult, Usage
 from haven.domain.digest import digest_of
 from haven.domain.pricing import Pricing
+
+
+@dataclass(frozen=True, slots=True)
+class UsageCharge:
+    usage: Usage
+    cost_usd: float
+    cost_known: bool
 
 
 class RunTelemetry:
@@ -60,7 +68,7 @@ class RunTelemetry:
         result: ModelResult,
         *,
         pricing: Pricing | None = None,
-    ) -> None:
+    ) -> UsageCharge:
         """将提供商或估算的 token 用量计入运行统计和费用。"""
         usage = result.usage
         estimated = usage.estimated
@@ -84,10 +92,19 @@ class RunTelemetry:
             output_tokens = max(1, output_chars // 4)
         active_pricing = pricing if pricing is not None else self._pricing
         cost = active_pricing.cost(input_tokens, output_tokens, usage.cached_input_tokens)
+        charged = usage.model_copy(
+            update={
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "estimated": estimated,
+            }
+        )
         ctx.usage = ctx.usage.charge_tokens(
             input_tokens,
             output_tokens,
             cost,
             estimated=estimated,
             cached_input_tokens=usage.cached_input_tokens,
+            cost_known=active_pricing.is_known,
         )
+        return UsageCharge(charged, cost, active_pricing.is_known)

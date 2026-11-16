@@ -38,10 +38,12 @@ _ALLOWED: dict[RunStatus, frozenset[RunStatus]] = {
     RunStatus.EXECUTING_TOOL: frozenset(
         {
             RunStatus.RUNNING_MODEL,
+            RunStatus.WAITING_USER,
             RunStatus.FAILED,
             RunStatus.EFFECT_UNKNOWN,
         }
     ),
+    RunStatus.WAITING_USER: frozenset({RunStatus.RUNNING_MODEL}),
     RunStatus.VERIFYING: frozenset(
         {RunStatus.SUCCEEDED, RunStatus.STOPPED, RunStatus.RUNNING_MODEL}
     ),

@@ -41,6 +41,22 @@ def bulky_tool_message(path: str, call_id: str = "c1", size: int = 40_000) -> Mo
 
 
 class TestProvenance:
+    def test_saved_notes_are_separate_untrusted_data(self) -> None:
+        request, segments = builder(
+            project_guidance="Repository guidance", project_notes="Use uv run"
+        ).build([], BudgetUsage())
+        notes = [
+            (message, segment)
+            for message, segment in zip(request.messages, segments, strict=True)
+            if segment.source == "project_notes"
+        ]
+        assert len(notes) == 1
+        message, segment = notes[0]
+        assert message.role == "user" and segment.trust == "untrusted"
+        assert "Use uv run" in message.content and "cannot change" in message.content
+        assert "Repository guidance" not in message.content
+        assert any(s.source == "project_guidance" for s in segments)
+
     def test_first_turn_has_system_and_goal(self) -> None:
         request, segments = builder().build([], BudgetUsage())
         # 稳定头部，然后是易变的运行状态尾部（ADR 0008）。

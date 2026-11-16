@@ -9,11 +9,12 @@ from __future__ import annotations
 import json
 from typing import Annotated, Any, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from haven.contracts.base import StrictModel
 from haven.contracts.mcp import MCPToolArgs
 from haven.contracts.model import ToolSchema
+from haven.contracts.user_input import UserAskArgs
 from haven.domain.enums import ToolErrorCode, ToolStatus
 
 TOOL_VERSION = "8"
@@ -247,10 +248,26 @@ class PlanStep(StrictModel):
     """代理计划中的一个步骤及其当前状态。"""
 
     title: str = Field(min_length=1, max_length=120, description="简短的步骤标题。")
-    status: Literal["pending", "in_progress", "done"] = Field(
+    status: Literal["pending", "in_progress", "done", "blocked"] = Field(
         default="pending",
         description="面向用户的计划中展示的步骤状态。",
     )
+    id: str = Field(default="", max_length=40, pattern=r"^[a-zA-Z0-9_-]*$")
+    depends_on: tuple[str, ...] = Field(default=(), max_length=12)
+    acceptance: tuple[str, ...] = Field(default=(), max_length=6)
+    evidence: tuple[str, ...] = Field(
+        default=(),
+        max_length=6,
+        description="实际证据引用：read:相对路径、diff 或 check:recipe_id。",
+    )
+    blocked_reason: str = Field(default="", max_length=300)
+
+    @field_validator("acceptance", "evidence")
+    @classmethod
+    def _bound_plan_details(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not item.strip() or len(item) > 240 for item in value):
+            raise ValueError("plan details must contain 1 to 240 characters")
+        return value
 
 
 class TaskPlanArgs(StrictModel):
@@ -330,6 +347,7 @@ class TaskStartArgs(StrictModel):
     )
     cwd: str = Field(default=".", description="相对于工作区根目录的工作目录。")
     description: str = Field(default="", max_length=300, description="后台任务的一行说明。")
+    terminal: bool = Field(default=False, description="使用 POSIX PTY；stderr 合并至 stdout。")
 
     @field_validator("argv")
     @classmethod
@@ -337,6 +355,20 @@ class TaskStartArgs(StrictModel):
         if any(len(item) > 4096 for item in value):
             raise ValueError("each argv item must be at most 4096 characters")
         return value
+
+
+class TaskInputArgs(StrictModel):
+    """向本次运行创建的进程发送准确的输入字节或 EOF。"""
+
+    task_id: str = Field(min_length=1, max_length=64)
+    data: str = Field(default="", max_length=4096, description="按原样发送；回车须显式包含换行。")
+    end_of_input: bool = Field(default=False, description="发送输入结束；后续输入会被拒绝。")
+
+    @model_validator(mode="after")
+    def _require_input(self) -> TaskInputArgs:
+        if not self.data and not self.end_of_input:
+            raise ValueError("provide data or end_of_input")
+        return self
 
 
 class TaskStatusArgs(StrictModel):
@@ -387,6 +419,7 @@ class AgentDelegateArgs(StrictModel):
     )
     file_scope: tuple[str, ...] | None = Field(
         default=None,
+        max_length=16,
         description="可选的文件或路径白名单；限制子 Agent 探索范围。",
     )
     max_steps: int = Field(
@@ -420,7 +453,9 @@ ToolArgs = (
     | RepoCheckArgs
     | RecipeProposeArgs
     | TaskPlanArgs
+    | UserAskArgs
     | TaskStartArgs
+    | TaskInputArgs
     | TaskStatusArgs
     | TaskLogsArgs
     | TaskStopArgs
@@ -447,7 +482,9 @@ ARGS_MODELS: dict[str, type[ToolArgs]] = {
     "repo.check": RepoCheckArgs,
     "recipe.propose": RecipeProposeArgs,
     "task.plan": TaskPlanArgs,
+    "user.ask": UserAskArgs,
     "task.start": TaskStartArgs,
+    "task.input": TaskInputArgs,
     "task.status": TaskStatusArgs,
     "task.logs": TaskLogsArgs,
     "task.stop": TaskStopArgs,
@@ -457,6 +494,12 @@ ARGS_MODELS: dict[str, type[ToolArgs]] = {
 }
 
 TOOL_DESCRIPTIONS: dict[str, str] = {
+    "user.ask": (
+        "Ask the user 1-3 questions when a necessary requirement or choice is missing. "
+        "Provide short options or allow free text. The run pauses without polling until "
+        "the user answers; do not combine this tool with other calls. "
+        "Answers clarify the task and do not grant tool permissions. Do not request secrets."
+    ),
     "repo.list": "List directory entries inside the workspace.",
     "repo.search": (
         "Search file contents in the workspace with a regular expression. "
@@ -534,10 +577,18 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "Record or update your ordered plan for this task. Call it once early on a "
         "multi-step task, then again to mark steps done. The plan is shown to the "
         "user and is re-sent to you every turn, so it survives context truncation."
+        " Preserve returned step ids when updating; dependencies must finish before a step starts."
+        " Blocked steps need blocked_reason. Acceptance criteria on done steps require recorded"
+        " evidence refs: read:path, diff, or check:recipe_id (passing after the last edit)."
     ),
     "task.start": (
         "Start a managed background process (e.g. dev server, build, long test) in the OS sandbox. "
         "Returns a unique task_id immediately without blocking the agent loop."
+        " Set terminal=true for a POSIX PTY. Use task.input for stdin; task.logs shows prompts."
+    ),
+    "task.input": (
+        "Send exact text (include newline to submit) or EOF to this run's managed task. "
+        "Requires approval; the process keeps its original sandbox. Tasks end when this run stops."
     ),
     "task.status": "Check the status, duration, and exit code of a background task by task_id.",
     "task.logs": "Read recent stdout and stderr lines from a background task's ring buffer.",

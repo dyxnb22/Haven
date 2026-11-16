@@ -9,10 +9,17 @@ from __future__ import annotations
 from pydantic import Field
 
 from haven.contracts.base import StrictModel
+from haven.contracts.guidance import GuidanceSnapshot
+from haven.contracts.handoff import HandoffSnapshot
 from haven.contracts.model import ModelMessage
+from haven.contracts.model_call import ModelSelection
+from haven.contracts.review import ReviewSnapshot
 from haven.contracts.tools import PlanStep
+from haven.contracts.user_input import UserInputRequest
+from haven.contracts.verification import VerificationSelection
 from haven.domain.budget import Budget, BudgetUsage
 from haven.domain.digest import sha256_text
+from haven.domain.enums import AgentMode, PlanStatus
 from haven.domain.evidence import (
     CheckEvidence,
     DiffEvidence,
@@ -82,6 +89,8 @@ class UsageSnapshot(StrictModel):
     usage_estimated: bool
     #: 由提供商提示缓存提供的 input_tokens 部分。
     cached_input_tokens: int = 0
+    #: None 表示旧快照没有保存费用来源，恢复时保守视为未知。
+    cost_known: bool | None = None
 
     @classmethod
     def from_domain(cls, usage: BudgetUsage) -> UsageSnapshot:
@@ -95,10 +104,14 @@ class UsageSnapshot(StrictModel):
             cost_usd=usage.cost_usd,
             usage_estimated=usage.usage_estimated,
             cached_input_tokens=usage.cached_input_tokens,
+            cost_known=usage.cost_known,
         )
 
     def to_domain(self) -> BudgetUsage:
         """将用量快照还原为可继续累计的领域对象。"""
+        cost_known = self.cost_known
+        if cost_known is None:
+            cost_known = not (self.input_tokens or self.output_tokens or self.cost_usd)
         return BudgetUsage(
             steps=self.steps,
             tool_calls=self.tool_calls,
@@ -108,6 +121,7 @@ class UsageSnapshot(StrictModel):
             cost_usd=self.cost_usd,
             usage_estimated=self.usage_estimated,
             cached_input_tokens=self.cached_input_tokens,
+            cost_known=cost_known,
         )
 
 
@@ -137,6 +151,7 @@ class CheckEvidenceSnapshot(StrictModel):
     duration_ms: int
     #: 记录前 stdout/stderr 被截断时为 True。
     truncated: bool
+    recipe_digest: str = ""
 
 
 class DiffEvidenceSnapshot(StrictModel):
@@ -184,6 +199,7 @@ class EvidenceSnapshot(StrictModel):
                     exit_code=c.exit_code,
                     duration_ms=c.duration_ms,
                     truncated=c.truncated,
+                    recipe_digest=c.recipe_digest,
                 )
                 for c in ledger.checks
             ),
@@ -218,6 +234,7 @@ class EvidenceSnapshot(StrictModel):
                     exit_code=c.exit_code,
                     duration_ms=c.duration_ms,
                     truncated=c.truncated,
+                    recipe_digest=c.recipe_digest,
                 )
                 for c in self.checks
             ),
@@ -263,6 +280,20 @@ class CheckpointV1(StrictModel):
     files_read: dict[str, str] = Field(default_factory=dict)
     #: 当前结构化计划；独立于消息保存，避免压缩时丢失。
     plan: tuple[PlanStep, ...] = ()
+    #: 可选新增字段，旧检查点按普通执行模式恢复。
+    agent_mode: AgentMode = AgentMode.AGENT
+    plan_status: PlanStatus | None = None
+    pending_input: UserInputRequest | None = None
+    parent_run_id: str | None = None
+    root_run_id: str | None = None
+    file_scope: tuple[str, ...] = ()
+    review: ReviewSnapshot | None = None
+    require_review: bool = False
+    #: 可选新增字段；None 表示旧检查点未保存项目资料。
+    guidance_snapshot: GuidanceSnapshot | None = None
+    verification: VerificationSelection | None = None
+    model_selection: ModelSelection | None = None
+    handoff: HandoffSnapshot | None = None
     #: 文件第一次被本次运行编辑前的内容寻址快照。
     original_artifacts: dict[str, str] = Field(
         default_factory=dict,

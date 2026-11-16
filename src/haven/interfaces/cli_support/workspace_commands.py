@@ -10,6 +10,7 @@ import typer
 from haven.config import ConfigError, explain, load_config
 from haven.domain.discovery import RecipeCandidate
 from haven.interfaces.cli_support.common import EXIT_OK, EXIT_USAGE
+from haven.interfaces.model_display import model_spec_lines
 
 
 def discover(
@@ -183,8 +184,16 @@ def config_explain(
         raise typer.Exit(EXIT_USAGE)
     try:
         config = load_config(workspace.resolve())
-    except ConfigError as exc:
+        default_model = config.default_model_spec()
+    except (ConfigError, ValueError) as exc:
         typer.echo(f"error: {exc}")
         raise typer.Exit(EXIT_USAGE) from None
     for key, value, source in explain(config, sandbox_backend_name(select_launcher())):
         typer.echo(f"{key:<32} {value:<48} [{source}]")
+    typer.echo("\nDefault model selection")
+    for line in model_spec_lines(default_model, config):
+        typer.echo(line)
+    for name, spec in sorted(config.model_presets.items()):
+        typer.echo(f"\nModel preset {name} [user]")
+        for line in model_spec_lines(spec, config):
+            typer.echo(line)

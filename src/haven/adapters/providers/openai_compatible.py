@@ -97,6 +97,8 @@ class OpenAICompatibleModel:
         idle_timeout: float = 120.0,
         transport: httpx.AsyncBaseTransport | None = None,
         requires_tool_call_reasoning: bool = False,
+        use_max_completion_tokens: bool = False,
+        default_reasoning_effort: str | None = None,
     ) -> None:
         self._model = model
         self._first_event_timeout = first_event_timeout
@@ -107,6 +109,8 @@ class OpenAICompatibleModel:
         # DeepSeek V4 会拒绝未重放 reasoning_content 的工具调用 assistant 轮次
         # （ADR 0014）；在 bootstrap 时按模型 profile 设置。
         self._requires_tool_call_reasoning = requires_tool_call_reasoning
+        self._use_max_completion_tokens = use_max_completion_tokens
+        self._default_reasoning_effort = default_reasoning_effort
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             headers={"Authorization": f"Bearer {api_key}"},
@@ -304,10 +308,16 @@ class OpenAICompatibleModel:
                 for m in _sanitize_history(request.messages)
             ],
         }
+        effort = (
+            request.reasoning_effort
+            if request.reasoning_effort is not None
+            else self._default_reasoning_effort
+        )
         if request.max_output_tokens is not None:
-            payload["max_tokens"] = request.max_output_tokens
-        if request.reasoning_effort is not None:
-            payload["reasoning_effort"] = request.reasoning_effort
+            limit_key = "max_completion_tokens" if self._use_max_completion_tokens else "max_tokens"
+            payload[limit_key] = request.max_output_tokens
+        if effort is not None:
+            payload["reasoning_effort"] = effort
         if request.tools:
             payload["tools"] = [
                 {

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from typing import Literal
 
 from haven.domain.review import describe, review_diff
 
@@ -39,6 +40,43 @@ class CheckEvidence:
     duration_ms: int
     #: 捕获的输出是否被截断。
     truncated: bool
+    #: 实际配方定义与追加参数的摘要；旧证据没有此字段，不能满足指定配置组。
+    recipe_digest: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class RequiredCheck:
+    recipe_id: str
+    recipe_digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class RequiredCheckState:
+    recipe_id: str
+    status: Literal["passed", "failed", "not_run", "stale", "mismatch"]
+
+
+def required_check_states(
+    required: tuple[RequiredCheck, ...],
+    checks: tuple[CheckEvidence, ...],
+    last_edit_seq: int = -1,
+) -> tuple[RequiredCheckState, ...]:
+    """统一判定必需检查，界面与门禁共享最新结果和新鲜度规则。"""
+    latest = {check.recipe_id: check for check in sorted(checks, key=lambda item: item.seq)}
+    states = []
+    for requirement in required:
+        check = latest.get(requirement.recipe_id)
+        status: Literal["passed", "failed", "not_run", "stale", "mismatch"]
+        if check is None:
+            status = "not_run"
+        elif check.seq <= last_edit_seq:
+            status = "stale"
+        elif check.recipe_digest != requirement.recipe_digest:
+            status = "mismatch"
+        else:
+            status = "passed" if check.exit_code == 0 else "failed"
+        states.append(RequiredCheckState(requirement.recipe_id, status))
+    return tuple(states)
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +169,7 @@ def evaluate_evidence_gate(
     diff_text: str = "",
     *,
     verification_available: bool = True,
+    required_checks: tuple[RequiredCheck, ...] = (),
 ) -> GateResult:
     """由程序决定最终答案是否可以计为成功。
 
@@ -141,7 +180,31 @@ def evaluate_evidence_gate(
     但没有可用配方，门禁就永远无法满足——代理无法凭空创造验证器——因此这是
     终止性失败，而不是可以重试的失败。
     """
+    if required_checks:
+        if not verification_available:
+            return GateResult(
+                False,
+                "verification_unavailable",
+                "The selected verification group cannot run here; restore its registered "
+                "recipes and execution permissions before continuing.",
+                terminal=True,
+            )
+        incomplete = [
+            state
+            for state in required_check_states(required_checks, ledger.checks, ledger.last_edit_seq)
+            if state.status != "passed"
+        ]
+        if incomplete:
+            detail = ", ".join(f"{state.recipe_id}: {state.status}" for state in incomplete)
+            return GateResult(
+                False,
+                f"required_check_{incomplete[0].status}",
+                f"Required verification is incomplete ({detail}). Run each required recipe "
+                "with its configured argv and no extra arguments after the last write.",
+            )
     if not ledger.has_edits:
+        if required_checks:
+            return GateResult(True, "required_checks_satisfied", "All required checks passed.")
         return GateResult(True, "no_writes", "Run made no file changes; final answer accepted.")
 
     if not verification_available:

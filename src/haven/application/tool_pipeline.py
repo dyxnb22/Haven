@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import tempfile
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from haven.application.approval_cards import (
@@ -34,6 +35,7 @@ from haven.application.tool_execution import (
     ToolExecution as ToolExecution,
 )
 from haven.application.tool_execution_types import (
+    DelegateHandler,
     clip,
     error_result,
     map_workspace_error,
@@ -45,6 +47,7 @@ from haven.contracts.events import (
     ToolProposed,
 )
 from haven.contracts.model import ToolCallProposal
+from haven.contracts.process_output import ProcessReport
 from haven.contracts.tools import (
     RecipeSpec,
     RepoDeleteArgs,
@@ -62,7 +65,7 @@ from haven.domain.enums import (
     ToolErrorCode,
 )
 from haven.domain.ids import ApprovalId, ToolCallId
-from haven.domain.policy import ToolFacts, evaluate_policy
+from haven.domain.policy import CHILD_READ_TOOLS, ToolFacts, evaluate_policy
 from haven.domain.ticket import mint_ticket
 from haven.ports.executor import ExecutorPort
 from haven.ports.sandbox import SandboxLauncher
@@ -105,6 +108,7 @@ class ToolPipeline:
         skills: SkillCatalog | None = None,
         approval_mode: ApprovalMode = ApprovalMode.ASK,
         mcp_manager: MCPClientManager | None = None,
+        delegate: DelegateHandler | None = None,
     ) -> None:
         self._workspace = workspace
         self._executor = executor
@@ -126,6 +130,7 @@ class ToolPipeline:
             scratch_dir=self._scratch_dir,
             skills=skills,
             mcp_manager=mcp_manager,
+            delegate=delegate,
         )
         # 每个工具一行，覆盖两个阶段。单元测试
         # test_every_registered_tool_is_fully_wired 会将这些表与 ARGS_MODELS 固定
@@ -208,6 +213,20 @@ class ToolPipeline:
             )
 
         # 4. 确定性策略。
+        within_scope = True
+        if ctx.parent_run_id and ctx.file_scope and facts.path is not None:
+            within_scope = any(
+                scope == "."
+                or facts.path == scope
+                or facts.path.startswith(scope.rstrip("/") + "/")
+                for scope in ctx.file_scope
+            )
+        facts = replace(
+            facts,
+            agent_mode=ctx.agent_mode,
+            allowed_in_run=not ctx.parent_run_id or call.tool_name in CHILD_READ_TOOLS,
+            within_scope=within_scope,
+        )
         outcome = evaluate_policy(self._mode, facts)
         await self._emitter.emit(
             ctx.run_id,
@@ -323,7 +342,9 @@ class ToolPipeline:
             return await self._finish(
                 ctx, call, error_result(call, map_workspace_error(exc), str(exc)), started
             )
-        return await self._finish(ctx, call, execution.result, started, execution.effect_unknown)
+        return await self._finish(
+            ctx, call, execution.result, started, execution.effect_unknown, execution.process
+        )
 
     # -- 事实 -------------------------------------------------------------------
 
@@ -360,5 +381,6 @@ class ToolPipeline:
         result: ToolResult,
         started: float,
         effect_unknown: bool = False,
+        process: ProcessReport | None = None,
     ) -> ToolExecution:
-        return await self._tool_executor.finish(ctx, call, result, started, effect_unknown)
+        return await self._tool_executor.finish(ctx, call, result, started, effect_unknown, process)
