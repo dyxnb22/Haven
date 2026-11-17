@@ -28,7 +28,8 @@ uv run pytest -q path/to/test.py::TestClass::test_name
 ```text
 ContextBuilder.build
   → ModelPort.generate_stream
-  → RunService._stream_model
+  → RunActor.drive
+  → RunActor._call_model_step
   → ModelResult.tool_calls
   → ToolPipeline.execute
   → ToolRegistry.validate
@@ -48,7 +49,7 @@ ContextBuilder.build
 
 | 课程 | 源码入口 | 先读测试/夹具 | 应观察的结果 |
 |---|---|---|---|
-| 预备 A | `contracts/model.py` 的 `ModelRequest`、`ToolCallProposal`、`ModelResult`；`run_service.py::_drive` | `tests/contract/test_scripted_model.py` | `model.completed` 与 `tool.proposed` 是两类事件 |
+| 预备 A | `contracts/model.py` 的 `ModelRequest`、`ToolCallProposal`、`ModelResult`；`run_actor.py::RunActor.drive` | `tests/contract/test_scripted_model.py` | `model.completed` 与 `tool.proposed` 是两类事件 |
 | 预备 B | `ports/model.py::ModelPort`、`tests/integration/harness.py::Harness` | `test_scripted_model.py`、`test_policy.py` | 同一个 port 可装配真实或脚本模型 |
 | 预备 C | `tests/golden/test_golden_trace.py::edit_journey_turns` | `test_edit_journey_matches_golden` | 六轮完整 `edit_journey.json` |
 | 00 | `RunService`、`ToolPipeline`、workspace、evidence、recovery | `test_full_fix_with_evidence` | 十一道边界共同产生 `evidence_satisfied` |
@@ -56,7 +57,7 @@ ContextBuilder.build
 | 02 | `ModelPort`、`OpenAICompatibleModel.generate_stream`、`ScriptedModel.generate_stream` | 两个 provider contract 测试 | SSE/脚本输入都归一为 `ModelEvent` |
 | 03 | `ToolPipeline.execute`、`ToolRegistry.validate`、`mint_ticket` | `test_tool_error_containment.py` | proposal → policy → execution → completion |
 | 04 | `evaluate_policy`、`compute_approval_digest`、workspace path facts | policy、approval、workspace escape 测试 | allow / ask / deny 与一次性审批 |
-| 05 | `RunService._drive`、`check_budget`、`StuckLoopDetector`、`ContextBuilder` | budget、stuck、context、provider retry 测试 | 每次停止都有 `StopReason` |
+| 05 | `RunActor.drive`、`check_budget`、`StuckLoopDetector`、`ContextBuilder` | budget、stuck、context、provider retry 测试 | 每次停止都有 `StopReason` |
 | 06 | `evaluate_evidence_gate`、`review_diff` | evidence gate、review 测试 | final text 只有通过 gate 才能成为成功 |
 | 07 | `RecoveryService.inspect`、`ReplayService.replay`、`SqliteSessionStore` | recovery 与 session contract 测试 | not-run / confirmed / effect-unknown |
 | 08 | `presenter.reduce`、`HavenApp`、`EventEmitter` | presenter、TUI、golden 测试 | live 与 replay 消费同一事件语义 |

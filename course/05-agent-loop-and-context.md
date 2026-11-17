@@ -2,7 +2,8 @@
 
 [English（早期稿，已被本课取代）](archive/en/05-agent-loop-and-context.md) | **中文（当前）**
 
-> 文件：`src/haven/application/run_service.py`、`src/haven/application/context_builder.py`、
+> 文件：`src/haven/application/run_actor.py`、`src/haven/application/answer_resolution.py`、
+> `src/haven/application/run_service.py`（装配与委托）、`src/haven/application/context_builder.py`、
 > `src/haven/domain/budget.py`、`src/haven/domain/stuck.py`、`src/haven/domain/transitions.py`
 > 测试：`tests/integration/test_agent_journeys.py`、`tests/integration/test_provider_retry.py`、
 > `tests/unit/test_context_builder.py`、`tests/unit/test_budget.py`
@@ -30,7 +31,7 @@ uv run pytest -q tests/unit/test_budget.py tests/unit/test_stuck.py \
 
 ## 循环的职责
 
-`RunService._drive` 可以概括为：
+`RunActor.drive` 可以概括为：
 
 ```text
 Model → Tool(s) → Observation → Model → …
@@ -38,6 +39,10 @@ Model → Tool(s) → Observation → Model → …
 
 它持续运行，直到程序决定停止。每一步开始前检查预算、计入步数、构建 Context，然后流式调用模型。
 模型如果提出工具，就交给工具通道；如果给出最终回答，就交给 Evidence Gate 判断。
+
+`RunService._drive` 是这之外的装配层：冻结交接笔记、准备运行独占的临时目录、创建 Actor
+并注册，然后委托。把循环放进 Actor，是为了让一次运行的转录、用量和证据只有一个归属，
+暂停、恢复和取消因此都有明确的所有者。
 
 系统只有一个 `_finish`，而且它总会写出一个 `StopReason`。例如
 `final_answer`、`evidence_satisfied`、`evidence_missing`、`step_budget_exhausted`、
@@ -96,6 +101,29 @@ read/edit/create/diff/check/answer，再加大约三轮修复—验证。第一�
 在线运行还发现，中途断流也可以重试：本轮组装中的文本和工具调用只存在于当前尝试，整轮完成前不会
 进入 transcript。UI 收到 `stream.restarted`，丢弃已经显示的半截内容。重试逻辑和上限由
 `tests/integration/test_provider_retry.py` 固定。
+
+## 委派与双轨：把上下文和时间花在刀刃上
+
+循环内还有两个“看起来是模型决策、实际是程序决策”的分支：
+
+- **快慢双轨。** `_choose_model` 在单模型配置下直接返回；配了 `ModelRouter` 时，由它按
+  是否已发生编辑、计划是否开始实施、快轨轮数是否用尽来选模型。模型选择发生在**构建请求
+  之前**，并且贯穿重试（ADR 0042、0049）。
+- **只读子代理委派。** `agent.delegate` 起一个独立的子模型循环，父运行**同步等待**。
+  子运行的工具集被 `CHILD_READ_TOOLS` 白名单锁死（列表、搜索、读取、大纲、符号、diff），
+  预算钳制到父运行剩余并预留一轮，退出时统一回记账。它省的是父转录的空间，不是墙上的时间
+  （ADR 0050）。
+
+## 计划模式：先想清楚，再动文件
+
+`/plan GOAL` 启动一轮**只读**的规划运行：工具集收窄到只读加计划写入，工作区不可写。
+规划可以多轮修订，但任何一轮都不能改文件。`/implement`（或 `haven implement RUN_ID`）
+是独立的用户入口，它把已就绪的计划确认成一次正常的执行运行——审批、沙箱和证据门禁
+一概不变。
+
+这个拆分解决的是一个具体问题：让同一套循环既能“只商量不改”，又能“改”，靠的是模式
+切换时收窄工具集，而不是靠提示词请模型自律。计划步骤有稳定 ID、依赖、阻塞原因和验收
+标准，因此“做到哪一步了”是程序可判定的，不是叙述。
 
 ## 延伸阅读
 

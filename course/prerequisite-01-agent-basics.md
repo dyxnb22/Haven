@@ -25,7 +25,7 @@
 | 工具提案 | `ToolCallProposal` | `tool.proposed` |
 | 流式返回 | `ModelEvent` 判别联合 | provider contract tests |
 | 一轮完整结果 | `ModelResult` | `model.completed` |
-| Agent Loop | `application/run_service.py::RunService._drive` | `tests/integration/test_agent_journeys.py` |
+| Agent Loop | `application/run_actor.py::RunActor.drive`（`run_service.py::RunService._drive` 是装配与委托层） | `tests/integration/test_agent_journeys.py` |
 | 工具执行边界 | `ToolPipeline.execute` | `policy.decided`、`tool.completed` |
 | 成功判定 | `AnswerResolver.finish_with_gate` | `run.finished.gate_reason` |
 
@@ -174,31 +174,50 @@ rg -n '"kind": "(tool.proposed|policy.decided|tool.completed)"' \
 
 ## 4. 最小 Agent Loop
 
-不要另写一个新的教学 Loop；先把 `RunService._drive` 压缩成它真实存在的控制分支：
+不要另写一个新的教学 Loop；先把 `RunActor.drive` 压缩成它真实存在的控制分支。
+
+`RunService._drive` 只是装配与委托层：它冻结交接笔记、准备运行独占的临时目录、
+创建 `RunActor` 并注册，然后 `await actor.drive()`。真正的循环在 Actor 里——
+这样一次运行的转录、用量和证据都只属于一个对象，暂停/恢复/取消都有明确归属。
 
 ```python
 while True:
+    ctx.refresh_wall_time(time.monotonic())
     if stop := check_budget(ctx.budget, ctx.usage):
-        return await self._finish(ctx, RunStatus.STOPPED, stop, answer.final_text)
+        return await self.finish(ctx, RunStatus.STOPPED, stop, answer.final_text)
 
-    request, segments = builder.build(ctx.transcript, ctx.usage, ctx.plan)
-    result = await self._stream_model(ctx, step, request)
+    ctx.usage = ctx.usage.charge_step()
+    for steered in self.drain_steering():  # 人工转向先入转录
+        ctx.transcript.append(ModelMessage(role="user", content=f"User update: {steered}"))
+
+    choice = self._choose_model(ctx, step)  # 单模型或快慢双轨
+    step_outcome = await self._call_model_step(ctx, step, choice.model, ...)
+    if isinstance(step_outcome, RunOutcome):  # 上下文超限的有界恢复已用尽
+        return step_outcome
 
     if result.tool_calls:
-        stopped = await self._handle_tool_calls(ctx, step, result.tool_calls, stuck)
+        stopped = await self.handle_tool_calls(step, result.tool_calls, stuck, ...)
+        await self.checkpoint(ctx)  # 每个工具轮次后都落检查点
         if stopped is not None:
             return stopped
         continue
 
-    outcome = await self._answers.finish_with_gate(ctx, result, answer)
+    outcome = await self._answers.finish_with_gate(ctx, result, answer)  # 证据门禁在这
     if outcome is not None:
         return outcome
 ```
 
-片段省略了重试、上下文恢复、checkpoint 和取消，但保留了真实入口与分支。打开源码核对：
+片段省略了遥测记账、事件发射和取消分类，但保留了真实入口与分支。注意三点：
+`finish` 是唯一出口（每次停止都经过它，所以停止原因只有一个）；工具轮次之后
+**先落检查点再继续**；模型不再提议工具时才进入 `finish_with_gate`——"我说完了"
+不是成功，证据门禁才是。
+
+打开源码核对：
 
 ```bash
-rg -n "async def _drive|if result.tool_calls|finish_with_gate" \
+rg -n "async def drive|if result.tool_calls|finish_with_gate" \
+  src/haven/application/run_actor.py
+rg -n "async def _drive|await actor.drive" \
   src/haven/application/run_service.py
 ```
 
@@ -263,7 +282,10 @@ RAG、长期记忆、多 Agent、MCP、浏览器操作和模型训练不是理�
 
 - Haven 的主要 Context 来自当前目标、项目指导、transcript 和工具结果，不依赖向量 RAG；
 - Haven 持久化运行 State 和 Trace，但不构建用户画像式长期 Memory；
-- Haven 有意没有实现 subagent 和运行时 MCP，模块 10 会解释收益门禁；
+- 多 Agent 编排仍然不做，但**一层只读的子代理委派已经上线**（`agent.delegate`，
+  ADR 0050）；MCP 也已采纳，但只在硬化网关下——静态声明、命名空间隔离、
+  fail-closed 的 schema 钉住（ADR 0039）。两者都不是"运行时随便挂工具"，
+  模块 10 会解释为什么这样收窄；
 - Haven 调用现成 Provider，不训练或微调模型。
 
 模块 10 会用收益门禁判断何时值得扩展这些能力。

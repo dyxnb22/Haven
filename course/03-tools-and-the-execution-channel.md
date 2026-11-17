@@ -63,6 +63,33 @@ executor 没有读取模型字段的路径，因此不能把 `tool_call.argument
   形式，才能避免 `task.plan` 曾经出现的那类 bug。
 - 工具集合编译进程序。测试断言 `set(ARGS_MODELS) == KNOWN_TOOLS`，也断言任何有副作用的工具都
   不能自动 `allow`。忘记分类的新工具会让构建失败，不会悄悄产生一条无保护路径。
+- 工具数量会增长，但增长方式不变。从 v1 的十来个到现在的 25 个（数量以
+  `docs/ARCHITECTURE.md` 的生成表为准，不在这里手写），每一个都走同五件套：参数 model、
+  policy 分类、facts handler、execute handler、审批卡。外部 MCP 工具是唯一按命名空间动态
+  出现的一类（`mcp.<server>.<tool>`），而且只在硬化网关下：静态声明、逐工具 allowlist、
+  fail-closed 的 schema 钉住（ADR 0039）。
+
+## 工具家族：同一个通道，不同的副作用形状
+
+25 个工具按副作用形状分家族。它们走同一条通道，差别只在于 policy 分类、facts 要采集什么、
+executor 落到哪种副作用：
+
+| 家族 | 工具 | 形状 |
+|---|---|---|
+| 读仓库 | `repo.list`/`search`/`read`/`outline`/`symbol`/`diff` | 只读；`read` 记录后续绑定编辑的 digest |
+| 改仓库 | `repo.edit`/`create`/`delete`/`move`/`apply_patch` | preimage 绑定；`apply_patch` 是多文件单次审批事务 |
+| 跑进程 | `repo.exec`/`repo.check`/`task.start` | 固定 argv 过沙箱；`repo.check` 只认注册配方 |
+| 后台任务 | `task.status`/`logs`/`stop`/`input` | 有界环形缓冲，`task.input` 走审批管道，`terminal=true` 用 PTY |
+| 查文档 | `web.search`/`web.fetch` | 只读、字节上限、SSRF 防护，结果按不可信文本框架 |
+| 验证 | `recipe.propose` | 临时验证神谕提议，argv 与超时有界、无网络、需显式审批 |
+| 委派 | `agent.delegate` | 一层只读子循环，工具集白名单锁死 |
+| 运行状态 | `task.plan`/`user.ask`/`task.stop` | 只动运行状态，无外部副作用 |
+| 技能 | `skill.read` | 只读技能自己的目录，符号链接拒绝 |
+| 外部 | `mcp.<server>.<tool>` | 唯一动态命名空间的一类，只在硬化网关下出现 |
+
+值得注意的是最后两行的边界：`skill.read` 被限制在技能自己的目录里，外部 MCP 工具则
+必须经过静态声明和 schema 钉住。两者都在回答同一个问题——“外部内容能进来多少”，
+而答案是：可以作为不可信文本进来，不能作为权限进来。
 
 ## 错误必须是结果
 

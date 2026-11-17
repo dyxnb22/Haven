@@ -45,14 +45,15 @@ git switch -c capstone/<your-track>
 
 ## 路线 A：端到端添加一个工具
 
-添加 `repo.symbols`（列出文件中的函数/类定义）或 `repo.stat`（获取大小、行数和 digest，但不
-读取完整内容）。不要只改一个函数，要走过你学到的每一层：
+添加 `repo.stat`（获取文件大小、行数和内容 digest，但不读取完整内容）。不要选
+`repo.symbol` 或 `repo.outline`——它们已经存在， rebuilt 一遍学不到新东西。
+不要只改一个函数，要走过你学到的每一层：
 
 1. **契约。** 在 `contracts/tools.py` 写严格参数 model，注册到 `ARGS_MODELS`，补上描述；
 2. **Policy。** 完成分类。它是只读工具，应加入 `READ_ONLY_TOOLS`。在分类前，完备性测试应该失败；
 3. **Facts 与执行。** 在 `application/tool_pipeline.py` 和 `adapters/workspace_fs.py` 中采集工作区
    facts、执行工具并返回结构化 `ToolResult`；
-4. **测试。** 为 workspace 方法写单元测试；用 `ScriptedModel` 写集成流程；对 `repo.symbols`
+4. **测试。** 为 workspace 方法写单元测试；用 `ScriptedModel` 写集成流程；对 `repo.stat`
    加安全测试，确认工作区外路径被拒绝；
 5. **证明不变量。** 确认坏路径返回 `not_found`/`denied`，而不是异常（模块 03）。
 
