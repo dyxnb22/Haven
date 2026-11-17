@@ -13,16 +13,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-# `interview-study/` is deliberately included even though it is not Haven
-# documentation: this suite exists to catch a diagram that renders as a raw error
-# box on GitHub, and a reader browsing the repository sees those diagrams too.
-# It moved out of `docs/` on 2026-11-16; dropping it from this glob would have
-# silently removed their coverage rather than deciding to.
-DOC_FILES = (
-    sorted(REPO_ROOT.glob("docs/**/*.md"))
-    + sorted(REPO_ROOT.glob("interview-study/**/*.md"))
-    + [REPO_ROOT / "README.md"]
-)
+DOC_FILES = sorted(REPO_ROOT.glob("docs/**/*.md")) + [REPO_ROOT / "README.md"]
 
 KNOWN_HEADERS = ("flowchart", "graph", "stateDiagram-v2", "sequenceDiagram", "classDiagram")
 

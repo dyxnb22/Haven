@@ -38,12 +38,6 @@ metrics table instead of being copied there.
   (external claims verified against the code, and where three independent audits
   agreed) are reproduced at its top. Its opening status notice says where later
   code or ADRs superseded it.
-- [`interview-study/`](../interview-study/README.md) is **not Haven
-  documentation**. It is personal interview-preparation material for a Java
-  backend role, written against a different portfolio project. It sits beside
-  `docs/` rather than inside it precisely so it does not read as part of Haven's
-  documentation; none of it describes Haven's behavior, and nothing in Haven's
-  docs depends on it.
 - ADRs are immutable decision history. A later discovery annotates or supersedes
   an ADR; it does not rewrite the original reasoning. Follow the amendment links
   at the top before relying on an older claim.

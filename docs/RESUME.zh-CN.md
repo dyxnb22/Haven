@@ -13,7 +13,7 @@ Python 3.12 · asyncio · Textual · Typer · Pydantic v2 · HTTPX · SQLite · 
 - 设计 `Registry → Schema → Facts → Policy → Approval → Ticket → Sandbox → Executor` 单一执行通道：模型只能提出动作，程序负责参数校验、权限判定和执行；审批与工作区、规范化参数、文件前镜像及预览摘要绑定，并通过条件更新保证单次消费。
 - 构建基于 SQLite 检查点、追加式事件日志和 `(run_id, call_id)` 执行日志的恢复机制；结合文件前后摘要区分“未执行、已成功、已失败、影响未知”，对无法证明的副作用停止恢复并要求人工处理，避免危险的自动重放。
 - 实现 Evidence Gate，将“完成”定义为最后一次写入之后存在非空 diff、注册检查通过且新增内容经过确定性审查；配套 macOS Seatbelt / Linux Landlock 沙箱、工作区路径约束、进程组回收和可复现离线安全评测。
-- 建立 `ruff`、`mypy --strict`、import-linter、完整自动化测试和离线评测质量门禁；最终验证 **1460 项测试全部通过、`src/` 行覆盖率 91%、152 个模块通过严格类型检查、40/40 离线评测通过且 0 安全违规**。
+- 建立 `ruff`、`mypy --strict`、import-linter、完整自动化测试和离线评测质量门禁；最终验证 **1454 项测试全部通过、`src/` 行覆盖率 91%、152 个模块通过严格类型检查、40/40 离线评测通过且 0 安全违规**。
 
 ## 30 秒面试介绍
 
