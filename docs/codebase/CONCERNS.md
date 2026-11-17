@@ -1,6 +1,9 @@
 # Codebase Concerns
 
-Reviewed for the final learning baseline: 2026-08-20. The original raw scan (48k
+Reviewed for the final learning baseline: 2026-08-20. Amended 2026-11-16: three
+rows re-pointed at code that moved during the RunActor extraction and the
+Phase P5 delegation work (see §1), and the coverage-floor row now names both
+risk tiers. The original raw scan (48k
 files / 4.2M LOC,
 TODO hits, largest files) is dominated by **gitignored third-party eval
 fixtures** (`evals/real/repos|fixtures`, `evals/headtohead/runs`,
@@ -14,15 +17,15 @@ contains **zero** TODO/FIXME/HACK markers
 
 | Severity | Concern | Evidence | Impact | Suggested action |
 |----------|---------|----------|--------|------------------|
-| med | Single-run-per-process assumption baked into `RunService` (`_active_run_id`, `_steer_queue` instance attrs) | `src/haven/application/run_service.py` | Blocks concurrent runs/subagent futures; a second `run()` on one service would interleave steering | Keep documented; refactor to per-run context object only if product shape changes |
+| med | Single-run-per-process assumption baked into `RunService` (`_active_run_id`, `_steer_queue` instance attrs) | `src/haven/application/run_service.py` | Blocks concurrent runs; a second `run()` on one service would interleave steering. Bounded read-only subagent delegation (ADR 0050) sidesteps rather than removes this — children run synchronously inside the parent's turn | Keep documented; refactor to per-run context object only if product shape changes |
 | ~~med~~ RESOLVED | Extreme-pressure context clamp could orphan tool protocol or discard the latest user intent | `src/haven/application/compaction.py::enforce_hard_limit`; ADR 0024 | — | Fixed 2026-08-20: hard-limit units keep assistant calls with tool results, protect the latest user turn, and bound content, reasoning, and tool arguments together. A semantic summary tier remains deferred |
 | low-med | 1.2MB `docs/demo.gif` is tracked in git | `git ls-files -s docs/demo.gif` | Repo clone size grows with every regeneration | Regenerate rarely; move to a release asset only if it starts growing |
 | med | A repository's `SKILL.md` can grant its own writes standing approval, defeating the approval gate for that repo | `application/skill_grants.py`, `application/skills.py` (`allowed-tools`), ADR 0032 | **Accepted by the owner** for Claude Code parity. Bounded by: a grant can only turn ASK into ALLOW (policy has no grant input); run-scoped and in-memory, so nothing persists; only explicitly selected skills grant; `HAVEN_SKILL_GRANTS=0` disables it; every granted execution is journaled | Pinned by `tests/unit/test_skill_grants.py`. Revisit if a repo is seen shipping a hostile skill |
 | low | Skill bytes compete with the fixed head, so a large selection can squeeze the transcript | `src/haven/application/skills.py` (`MAX_*` bounds), `context_builder._drop_skill_bodies_to_fit`, ADR 0031 | Bounded by construction and degrades by dropping bodies first; a pathological case costs context, never correctness | Accepted: the alternative (sizing constants to always fit) would silently depend on the length of `SYSTEM_RULES` |
-| low | No single global coverage `fail_under` applies to UI/platform adapters | `scripts/check_coverage_floor.py` | Coverage in non-core surfaces can erode while the overall generated number remains stable | Accepted for the frozen scope: every core decision/boundary file is individually gated at 85%; TUI and sandbox adapters have dedicated suites |
+| low | No single global coverage `fail_under` applies to UI/platform adapters | `scripts/check_coverage_floor.py` | Coverage in non-core surfaces can erode while the overall generated number remains stable | Accepted for the frozen scope: every high-risk decision/boundary file is individually gated at 85% (`CORE_FLOOR`) and the remaining gated files at 70% (`BASE_FLOOR`); TUI and sandbox adapters have dedicated suites |
 | ~~low~~ RESOLVED | Export redaction masked only values of currently-set env secrets | `src/haven/interfaces/export.py` | — | Fixed 2026-08-13/20: a second pass masks well-known credential shapes and now removes complete PEM private-key blocks; dynamic Markdown fences prevent diff content from closing its own report block |
 | ~~low~~ RESOLVED | Standing-approval test flake (1/8 runs) | root-caused 2026-08-13: the test made three *consecutive* identical checks — the no-progress condition — and only passed because check results carry `duration_ms` and the ms usually differed | — | Fixed: the test interleaves `repo.diff` like a real fix/verify loop, so it tests approvals not the clock |
-| low | Stuck detection is slightly under-sensitive: the fingerprint includes the tool result, and check results carry `duration_ms`, so two genuinely-identical checks whose timings differ are not seen as repeats | `application/run_service.py` (`call_fingerprint` call), `application/tool_pipeline.py` check-result construction | A degenerate verify loop can run longer than the threshold implies | Not changed: excluding timing would make *more* runs stop as stuck; needs measurement before touching |
+| low | Stuck detection is slightly under-sensitive: the fingerprint includes the tool result, and check results carry `duration_ms`, so two genuinely-identical checks whose timings differ are not seen as repeats | `application/run_actor.py` (`call_fingerprint` call — moved here from `run_service.py` when the RunActor extraction landed), `application/tool_pipeline.py` check-result construction | A degenerate verify loop can run longer than the threshold implies | Not changed: excluding timing would make *more* runs stop as stuck; needs measurement before touching |
 
 ### 2) Technical Debt
 
@@ -83,7 +86,9 @@ relevant ADR gate instead of treating this list as a backlog.
 
 ### 7) Evidence
 
-- `docs/codebase/.codebase-scan.txt` (raw scan; fixture-noise caveat above)
+- `docs/codebase/.codebase-scan.txt` (raw scan; a local, gitignored machine dump —
+  a fresh clone will not have it, and the seven docs beside it are the reviewed
+  artifact derived from it)
 - `.gitignore` (separates authored sources from materialized eval repositories)
 - `pyproject.toml`, `.github/workflows/ci.yml`
 - `docs/adr/0018|0020|0022|0024|0025|0030-*.md`, `docs/SECURITY.md`

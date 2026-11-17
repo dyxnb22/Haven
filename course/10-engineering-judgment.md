@@ -1,6 +1,6 @@
 # 模块 10——工程判断
 
-[English](archive/en/10-engineering-judgment.md) | **中文**
+[English（早期稿，已被本课取代）](archive/en/10-engineering-judgment.md) | **中文（当前）**
 
 > 文件：`docs/adr/`、`docs/POSTMORTEM.md`、`docs/PROJECT_CARD.md`、
 > `Haven_TUI_Coding_Agent_项目计划.md`

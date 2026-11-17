@@ -32,14 +32,7 @@ DOC_PATHS = sorted(
     }
 )
 
-HISTORICAL_DOCS = (
-    "Haven_TUI_Coding_Agent_项目计划.md",
-    "docs/superpowers/specs/2026-08-12-deepseek-harness-design.md",
-    "docs/superpowers/specs/2026-08-12-long-horizon-design.md",
-    "docs/superpowers/specs/2026-08-12-repo-exec-sandbox-design.md",
-    "docs/superpowers/plans/2026-08-12-repo-exec-sandbox.md",
-    "docs/superpowers/plans/2026-08-14-measure-what-was-built.md",
-)
+HISTORICAL_DOCS = ("Haven_TUI_Coding_Agent_项目计划.md",)
 
 HISTORICAL_MARKER = "Historical record"
 CLI_BEGIN = "<!-- BEGIN CLI COMMAND SURFACE -->"

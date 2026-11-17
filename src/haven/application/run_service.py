@@ -46,7 +46,6 @@ from haven.application.answer_resolution import (
     MAX_EVIDENCE_NUDGES as MAX_EVIDENCE_NUDGES,
 )
 from haven.application.approvals import ApprovalResponder
-from haven.application.context_builder import ContextBuilder
 from haven.application.emitter import EventEmitter
 from haven.application.handoff import latest_handoff
 from haven.application.mcp_client import MCPClientManager
@@ -85,10 +84,7 @@ from haven.contracts.events import (
 )
 from haven.contracts.guidance import GuidanceSnapshot
 from haven.contracts.mcp import MCPServerConfig
-from haven.contracts.model import (
-    ModelMessage,
-    ToolCallProposal,
-)
+from haven.contracts.model import ModelMessage
 from haven.contracts.model_call import ModelSelection
 from haven.contracts.project_memory import NoteAction
 from haven.contracts.tools import RecipeSpec, ToolResult
@@ -105,7 +101,6 @@ from haven.domain.enums import (
 )
 from haven.domain.ids import RunId, new_run_id
 from haven.domain.pricing import Pricing
-from haven.domain.stuck import StuckLoopDetector, call_fingerprint
 from haven.ports.executor import ExecutorPort
 from haven.ports.model import ModelPort
 from haven.ports.sandbox import SandboxLauncher
@@ -953,88 +948,6 @@ class RunService:
         if ctx.require_review and ctx.ledger.has_edits and outcome.status is RunStatus.SUCCEEDED:
             self._pending_reviews.add(ctx.run_id)
         return outcome
-
-    async def _handle_tool_calls(
-        self,
-        ctx: RunContext,
-        step: int,
-        calls: tuple[ToolCallProposal, ...],
-        stuck: StuckLoopDetector,
-        builder: ContextBuilder | None = None,
-    ) -> RunOutcome | None:
-        """严格按顺序通过流水线执行一轮中的工具调用。
-
-        返回 RunOutcome 表示停止运行（工具预算耗尽、未知副作用或卡循环），返回 None
-        则将观察结果交还模型。这里有意采用串行执行：并行副作用会使审批、preimage
-        固定值和日志顺序产生歧义。
-        """
-        actor = self._actors.get(ctx.run_id)
-        if actor is not None:
-            return await actor.handle_tool_calls(step, calls, stuck, builder=builder)
-        for call in calls:
-            if ctx.usage.tool_calls >= ctx.budget.max_tool_calls:
-                return await self._finish(
-                    ctx, RunStatus.STOPPED, StopReason.TOOL_BUDGET_EXHAUSTED, ""
-                )
-            ctx.usage = ctx.usage.charge_tool_call()
-            ctx.move_to(RunStatus.VALIDATING_TOOL)
-
-            execution = await self._pipeline.execute(ctx, step, call)
-            ctx.refresh_wall_time(time.monotonic())
-            result = execution.result
-            if (
-                call.tool_name == "recipe.propose"
-                and result.status is ToolStatus.OK
-                and builder is not None
-            ):
-                for r_id, r_spec in self._pipeline._recipes.items():
-                    self._recipes[r_id] = r_spec
-                    builder.register_recipe(r_id)
-            ctx.transcript.append(
-                ModelMessage(
-                    role="tool",
-                    content=(
-                        f'<tool_output tool="{call.tool_name}">\n'
-                        f"{result.to_model_text()}\n</tool_output>"
-                    ),
-                    tool_call_id=call.call_id,
-                )
-            )
-
-            if execution.effect_unknown:
-                ctx.move_to(RunStatus.EFFECT_UNKNOWN)
-                return await self._finish(
-                    ctx, RunStatus.EFFECT_UNKNOWN, StopReason.EFFECT_UNKNOWN, ""
-                )
-
-            if ctx.usage.wall_time_seconds >= ctx.budget.max_wall_time_seconds:
-                return await self._finish(
-                    ctx,
-                    RunStatus.STOPPED,
-                    StopReason.WALL_TIME_EXHAUSTED,
-                    "",
-                )
-
-            if ctx.status is not RunStatus.RUNNING_MODEL:
-                ctx.move_to(RunStatus.RUNNING_MODEL)
-
-            fingerprint = call_fingerprint(
-                call.tool_name, call.arguments_json, result.to_model_text()
-            )
-            if stuck.observe(fingerprint):
-                await self._emitter.emit(
-                    ctx.run_id,
-                    Notice(
-                        run_id=ctx.run_id,
-                        level="warning",
-                        message=(
-                            f"stuck loop: {call.tool_name} repeated with identical "
-                            "arguments and results"
-                        ),
-                    ),
-                )
-                return await self._finish(ctx, RunStatus.STOPPED, StopReason.NO_PROGRESS, "")
-        return None
 
     # -- 持久化 ------------------------------------------------------------------
 

@@ -48,13 +48,6 @@ line-length = 100
 target-version = "py312"
 extend-exclude = ["evals/real", "evals/headtohead", "eval_report"]
 
-[tool.ruff.format]
-# Ruff 会格式化 Markdown 中围栏里的 Python。对于随项目发布的 prose 这很合适，
-# 但计划中的片段是有意保留的代码碎片——可能只是一个参数行或不完整调用；
-# 把它们当作完整模块格式化会破坏指令：`flag: bool = True,` 会变成
-# `flag: bool = (True,)`。
-exclude = ["docs/superpowers/plans/*.md"]
-
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 

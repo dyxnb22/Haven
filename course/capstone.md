@@ -1,6 +1,6 @@
 # 结业项目——扩展 Haven，或构建自己的版本
 
-[English](archive/en/capstone.md) | **中文**
+[English（早期稿，已被本课取代）](archive/en/capstone.md) | **中文（当前）**
 
 选择一条路线完成一个周末规模的实践。验收标准相同：测试通过、记录一个明确决定、每项声明可复现。
 

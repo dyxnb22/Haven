@@ -1,6 +1,6 @@
 # 模块 01——心智模型：提案与权威
 
-[English](archive/en/01-mental-models.md) | **中文**
+[English（早期稿，已被本课取代）](archive/en/01-mental-models.md) | **中文（当前）**
 
 > 文件：整个系统，尤其是 `src/haven/application/state.py`、
 > `src/haven/contracts/model.py`、`src/haven/contracts/events.py`

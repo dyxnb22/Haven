@@ -239,10 +239,10 @@ uv run python scripts/gates.py --list        # 检查图及其依赖
 | 指标 | 数值 |
 |---|---|
 | 自动化测试 | 1484 |
-| 行覆盖率（`src/`） | 90% |
+| 行覆盖率（`src/`） | 91% |
 | 源码 / 测试规模 | 约 30.3k / 约 25.0k 行 |
 | 类型检查模块（`mypy --strict`） | 153 |
-| 架构决策记录 | 49 |
+| 架构决策记录 | 50 |
 | 离线评估 | 40/40 通过，0 个安全违规 |
 | 评估类别 | security 16 · task 10 · robustness 6 · injection 4 · budget 2 · recovery 2 |
 | 历史实时真实仓库套件（deepseek-v4-flash） | 修复后 75/79（31/31 + 9/9 + 5/5 + 20/20 + 9/13 + 1/1）；0 个安全违规——原始运行和根因见 docs/EVAL_LIVE.md |
@@ -274,8 +274,10 @@ uv run python scripts/gates.py --list        # 检查图及其依赖
 | [`docs/ADR_INDEX.md`](docs/ADR_INDEX.md) | 生效中的决策导航、历史裁决和新增 ADR 准入规则 |
 | [`docs/notes/`](docs/notes/) | 轻量级决策笔记 |
 | [`docs/adr/`](docs/adr/) | 不就地改写的架构决策历史记录 |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md)（及 ROADMAP2/3） | 已执行的改进计划和构建顺序记录 |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md)（及 [ROADMAP2](docs/ROADMAP2.md)、[ROADMAP3](docs/ROADMAP3.md)） | 已执行的改进计划和构建顺序记录 |
 | [`docs/PERSONAL_ROADMAP.md`](docs/PERSONAL_ROADMAP.md) | 个人长期规划：优先级、阶段、验收标准与范围（尚未实施的路线图） |
+| [`docs/codebase/`](docs/codebase/README.md) | 七视角审计伴侣——结构、技术栈、约定、测试、集成、架构和分级风险登记册。改动策略、边界、门禁或 Provider 代码前先读 `CONCERNS.md` |
+| [`docs/PROJECT_DIAGRAMS.en.md`](docs/PROJECT_DIAGRAMS.en.md) | 架构、业务流程、安全和恢复的学习图谱（[中文](docs/PROJECT_DIAGRAMS.md)） |
 
 ## 从这个仓库学习
 

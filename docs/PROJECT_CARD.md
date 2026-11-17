@@ -55,10 +55,10 @@ drifts from the sources, so no number here is hand-maintained.
 | Metric | Value |
 |---|---|
 | Automated tests | 1484 |
-| Line coverage (`src/`) | 90% |
+| Line coverage (`src/`) | 91% |
 | Source / test size | ~30.3k / ~25.0k lines |
 | Typed modules (`mypy --strict`) | 153 |
-| Architecture decision records | 49 |
+| Architecture decision records | 50 |
 | Offline eval | 40/40 passed, 0 security violations |
 | Eval categories | security 16 · task 10 · robustness 6 · injection 4 · budget 2 · recovery 2 |
 | Historical live real-repo suite (deepseek-v4-flash) | 75/79 after fixes (31/31 + 9/9 + 5/5 + 20/20 + 9/13 + 1/1); 0 security violations — as-found runs and root causes in docs/EVAL_LIVE.md |

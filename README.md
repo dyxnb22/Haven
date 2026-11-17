@@ -317,10 +317,10 @@ with `--check` to verify the generated table.
 | Metric | Value |
 |---|---|
 | Automated tests | 1484 |
-| Line coverage (`src/`) | 90% |
+| Line coverage (`src/`) | 91% |
 | Source / test size | ~30.3k / ~25.0k lines |
 | Typed modules (`mypy --strict`) | 153 |
-| Architecture decision records | 49 |
+| Architecture decision records | 50 |
 | Offline eval | 40/40 passed, 0 security violations |
 | Eval categories | security 16 · task 10 · robustness 6 · injection 4 · budget 2 · recovery 2 |
 | Historical live real-repo suite (deepseek-v4-flash) | 75/79 after fixes (31/31 + 9/9 + 5/5 + 20/20 + 9/13 + 1/1); 0 security violations — as-found runs and root causes in docs/EVAL_LIVE.md |
@@ -354,10 +354,12 @@ including one where the security gate itself was wrong.
 | `docs/DEFENSIVE_PATTERNS.md` | the bug classes those failures produced, as rules to read before writing policy, boundary, gate, or provider code |
 | `docs/LEARNING.md` | reading order, truth hierarchy, and the boundary between current docs and historical plans |
 | [`docs/ADR_INDEX.md`](docs/ADR_INDEX.md) | active decision map, historical verdicts, and the admission rule for new ADRs |
-| `docs/notes/` | lightweight decisions, experiments, and deferrals below the ADR threshold |
-| `docs/adr/` | immutable architecture decision records (count in the metrics table) |
-| `docs/ROADMAP.md` (+ `ROADMAP2/3`) | the executed improvement plans, kept as the record of what was built in which order and why |
+| [`docs/notes/`](docs/notes/README.md) | lightweight decisions, experiments, and deferrals below the ADR threshold |
+| [`docs/adr/`](docs/adr/) | immutable architecture decision records (count in the metrics table) |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) · [`ROADMAP2`](docs/ROADMAP2.md) · [`ROADMAP3`](docs/ROADMAP3.md) | the executed improvement plans, kept as the record of what was built in which order and why |
 | [`docs/PERSONAL_ROADMAP.md`](docs/PERSONAL_ROADMAP.md) | proposed personal-development roadmap: priorities, phases, acceptance criteria, and scope |
+| [`docs/codebase/`](docs/codebase/README.md) | seven-angle audit companion — structure, stack, conventions, testing, integrations, architecture, and a prioritized risk register. Read `CONCERNS.md` before touching policy, boundary, gate, or provider code |
+| [`docs/PROJECT_DIAGRAMS.md`](docs/PROJECT_DIAGRAMS.en.md) | architecture, business-flow, security, and recovery learning diagrams ([中文](docs/PROJECT_DIAGRAMS.md)) |
 
 ## Learn from this repo
 

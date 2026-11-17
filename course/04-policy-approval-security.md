@@ -1,6 +1,6 @@
 # 模块 04——策略、精确审批与工作区隔离
 
-[English](archive/en/04-policy-approval-security.md) | **中文**
+[English（早期稿，已被本课取代）](archive/en/04-policy-approval-security.md) | **中文（当前）**
 
 > 文件：`src/haven/domain/policy.py`、`src/haven/domain/approval.py`、
 > `src/haven/adapters/workspace_fs.py`、`src/haven/application/approvals.py`

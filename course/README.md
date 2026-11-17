@@ -1,6 +1,6 @@
 # 构建生产级编码代理：Haven 课程
 
-[English](archive/en/README.md) | **中文**
+[English（早期稿，已被本课取代）](archive/en/README.md) | **中文（当前）**
 
 这套课程从 Haven 的真实代码出发，讲清一条编码代理如何从“模型会调用工具”走向安全、可验证、可恢复。
 你不需要 Agent 经验或 API key；预备课会补齐必要概念，示例与测试默认离线运行。

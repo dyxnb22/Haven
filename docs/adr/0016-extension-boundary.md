@@ -87,6 +87,14 @@ new kind arrives, not before (YAGNI).
   on long tasks for reasons a planner would fix, so the choice is decidable
   from numbers rather than argued.
 
+  > **Adopted in part by ADR 0050 (2026-11-16).** A bounded, read-only slice of
+  > this extension shipped as `agent.delegate`: one level of child model loops
+  > restricted to `CHILD_READ_TOOLS`, with the child's budget clamped to the
+  > parent's remaining budget and charged back on every exit path. ADR 0050
+  > records how it satisfies invariants 1–4. The planner and the general
+  > multi-agent orchestrator remain deferred, and the trigger above still
+  > governs them.
+
 ## Gate: metrics
 
 Nothing to measure here — this ADR adds no behavior. Its value is that the

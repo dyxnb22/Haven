@@ -1,6 +1,16 @@
 # Building a Production-Grade Coding Agent — a course built on Haven
 
-**English** | [中文](../../README.md)
+> **This is an earlier English draft, not the current course.** The current
+> course is the Chinese one in the parent directory. This directory is kept
+> because it is the only English text, and because the divergence between the
+> two is itself a record of what changed. It predates several shipped
+> capabilities — background tasks (`task.start`/`task.status`/`task.logs`/
+> `task.stop`), the web lookup tools, the hardened MCP gateway, plan mode,
+> user-selected verification, and task handoff — so read every statement here
+> as a claim about an older system. Where it disagrees with the code, the code
+> wins; where it disagrees with the Chinese course, the Chinese course wins.
+
+**English (earlier draft)** | [中文（当前）](../../README.md)
 
 This is a self-paced course that teaches how to build a real coding agent by
 reading and extending a real one. The textbook is this repository: every lesson

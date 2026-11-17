@@ -1,6 +1,6 @@
 # 模块 07——持久化执行：检查点、日志、恢复与重放
 
-[English](archive/en/07-durable-execution.md) | **中文**
+[English（早期稿，已被本课取代）](archive/en/07-durable-execution.md) | **中文（当前）**
 
 > 文件：`src/haven/adapters/sqlite_session.py`、`src/haven/application/recovery_service.py`、
 > `src/haven/application/replay_service.py`、`src/haven/contracts/checkpoint.py`、`src/haven/config.py`

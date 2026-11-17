@@ -15,14 +15,18 @@
 5. `docs/EVAL.md` 与 `docs/EVAL_LIVE.md` — 已测量的内容，以及这些测量不能证明什么。
 6. `course/` — 引导式阅读路径；没有 Agent 经验时先完成三门预备课，再进入实现模块。
 
-`docs/codebase/` 是当前审计的补充材料，分别从结构、技术栈、测试、集成、约定和已知问题总结同一份代码。易变化的统计数字由生成的 metrics 表负责，不在这些文档中重复维护。
+[`docs/codebase/`](codebase/README.md) 是当前审计的补充材料，从它自己的索引进入。它分别从结构、技术栈、测试、集成、约定、架构和已知问题总结同一份代码——改动策略、边界、门禁或 Provider 代码前先读 `CONCERNS.md`。易变化的统计数字由生成的 metrics 表负责，不在这些文档中重复维护。
 
 ## 历史内容
 
-- `Haven_TUI_Coding_Agent_项目计划.md` 是最初提案，其中的复选框表示计划范围，而不是当前完成度。
-- `docs/ROADMAP*.md` 和 `docs/superpowers/{specs,plans}/` 保存实现如何设计和排序。它们开头的状态说明会指出哪些内容后来被代码或 ADR 取代。
+- [`Haven_TUI_Coding_Agent_项目计划.md`](../Haven_TUI_Coding_Agent_项目计划.md) 是最初提案，其中的复选框表示计划范围，而不是当前完成度。
+- `docs/ROADMAP*.md` 保存实现如何设计和排序，包括针对 Reasonix、Codex CLI 和 opencode 的两轮外部差距分析，以及其中哪些声明经过代码核对。它们开头的状态说明会指出哪些内容后来被代码或 ADR 取代。
+- [`docs/research/2026-09-26-agent-project-selection.md`](research/2026-09-26-agent-project-selection.md) 是 Haven 范围背后的选题调研，带日期。它是建议，不是架构变更，其中任何内容都不是当前行为契约。
+- [`interview-study/`](../interview-study/README.md) **不是 Haven 文档**。它是面向 Java 后端岗位的个人面试复习材料，针对另一个作品集项目撰写。它被放在 `docs/` 旁边而不是里面，正是为了不让读者误以为它属于 Haven 的文档；其中没有任何内容描述 Haven 的行为，Haven 的文档也不依赖它。
 - ADR 是不可变的决策历史。后续发现会标注或取代 ADR，但不会改写原始推理。依赖旧结论前，先查看文档顶部的修订链接。
 - `docs/POSTMORTEM.md` 和 `docs/EVAL_LIVE.md` 的历史部分保留当时观察到的数字；它们是开发过程的证据，不是当前仓库总量。
+
+> 曾经位于 `docs/superpowers/` 的逐步实施计划和规格说明已于 2026-11-16 删除。它们是供外部 agent 框架使用的执行产物，不是对系统的说明；其中没有哪条信息是上面的 ADR 和路线图没有承载的，而且它们因为代码碎片从来不是合法模块，必须被排除在 `ruff format` 之外。
 
 ## 事实层级
 

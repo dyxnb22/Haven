@@ -83,6 +83,14 @@ decide with no false-negative risk from sampling and no token cost.
 
 **Deferred**, per the plan's own fallback: "没有净收益就回退为确定性检查或单模型自检".
 
+> **Still deferred, and not what ADR 0050 shipped (2026-11-16).** ADR 0050 added
+> `agent.delegate`, a bounded read-only child loop for *investigation* — it moves
+> file content out of the parent's transcript. Its `reviewer` role returns model
+> judgements, which are not evidence, and the deterministic review above is still
+> what gates a run that edited files. The measurement gate in this section is
+> therefore unpassed rather than waived: a model-driven review that could replace
+> the deterministic check has not been built.
+
 ## Decision: deterministic diff review — ADOPTED
 
 Add `domain/review.py`: a pure function over the run diff that returns structured

@@ -2,6 +2,16 @@
 
 Date: 2026-08-13
 
+> **Verdict withdrawn (2026-08-14, independent review).** The A/B that motivated
+> this note fired **zero** nudges and **zero** stuck-stops across all 42 runs, so
+> both arms ran an identical code path and every number below is run-to-run
+> variance. The nudge is *untested*, not proven. What survives is the trace
+> finding — two consecutive identical `(tool, arguments, result)` observations
+> never occurred, so budget-tail non-convergence is not literal repetition — and
+> the token figures, whose rate card was also wrong at the time. Full correction
+> and reproduction command in `docs/EVAL_LIVE.md`. The body below is kept as the
+> record of the attempt and of how its pre-registered gate was mis-written.
+
 ## Context
 
 `StuckLoopDetector` stopped a run after three identical (tool, args, result)

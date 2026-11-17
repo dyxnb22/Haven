@@ -18,10 +18,13 @@ def test_the_run_loop_uses_this_fingerprint_and_not_its_own() -> None:
 
     二者曾经发生过漂移（循环内联构造了 dict-vs-list 摘要），因此这里固定的行为
     并不是实际发布的行为。现在直接固定调用点本身。
-    """
-    from haven.application.run_service import RunService
 
-    source = inspect.getsource(RunService._handle_tool_calls)  # noqa: SLF001
+    调用点是 `RunActor.handle_tool_calls`：`RunService._drive` 总是先创建并注册
+    Actor，再委托 `actor.drive()`，所以 Actor 的循环是唯一真正执行的循环。
+    """
+    from haven.application.run_actor import RunActor
+
+    source = inspect.getsource(RunActor.handle_tool_calls)  # noqa: SLF001
     assert "call_fingerprint(" in source
     assert "digest_of(" not in source, "the loop must not compose its own fingerprint"
 

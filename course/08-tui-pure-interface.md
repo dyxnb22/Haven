@@ -1,6 +1,6 @@
 # 模块 08——作为纯接口的终端 UI
 
-[English](archive/en/08-tui-pure-interface.md) | **中文**
+[English（早期稿，已被本课取代）](archive/en/08-tui-pure-interface.md) | **中文（当前）**
 
 > 文件：`src/haven/interfaces/tui/presenter.py`、`src/haven/interfaces/tui/app.py`、
 > `src/haven/interfaces/cli.py`、`src/haven/application/emitter.py`

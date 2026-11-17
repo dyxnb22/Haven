@@ -1,6 +1,6 @@
 # 模块 06——证据门禁与确定性审查
 
-[English](archive/en/06-evidence-gate.md) | **中文**
+[English（早期稿，已被本课取代）](archive/en/06-evidence-gate.md) | **中文（当前）**
 
 > 文件：`src/haven/domain/evidence.py`、`src/haven/domain/review.py`
 > 测试：`tests/unit/test_evidence_gate.py`、`tests/unit/test_review.py`、

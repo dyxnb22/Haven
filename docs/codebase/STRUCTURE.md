@@ -19,10 +19,12 @@
 
 - Main runtime entry: `haven` console script -> `haven.interfaces.cli:app`
   (`pyproject.toml [project.scripts]`); bare `haven` opens the Textual TUI.
-- Secondary entry points: CLI subcommands (`run`, `continue`, `init`, `gc`,
-  `sessions`, `replay`, `resume`, `rewind`, `reconcile`, `export`, `discover`,
-  `doctor`, `config`, `debug-context`, `verify-provider`, `eval`); eval
-  scripts under `evals/` are run directly with `uv run python`.
+- Secondary entry points: the Typer subcommands, **deliberately not enumerated
+  here**. A hand-kept list named 14 of the 25 registered commands and read as
+  exhaustive; the authority is `haven --help` at runtime plus the README
+  command-surface block, which `scripts/check_docs.py` pins against the
+  registered commands so it cannot drift again. Eval scripts under `evals/` are
+  run directly with `uv run python`.
 - How entry is selected: Typer app with subcommands; no-subcommand callback
   launches the TUI (`src/haven/interfaces/cli.py::main`).
 

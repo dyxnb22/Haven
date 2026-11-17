@@ -20,24 +20,45 @@ Read these as the description of the frozen implementation:
 6. `course/` — the guided reading path, including three no-Agent-experience
    foundations before the implementation modules.
 
-`docs/codebase/` is a current audit companion. It summarizes the same code from
-the perspectives of structure, stack, testing, integrations, conventions, and
-known concerns. Volatile counts are intentionally delegated to the generated
+[`docs/codebase/`](codebase/README.md) is a current audit companion, entered
+through its own index. It summarizes the same code from the perspectives of
+structure, stack, testing, integrations, conventions, architecture, and known
+concerns — read `CONCERNS.md` before touching policy, boundary, gate, or
+provider code. Volatile counts are intentionally delegated to the generated
 metrics table instead of being copied there.
 
 ## What is historical
 
-- `Haven_TUI_Coding_Agent_项目计划.md` is the original proposal. Its checkboxes
-  show planned scope, not current completion.
-- `docs/ROADMAP*.md` and `docs/superpowers/{specs,plans}/` preserve how the
-  implementation was designed and sequenced. Their opening status notices say
-  where later code or ADRs superseded them.
+- [`Haven_TUI_Coding_Agent_项目计划.md`](../Haven_TUI_Coding_Agent_项目计划.md)
+  is the original proposal. Its checkboxes show planned scope, not current
+  completion.
+- `docs/ROADMAP*.md` preserve how the implementation was designed and sequenced,
+  including the two rounds of external gap analysis against Reasonix, Codex CLI
+  and opencode and which of their claims verified against the code. Their opening
+  status notices say where later code or ADRs superseded them.
+- [`docs/research/2026-09-26-agent-project-selection.md`](research/2026-09-26-agent-project-selection.md)
+  is the dated project-selection research behind Haven's scope. It is a
+  proposal, not an architecture change, and nothing in it is a current behavior
+  contract.
+- [`interview-study/`](../interview-study/README.md) is **not Haven
+  documentation**. It is personal interview-preparation material for a Java
+  backend role, written against a different portfolio project. It sits beside
+  `docs/` rather than inside it precisely so it does not read as part of Haven's
+  documentation; none of it describes Haven's behavior, and nothing in Haven's
+  docs depends on it.
 - ADRs are immutable decision history. A later discovery annotates or supersedes
   an ADR; it does not rewrite the original reasoning. Follow the amendment links
   at the top before relying on an older claim.
 - `docs/POSTMORTEM.md` and historical portions of `docs/EVAL_LIVE.md` retain the
   numbers observed at that point in time. They are evidence of the development
   path, not the current repository totals.
+
+> The step-by-step implementation plans and specs that once lived in
+> `docs/superpowers/` were deleted on 2026-11-16. They were execution artifacts
+> for an external agent framework, not documentation of the system; nothing in
+> them survived that the ADRs and the roadmaps above do not already carry, and
+> they had to be excluded from `ruff format` because their code fragments were
+> never valid modules.
 
 ## Truth hierarchy
 

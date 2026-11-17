@@ -11,6 +11,13 @@ where the project started:
   every child process behind Seatbelt/Landlock and made confinement one of the
   project's central claims. ADR 0013, 0017, and 0026 refine it further.
 
+**Amended 2026-11-16: the count in the first bullet above has itself drifted.**
+The surface is now **twenty-five** compiled-in tools with `TOOL_VERSION = "8"`.
+That bullet was accurate when it was written and is kept as the record of the
+earlier correction. The authoritative list is the generated table in
+`docs/ARCHITECTURE.md`, derived from `KNOWN_TOOLS` and pinned by
+`scripts/gen_tool_table.py`, so it cannot drift again.
+
 The stack choices and the rejected alternatives below still hold.
 
 ## Context

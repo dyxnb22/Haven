@@ -2,7 +2,7 @@
 
 [上一课：第一次离线运行](prerequisite-03-first-offline-journey.md) |
 [源码伴读索引](code-reading-map.md) |
-[English](archive/en/00-from-scratch.md) | **中文**
+[English（早期稿，已被本课取代）](archive/en/00-from-scratch.md) | **中文（当前）**
 
 本课从最小代理出发，连续揭开十一个朴素假设，再把每种失败映射到 Haven 的修复机制。示例代码只用于
 说明机制，不是生产实现；全程不需要 API key。

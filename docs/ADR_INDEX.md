@@ -37,6 +37,8 @@ changes and separates them from evaluation verdicts.
   [0048](adr/0048-explicit-task-handoff.md).
   Run-scoped model selection and usage follow
   [0049](adr/0049-run-model-selection.md).
+  Bounded read-only subagent delegation follows
+  [0050](adr/0050-bounded-read-only-subagent-delegation.md).
 
 ## Supporting design choices
 

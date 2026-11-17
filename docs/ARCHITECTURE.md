@@ -106,7 +106,9 @@ reconstructs the same screen (Trace drives the same presenter reducer).
 
 ## Tool surface
 
-Twenty-one compiled-in tools, plus dynamically namespaced external MCP tools:
+Twenty-five compiled-in tools, plus dynamically namespaced external MCP tools
+(the table below is generated from `KNOWN_TOOLS`, so it — not this sentence — is
+the authority for the count):
 enough to complete complex real-world repository tasks, with every tool strictly
 classified by deterministic policy. A unit test asserts
 that the registry and the policy's tool sets stay in sync and that no

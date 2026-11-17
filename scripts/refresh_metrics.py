@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -70,8 +71,15 @@ def _coverage_pct(data_file: Path | None = None) -> int | None:
     `coverage report` 读取 `.coverage` 当前已有的内容，不会重新运行套件。如果从
     过时的数据文件报告，错误数字（上次运行后新增的行会被当作未覆盖）会悄悄写入
     CI 随后强制执行的表格，因此这里会明确因过时而失败。
+
+    未显式传入路径时读取 `COVERAGE_FILE`：`coverage run` 本身就用这个变量决定数据
+    落点，下方那条提示也正是这样建议的。若这里不读同一个变量，按提示把数据写到
+    自定义路径后，仍会被判定为"数据缺失"——提示会变成一句无法执行的空话。
     """
-    data = data_file.resolve() if data_file is not None else ROOT / ".coverage"
+    if data_file is None:
+        env_path = os.environ.get("COVERAGE_FILE")
+        data_file = Path(env_path) if env_path else ROOT / ".coverage"
+    data = data_file.resolve()
     if _coverage_data_is_stale(data, [*_src_files(), *_test_files()]):
         raise SystemExit(
             "coverage data is missing or older than the newest source/test file, so the "
