@@ -1,7 +1,5 @@
 # 模块 03——工具与唯一执行通道
 
-[English（早期稿，已被本课取代）](archive/en/03-tools-and-the-execution-channel.md) | **中文（当前）**
-
 > 文件：`src/haven/application/tool_pipeline.py`、`src/haven/application/registry.py`、
 > `src/haven/contracts/tools.py`、`src/haven/domain/ticket.py`、`src/haven/domain/policy.py`
 > 测试：`tests/integration/test_agent_journeys.py`、`tests/integration/test_tool_error_containment.py`

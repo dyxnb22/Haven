@@ -1,7 +1,5 @@
 # 模块 05——有界代理循环与上下文工程
 
-[English（早期稿，已被本课取代）](archive/en/05-agent-loop-and-context.md) | **中文（当前）**
-
 > 文件：`src/haven/application/run_actor.py`、`src/haven/application/answer_resolution.py`、
 > `src/haven/application/run_service.py`（装配与委托）、`src/haven/application/context_builder.py`、
 > `src/haven/domain/budget.py`、`src/haven/domain/stuck.py`、`src/haven/domain/transitions.py`

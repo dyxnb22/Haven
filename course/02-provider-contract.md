@@ -1,7 +1,5 @@
 # 模块 02——Provider 契约与流式传输
 
-[English（早期稿，已被本课取代）](archive/en/02-provider-contract.md) | **中文（当前）**
-
 > 文件：`src/haven/contracts/model.py`、`src/haven/ports/model.py`、
 > `src/haven/adapters/providers/openai_compatible.py`、
 > `src/haven/adapters/providers/scripted.py`

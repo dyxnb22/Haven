@@ -345,7 +345,7 @@ including one where the security gate itself was wrong.
 | `docs/SECURITY.md` | assets, principals, attack surface, defenses, limitations |
 | `docs/EVAL.md` | case design, metrics, offline vs. live eval |
 | `docs/EVAL_LIVE.md` | every live real-model measurement: five task tiers, zero-config discovery, a head-to-head vs a peer agent, and the harness defects each round exposed |
-| [`course/`](course/README.md) | three beginner foundations, one derivation module, and 10 layer modules that teach agent engineering from this repo — with diagrams of the layering, the execution channel and the state machine |
+| [`course/`](course/README.md) | three beginner foundations, one derivation module, and 10 layer modules that teach agent engineering from this repo — with diagrams of the layering, the execution channel and the state machine. Written in Chinese |
 | `docs/DEMO.md` | 2–3 minute walkthrough script |
 | `docs/PROJECT_CARD.md` | one-page summary, measured results, trade-offs |
 | [`docs/RESUME.zh-CN.md`](docs/RESUME.zh-CN.md) | concise Chinese résumé entry and interview talking points |

@@ -1,7 +1,5 @@
 # 模块 09——评估与成本
 
-[English（早期稿，已被本课取代）](archive/en/09-evaluation-and-cost.md) | **中文（当前）**
-
 > 文件：`src/haven/evalkit/runner.py`、`evals/generate_cases.py`、
 > `evals/compare_prompt.py`、`docs/EVAL.md`、`docs/EVAL_LIVE.md`
 > 测试：`tests/eval/test_eval_suite.py`
