@@ -28,7 +28,7 @@
 
 ## 快速开始（离线，不需要 API key）
 
-仅安装运行依赖、检查平台支持或升级旧会话时，参见[安装与升级说明](docs/INSTALL_UPGRADE.md)。
+仅安装运行依赖、检查平台支持或升级旧会话时，参见[安装与升级说明](docs/INSTALL_UPGRADE.zh-CN.md)。
 
 ```bash
 uv sync --locked
@@ -186,7 +186,7 @@ TUI 主输入框支持 ↑/↓ 浏览最近 20 条已提交任务；向下越过
 配置、权限、Plan、恢复与 `--clear-check-group` 见
 [验证配置组](docs/VERIFICATION_GROUPS.md)。
 
-使用 pytest 和 Ruff 的项目可按 [Python 工程流程](docs/PYTHON_WORKFLOW.md)
+使用 pytest 和 Ruff 的项目可按 [Python 工程流程](docs/PYTHON_WORKFLOW.zh-CN.md)
 完成配方预览与确认、环境及权限检查、隔离修改、两项验证和审阅应用。
 `doctor` 会报告 Haven 同一 Python 环境中缺失的 pytest/Ruff 模块；
 其他解释器的依赖可用性明确标为未知。
@@ -194,16 +194,16 @@ TUI 主输入框支持 ↑/↓ 浏览最近 20 条已提交任务；向下越过
 Evidence 页集中展示必需检查状态、最近的进程结果、诊断位置和日志回看命令。
 `/output` 切换到该页，`/output CALL_ID` 只读分页查看日志，不调用模型。
 无头运行用 `haven output RUN_ID` 查看概览，加 `CALL_ID` 回看日志。
-保存上限、分页和导出方式见[进程输出说明](docs/PROCESS_OUTPUT.md)。
+保存上限、分页和导出方式见[进程输出说明](docs/PROCESS_OUTPUT.zh-CN.md)。
 
 `/handoff` 查看任务事实和工作笔记；用 `/handoff prepare`、`/handoff edit`、
 `/handoff history`、`/handoff clear` 显式整理暂停或结束任务的交接。
 决策、尝试和下一步可跨压缩与恢复保留，笔记仍是不可信资料，
 必需检查始终从账本计算。追问表单的 **Keep paused** 可保留问题并回到主界面，
-稍后用 `/answer` 重开。使用和恢复边界见[长任务交接](docs/HANDOFF.md)。
+稍后用 `/answer` 重开。使用和恢复边界见[长任务交接](docs/HANDOFF.zh-CN.md)。
 
 `/model` 查看模型预设和最近一次调用，`/model use NAME` 为后续新运行选择预设。
-无头运行接受 `--model-preset NAME`。保存的任务沿用原路由恢复。见[模型预设](docs/MODEL_PRESETS.md)。
+无头运行接受 `--model-preset NAME`。保存的任务沿用原路由恢复。见[模型预设](docs/MODEL_PRESETS.zh-CN.md)。
 
 `/stats` 或 `haven sessions stats RUN_ID` 汇总单次运行的模型和工具耗时、重读范围、
 上下文构建、token 和估算费用。最慢的调用带有事件序号，可在 JSONL 导出中查阅。
@@ -238,7 +238,7 @@ uv run python scripts/gates.py --list        # 检查图及其依赖
 
 | 指标 | 数值 |
 |---|---|
-| 自动化测试 | 1484 |
+| 自动化测试 | 1456 |
 | 行覆盖率（`src/`） | 91% |
 | 源码 / 测试规模 | 约 30.3k / 约 25.0k 行 |
 | 类型检查模块（`mypy --strict`） | 152 |
@@ -262,7 +262,7 @@ uv run python scripts/gates.py --list        # 检查图及其依赖
 | [`docs/SECURITY.md`](docs/SECURITY.md) | 资产、主体、攻击面、防御和限制 |
 | [`docs/EVAL.md`](docs/EVAL.md) | 用例设计、指标、离线与实时评估 |
 | [`docs/EVAL_LIVE.md`](docs/EVAL_LIVE.md) | 每次真实模型测量及其暴露的缺陷 |
-| [`course/`](course/README.md) | 三门零基础预备课、一个推导模块和十个分层模块，教你从这个仓库学习代理工程 |
+| [`course/`](course/README.md) | 三门零基础预备课、一个推导模块和十个分层模块，教你从这个仓库学习代理工程；含分层、执行通道和状态机图示 |
 | [`docs/DEMO.md`](docs/DEMO.md) | 2–3 分钟演示脚本 |
 | [`docs/PROJECT_CARD.md`](docs/PROJECT_CARD.md) | 一页式摘要、测量结果和权衡 |
 | [`docs/RESUME.zh-CN.md`](docs/RESUME.zh-CN.md) | 可直接拼接进简历的中文项目条目和面试讲述提纲 |
@@ -270,14 +270,12 @@ uv run python scripts/gates.py --list        # 检查图及其依赖
 | [`docs/POSTMORTEM.md`](docs/POSTMORTEM.md) | 真实失败、根因和回归防护 |
 | [`docs/DEFENSIVE_PATTERNS.md`](docs/DEFENSIVE_PATTERNS.md) | 编写策略、边界、门禁或 Provider 代码前应阅读的防御规则 |
 | [`docs/LEARNING.md`](docs/LEARNING.md) | 阅读顺序、事实层级，以及当前文档与历史计划的边界 |
-| [`docs/PROJECT_DIAGRAMS.md`](docs/PROJECT_DIAGRAMS.md) | 架构、业务流程、安全和恢复的学习图谱 |
 | [`docs/ADR_INDEX.md`](docs/ADR_INDEX.md) | 生效中的决策导航、历史裁决和新增 ADR 准入规则 |
 | [`docs/notes/`](docs/notes/) | 轻量级决策笔记 |
 | [`docs/adr/`](docs/adr/) | 不就地改写的架构决策历史记录 |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md)（及 [ROADMAP2](docs/ROADMAP2.md)、[ROADMAP3](docs/ROADMAP3.md)） | 已执行的改进计划和构建顺序记录 |
 | [`docs/PERSONAL_ROADMAP.md`](docs/PERSONAL_ROADMAP.md) | 个人长期规划：优先级、阶段、验收标准与范围（尚未实施的路线图） |
 | [`docs/codebase/`](docs/codebase/README.md) | 七视角审计伴侣——结构、技术栈、约定、测试、集成、架构和分级风险登记册。改动策略、边界、门禁或 Provider 代码前先读 `CONCERNS.md` |
-| [`docs/PROJECT_DIAGRAMS.en.md`](docs/PROJECT_DIAGRAMS.en.md) | 架构、业务流程、安全和恢复的学习图谱（[中文](docs/PROJECT_DIAGRAMS.md)） |
 
 ## 从这个仓库学习
 

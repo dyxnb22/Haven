@@ -48,10 +48,11 @@ improvement. This is that A/B.
 
 **Design.** Seven tier-3 cases chosen in advance (the ones that hit the step
 ceiling in earlier reports), three repetitions, two arms: n=21 per arm. The
-arms differ in exactly one JSON field, `repeat_nudge`, added for this purpose
-(`evals/real/make_ab_cases.py` generates both directories from the same
-sources). The stop-on-third-repetition behaviour is identical in both arms, so
-the arms differ in one thing and not two. Step count is the primary metric
+arms differ in exactly one JSON field, `repeat_nudge`, added for this purpose —
+both case directories were generated from the same sources, so they differ in
+that one field and nothing else. The stop-on-third-repetition behaviour is
+identical in both arms, so the arms differ in one thing and not two. Step count
+is the primary metric
 because the failure being targeted is a variance tail, not a wall — pass/fail
 at this sample size cannot separate the two. Model `deepseek-chat` on the beta
 endpoint; both arms ran concurrently, so neither got a quieter API.

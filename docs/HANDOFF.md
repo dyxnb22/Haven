@@ -1,14 +1,20 @@
-# 长任务交接
+# Task handoff
 
-交接页把两部分分开展示：检查点中的程序事实，以及用户显式维护的工作笔记。
-事实包含记录过的修改路径、diff 数量、最近检查和必需检查的当前状态；
-笔记包含已完成、决策及原因、尝试过的方法、下一步和待检查事项。
-笔记里的“已通过”或“已授权”始终只是文字，不影响权限、审批或成功判定。
-术语见[项目语言](../CONTEXT.md)，持久化决定见 [ADR 0048](adr/0048-explicit-task-handoff.md)。
+**English** | [中文](HANDOFF.zh-CN.md)
+
+The handoff page shows two parts separately: the program facts from the
+checkpoint, and working notes the user maintains explicitly. Facts cover the
+recorded modified paths, the diff count, and the current state of recent and
+required checks. Notes cover what is done, decisions and their reasons, what was
+tried, next steps, and what still needs checking. "Passed" or "authorized"
+inside a note is always just text: it never affects permission, approval, or the
+definition of success. Terminology is in
+[project language](../CONTEXT.md); the persistence decision is in
+[ADR 0048](adr/0048-explicit-task-handoff.md).
 
 ## TUI
 
-在已有任务中使用：
+Use these on an existing task:
 
 ```text
 /handoff
@@ -18,60 +24,80 @@
 /handoff clear
 ```
 
-`/handoff` 查看当前事实、笔记、来源运行、事件序号、保存时间和已有计划。
-`prepare` 明确复制现有计划中已完成/未完成步骤的标题作为初稿；
-它不调用模型，不分析历史对话，也不证明这些步骤已经完成。
-已有交接时拒绝再次准备，以免覆盖手写内容；可直接 `edit`。
+`/handoff` shows the current facts, notes, source run, journal sequence, save
+time, and any existing plan. `prepare` explicitly copies the titles of the
+existing plan's completed and unfinished steps as a draft; it calls no model,
+analyses no conversation history, and does not prove those steps are done. It is
+refused when a handoff already exists, so handwritten content is never
+overwritten — use `edit` directly instead.
 
-编辑页提供五个文字字段，每项最多 600 字符，合计最多 2000 字符；
-需要理由时直接写入 decisions，例如“保留原 API，因为已有调用方依赖它”。
-保存前校验上限，失败或版本冲突时保留当前表单内容。
-修改绑定打开表单时的日志序号；其他操作推进了日志时，需重新查看最新记录再保存。
+The edit page offers five text fields, each capped at 600 characters and 2,000
+in total. Write a reason straight into `decisions` when one is needed, e.g.
+"keep the original API because existing callers depend on it". Limits are
+validated before saving, and the current form content is kept on failure or a
+version conflict. An edit binds the journal sequence from when the form was
+opened; if another operation has advanced the journal, review the latest record
+before saving.
 
-只有暂停或结束的用户任务可修改。模型正在执行时可查看已存内容，不能编辑。
-等待追问时可点 **Keep paused** 保留问题并回到主界面，维护交接后用 `/answer`
-重开表单；Esc 仍然表示取消任务。维护笔记不消费答案，也不完成审阅。
+Only a paused or finished user task can be edited. While the model is executing
+you can view stored content but not edit it. While waiting on a question, use
+**Keep paused** to retain the question and return to the main screen, maintain
+the handoff, then reopen the form with `/answer`; Esc still means cancel the
+task. Maintaining notes consumes no answer and completes no review.
 
-`history` 显示当前运行最近 10 次修订的有界文本，`clear` 追加清除记录。
-清除仅影响本任务随后采用的笔记，旧修订和其他分支的快照保持可追溯。
+`history` shows bounded text for the run's last 10 revisions, and `clear`
+appends a clearing record. Clearing affects only the notes this task adopts
+afterwards; older revisions and other branches' snapshots stay traceable.
 
 ## CLI
 
-以下命令只操作本地存储，不创建模型服务或执行项目命令：
+The following commands touch local storage only — no model service is created
+and no project command is run:
 
 ```bash
 haven handoff RUN_ID
 haven handoff RUN_ID --prepare
 haven handoff RUN_ID --export /tmp/handoff-notes.json
-# 编辑导出的五个字段，使用上一次查看时显示的 Journal sequence：
+# Edit the five exported fields, using the Journal sequence shown at last view:
 haven handoff RUN_ID --set /tmp/handoff-notes.json --expected-seq 42
 haven handoff RUN_ID --history
 haven handoff RUN_ID --clear
 ```
 
-导出只包含可编辑的笔记字段，拒绝覆盖已有文件。
-`--set` 必须提供 `--expected-seq`；准备或清除也可显式提供这一选项。
-各操作互斥，JSON 文件最多 16 KiB，未知字段或超出笔记上限均拒绝保存。
-历史单条过长会显示摘录；完整修订可从 `haven export RUN_ID --format jsonl` 查看。
-屏幕内容会移除终端控制字符，TUI 还会转义 Rich 标记。
+Export contains only the editable note fields and refuses to overwrite an
+existing file. `--set` requires `--expected-seq`; prepare and clear may also
+take it explicitly. The operations are mutually exclusive, the JSON file is
+capped at 16 KiB, and unknown fields or notes over the limit are refused.
+An over-long history entry shows an excerpt; full revisions are available from
+`haven export RUN_ID --format jsonl`. Screen content strips terminal control
+characters, and the TUI additionally escapes Rich markup.
 
-## 压缩、恢复和续接
+## Compaction, recovery, and continuation
 
-交接笔记独立于会被压缩的对话保存。实际模型运行前冻结编辑窗口，
-采用该任务最新的显式修订；下一次检查点保存实际使用的笔记快照。
-查看页仍从最新检查点重新计算程序事实，不从笔记推断状态。
-暂停后修改笔记不会重写原检查点、用户答案、验证范围或执行记录。
+Handoff notes are stored independently of the conversation that gets compacted.
+The edit window is frozen before the actual model run, which adopts the task's
+latest explicit revision; the next checkpoint saves the snapshot actually used.
+The view page still recomputes program facts from the newest checkpoint and
+never infers state from notes. Editing notes after a pause does not rewrite the
+original checkpoint, user answers, verification scope, or execution records.
 
-上下文把笔记放入单独的 **untrusted** 片段，把当前账本事实放入另一个
-**trusted** 片段；旧的工具输出被压缩时，不会因此丢失这份笔记。
-交接先于可选技能正文预留空间；笔记上下文最多 3000 字符、事实最多 1600 字符，
-固定头部挤占预算时还可能摘录或省略，摘录有标记。原生前缀续写轮次与计划一样
-暂不追加尾部，下一正常轮次恢复；完整笔记仍可从交接页或导出查看。
+Context places the notes in a separate **untrusted** fragment and the current
+ledger facts in another **trusted** one, so compacting old tool output does not
+lose the notes. Handoff reserves space ahead of optional skill bodies: notes are
+capped at 3,000 characters and facts at 1,600, and a fixed header squeezing the
+budget may excerpt or omit them, with excerpts marked. Native-prefix
+continuation turns, like plans, append no tail for now; the next normal turn
+restores it, and the full notes remain viewable from the handoff page or an
+export.
 
-继续、执行计划和分支继承笔记的副本及来源，不继承它所声称的检查成功。
-新轮次的账本仍从空开始；清除后后续轮次不再继承，完全新建的任务也不自动加载。
-旧检查点缺省没有交接。修订追加在事件日志中，无需数据库 schema 升级；
-较老的严格读取器可能拒绝新事件或检查点字段。
+Continue, plan implementation, and branches inherit a copy of the notes and
+their source, but not the check success the notes claim. A new turn's ledger
+still starts empty; after a clear, later turns no longer inherit, and a wholly
+new task does not load them automatically. Legacy checkpoints have no handoff by
+default. Revisions are appended to the event journal, so no database schema
+upgrade is needed; older strict readers may reject new event or checkpoint
+fields.
 
-本版先支持显式整理和修订，不在后台自动生成模型摘要。
-如果以后加入自动整理，需要另行验证信任边界、保存方式及实际收益。
+This version supports explicit tidying and revision only — no automatic model
+summary is generated in the background. If automatic tidying is added later, its
+trust boundary, storage, and actual benefit need separate validation.

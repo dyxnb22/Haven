@@ -316,7 +316,7 @@ with `--check` to verify the generated table.
 
 | Metric | Value |
 |---|---|
-| Automated tests | 1484 |
+| Automated tests | 1456 |
 | Line coverage (`src/`) | 91% |
 | Source / test size | ~30.3k / ~25.0k lines |
 | Typed modules (`mypy --strict`) | 152 |
@@ -345,7 +345,7 @@ including one where the security gate itself was wrong.
 | `docs/SECURITY.md` | assets, principals, attack surface, defenses, limitations |
 | `docs/EVAL.md` | case design, metrics, offline vs. live eval |
 | `docs/EVAL_LIVE.md` | every live real-model measurement: five task tiers, zero-config discovery, a head-to-head vs a peer agent, and the harness defects each round exposed |
-| `course/` | three beginner foundations, one derivation module, and 10 layer modules that teach agent engineering from this repo |
+| [`course/`](course/README.md) | three beginner foundations, one derivation module, and 10 layer modules that teach agent engineering from this repo — with diagrams of the layering, the execution channel and the state machine |
 | `docs/DEMO.md` | 2–3 minute walkthrough script |
 | `docs/PROJECT_CARD.md` | one-page summary, measured results, trade-offs |
 | [`docs/RESUME.zh-CN.md`](docs/RESUME.zh-CN.md) | concise Chinese résumé entry and interview talking points |
@@ -359,7 +359,6 @@ including one where the security gate itself was wrong.
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) · [`ROADMAP2`](docs/ROADMAP2.md) · [`ROADMAP3`](docs/ROADMAP3.md) | the executed improvement plans, kept as the record of what was built in which order and why |
 | [`docs/PERSONAL_ROADMAP.md`](docs/PERSONAL_ROADMAP.md) | proposed personal-development roadmap: priorities, phases, acceptance criteria, and scope |
 | [`docs/codebase/`](docs/codebase/README.md) | seven-angle audit companion — structure, stack, conventions, testing, integrations, architecture, and a prioritized risk register. Read `CONCERNS.md` before touching policy, boundary, gate, or provider code |
-| [`docs/PROJECT_DIAGRAMS.md`](docs/PROJECT_DIAGRAMS.en.md) | architecture, business-flow, security, and recovery learning diagrams ([中文](docs/PROJECT_DIAGRAMS.md)) |
 
 ## Learn from this repo
 

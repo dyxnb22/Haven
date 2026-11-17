@@ -1,12 +1,16 @@
-# 安装与升级
+# Installation and upgrade
 
-Haven 的验收平台是 macOS 和 Linux。准备 Python 3.12 或更新版本、Git 和 uv。
-使用带 SQLite `RETURNING` 与 JSON 函数的 Python 解释器。`uv sync` 按仓库的 `uv.lock`
-安装依赖。ripgrep 可选，缺少时使用 Python 搜索。
+**English** | [中文](INSTALL_UPGRADE.zh-CN.md)
 
-## 干净安装
+Haven's accepted platforms are macOS and Linux. Prepare Python 3.12 or newer,
+Git, and `uv`. Use a Python interpreter that provides SQLite `RETURNING` and the
+JSON functions. `uv sync` installs dependencies from the repository's committed
+`uv.lock`. ripgrep is optional; without it, search falls back to Python.
 
-在源码目录中安装运行依赖并检查工作区。`--no-sync` 让后续命令复用同一环境。
+## Clean install
+
+Install the runtime dependencies in a source checkout and check the workspace.
+`--no-sync` lets later commands reuse the same environment.
 
 ```bash
 uv sync --locked --no-default-groups --no-editable
@@ -16,41 +20,62 @@ haven_check=$(mktemp -d "${TMPDIR:-/tmp}/haven-offline.XXXXXX")
 uv run --no-sync haven eval --offline --out "$haven_check"
 ```
 
-`doctor` 会显示可用的沙箱后端。macOS 使用 Seatbelt 的 `sandbox-exec`，Linux 的
-Landlock 需要内核提供 ABI 4 或更新版本。后端不可用时 `repo.exec` 会被策略拒绝。
-仓库读取和文件工具继续走常规权限通道，已注册的 `repo.check` 仍可在本地信任模式下
-通过审批执行。需要真实模型时，再配置 Provider 密钥。干净配置下 MCP、双轨路由和
-临时工作树均为显式选项，离线评估使用脚本模型。
+`doctor` reports which sandbox backend is available. macOS uses Seatbelt's
+`sandbox-exec`; Landlock on Linux needs a kernel providing ABI 4 or newer. With
+no backend available, policy denies `repo.exec`. Repository reads and the file
+tools continue through the ordinary permission channel, and a registered
+`repo.check` can still run under approval in locally-trusted mode. Configure a
+provider key only when you need a real model. MCP, dual-track routing, and
+ephemeral worktrees are all explicit opt-ins, and the offline evaluation uses a
+scripted model.
 
-## 升级已有会话
+## Upgrading an existing session
 
-1. 用当前安装的 `haven config explain` 找到 `storage.db`、`storage.artifacts`
-   和 `skills.user_dir`。用户配置文件在 `skills.user_dir` 的上一级。
-2. 退出 Haven。备份整个数据目录及用户配置目录。数据目录包含数据库、工件和恢复资料。
-   `HAVEN_DATA_DIR` 和 `HAVEN_CONFIG_DIR` 可用来指向备份的副本做演练。
-3. 安装候选版本，在原工作区路径打开一条已保存运行。`haven sessions list` 或
-   `haven sessions show RUN_ID` 首次打开数据目录时会迁移支持的旧库。
-   `doctor` 只检查环境。核对历史后，可用 `haven resume RUN_ID --workspace PATH` 恢复
-   中断任务。恢复仍会检查工作区身份、原文件工件和不确定的副作用。
-4. 需要回退时，先关闭候选版本。让旧安装通过 `HAVEN_DATA_DIR` 和 `HAVEN_CONFIG_DIR`
-   读取升级前的备份副本。工作区文件按各自的版本记录恢复。
+1. Use the currently installed `haven config explain` to locate `storage.db`,
+   `storage.artifacts`, and `skills.user_dir`. The user configuration file sits
+   one level above `skills.user_dir`.
+2. Exit Haven. Back up the whole data directory and the user configuration
+   directory. The data directory holds the database, artifacts, and recovery
+   material. `HAVEN_DATA_DIR` and `HAVEN_CONFIG_DIR` can point at a backup copy
+   for a rehearsal.
+3. Install the candidate version and open a saved run from its original
+   workspace path. `haven sessions list` or `haven sessions show RUN_ID`
+   migrates a supported older store the first time it opens the data directory.
+   `doctor` only inspects the environment. Once the history checks out, use
+   `haven resume RUN_ID --workspace PATH` to continue an interrupted task.
+   Resume still validates workspace identity, the original file artifacts, and
+   any undetermined side effects.
+4. To roll back, first close the candidate version. Let the older installation
+   read the pre-upgrade backup copy through `HAVEN_DATA_DIR` and
+   `HAVEN_CONFIG_DIR`. Workspace files are restored according to each version's
+   own records.
 
-`v0.1.0` 标签对应 SQLite schema 2，当前候选使用 schema 6。迁移在单个事务中执行。
-不支持的 schema 会在写入之前被拒绝，迁移失败时关闭连接并回滚未提交的 schema 变更。
-备份保留了旧版能读取的原始检查点与工件，也适用于旧版严格解析器遇到新事件字段的情况。
+The `v0.1.0` tag corresponds to SQLite schema 2; the current candidate uses
+schema 6. Migration runs inside a single transaction. An unsupported schema is
+refused before anything is written, and a failed migration closes the connection
+and rolls back uncommitted schema changes. The backup preserves the original
+checkpoints and artifacts in a form the older version can still read, which also
+covers an older strict parser meeting new event fields.
 
-## 维护者走查
+## Maintainer walkthrough
 
-从含 `v0.1.0` 标签的本地仓库执行以下命令。脚本分别构建旧版与当前源码的 wheel，
-在两个临时环境安装锁定的运行依赖，并输出各自的版本与 SHA-256。
+Run the following from a local checkout that carries the `v0.1.0` tag. The
+script builds wheels from the old and current sources, installs the locked
+runtime dependencies into two temporary environments, and reports each version
+and SHA-256.
 
 ```bash
 uv run --locked python scripts/check_install.py
 ```
 
-走查包含 `doctor`、离线评估、旧版完成文件修改后中断、新版回放并续跑、旧事件逐字节
-比较，以及让旧版重新打开升级前的备份。工作区、数据库、构件和离线报告均位于临时目录。
+The walkthrough covers `doctor`, the offline evaluation, an old-version run
+interrupted after completing a file edit, replay and continuation on the new
+version, a byte-for-byte comparison of old events, and having the old version
+reopen the pre-upgrade backup. Workspaces, databases, artifacts, and offline
+reports all live in temporary directories.
 
-当前走查覆盖 macOS arm64 的 Seatbelt 和 Linux arm64 容器的 Landlock。
-两端均用 Python 3.12 的独立 wheel 安装通过离线评估和 schema 2 到 6 的升级。
-具体结果见[路线图实施记录](PERSONAL_ROADMAP.md#实施记录)。
+The current walkthrough covers macOS arm64 with Seatbelt and a Linux arm64
+container with Landlock. Both ends install from independent Python 3.12 wheels
+and pass the offline evaluation and the schema 2 to 6 upgrade. See the
+[roadmap implementation record](PERSONAL_ROADMAP.md#实施记录) for the specific
+results.

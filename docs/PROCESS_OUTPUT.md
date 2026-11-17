@@ -1,23 +1,31 @@
-# 检查结果与进程输出
+# Check results and process output
 
-Evidence 页保留所选验证组的每项状态，并集中显示最近 10 次 `repo.check` /
-`repo.exec` 的退出码、超时、工具错误、诊断位置和日志回看命令。
-每次结果最多展示 3 条诊断，其余可从日志查看；证据历史保留最近 50 行。
-组的通过、失败、未运行、过期和不匹配仍由原来的账本规则计算。
-打开历史任务时以检查点中的账本为准，较晚的进程日志只是可回看的观察。
+**English** | [中文](PROCESS_OUTPUT.zh-CN.md)
 
-## 查看和导出
+The Evidence page keeps a per-item status for the selected verification group
+and concentrates the exit code, timeout, tool errors, diagnostic locations, and
+log-review commands of the last 10 `repo.check` / `repo.exec` calls.
 
-TUI 中用 `/output` 打开 Evidence 页，再用其中显示的调用 ID：
+Each result shows at most 3 diagnostics; the rest are available from the log.
+The evidence history retains the last 50 rows. A group's passed, failed, not
+run, stale, and mismatched states are still computed by the existing ledger
+rules. Opening a historical run takes the ledger from its checkpoint; later
+process logs are observations that can be reviewed, not evidence.
+
+## Viewing and exporting
+
+In the TUI, `/output` opens the Evidence page, then use the call ID shown there:
 
 ```text
 /output CALL_ID
 ```
 
-窗口按每页最多 16000 字符分页，Previous/Next 切换，Esc 关闭。
-日志是只读文本，文件和行号用于定位，不自动打开路径或执行其中的命令。
+The window pages at 16,000 characters per page with Previous/Next, and Esc
+closes. Logs are read-only text: file and line numbers are for locating, and
+they never open a path or execute anything in it.
 
-命令行入口同样只读取本地存储，不创建模型服务：
+The command-line entry likewise reads local storage only and creates no model
+service:
 
 ```bash
 haven output RUN_ID
@@ -26,36 +34,54 @@ haven output RUN_ID CALL_ID --start-line 201 --max-lines 200
 haven output RUN_ID CALL_ID --save /tmp/check-output.log
 ```
 
-未给调用 ID 时，显示验收状态及最近结果。
-查看日志默认最多 200 行、20000 字符，`--max-lines` 上限 1000；
-超过显示范围会提示下一行，单行过长则提示保存原文。
-`--save` 导出完整的已保留日志，拒绝覆盖已有文件。
-屏幕输出移除终端控制字符、TUI 转义 Rich 标记；导出文件保留日志文本。
-读取位置只从指定运行/调用的完成事件解析，不接受任意文件或构件地址。
+Without a call ID it shows the acceptance status and recent results. Viewing a
+log defaults to at most 200 lines and 20,000 characters, with `--max-lines`
+capped at 1,000; content beyond the displayed range is reported as the next
+line, and an over-long single line is reported with a pointer to save the raw
+text. `--save` exports the complete retained log and refuses to overwrite an
+existing file. Screen output strips terminal control characters and the TUI
+escapes Rich markup; the exported file keeps the log text. A read position is
+parsed only from the completion event of the given run/call — arbitrary file or
+artifact addresses are not accepted.
 
-## 保存和摘要的边界
+## Retention and summary bounds
 
-标准执行器分别保存 stdout、stderr 的文本：每个流最多 2 MiB（按解码前字节计），
-正常范围内保留完整输出；超过时保留开头和末尾，中间插入省略字节数。
-日志头和结果概览均明确显示截断。无效 UTF-8 使用替换字符解码。
-管道保存末段 stdout 和各段 stderr，合并 stderr 同样限额。
-超时保留终止前已读到的输出，并明确记录超时和退出码 124。
-模型的原有尾部观察仍有界，完整日志不会自动进入模型上下文。
+The standard executor stores stdout and stderr text separately: up to 2 MiB per
+stream (counted in pre-decode bytes). Within range the full output is kept;
+beyond it the head and tail are kept with the omitted byte count inserted
+between. Both the log header and the result overview state truncation
+explicitly. Invalid UTF-8 is decoded with replacement characters.
 
-诊断从这份较完整的捕获文本提取，能定位原尾部范围之外的早期错误。
-支持 pytest、Ruff（紧凑和多行格式）、Mypy、Python traceback 及已有编译器格式。
-最多 25 条、每条消息最多 500 字符，格式化摘要最多 4000 字符。
-无法识别时使用有限的错误行或末尾回退，日志保留供人工检查。
+For pipes, the final stdout segment and each stderr segment are saved, and
+merged stderr shares the same limit. A timeout keeps the output read before the
+process was killed and records both the timeout and exit code 124. The model's
+original tail observation stays bounded; complete logs never enter model
+context automatically.
 
-日志存为带 SHA-256 校验的本地构件，完成事件只保存内容地址和有界展示信息。
-存活运行的事件引用会保护日志；`haven gc` 删除所属运行后才清理无引用构件。
-有活动运行时暂缓构件清扫，避免删除刚写入、尚未追加完成事件的日志。
-清扫候选仅限开始前已有的构件；日志包含所属运行和调用 ID，
-快照后新运行的日志不会因复用旧输出内容而落入旧清扫集合。
-旧运行或没有完成事件的取消调用可能没有日志，回看会明确报告；
-兼容的旧执行器若只返回尾部，则按其截断标记保存，不能恢复已经丢弃的内容。
-丢失或损坏的构件报错，不重新运行原命令。
+Diagnostics are extracted from this fuller captured text, which can locate early
+errors outside the original tail range. Supported formats include pytest, Ruff
+(compact and multi-line), Mypy, Python tracebacks, and existing compiler
+formats. At most 25 diagnostics, each message at most 500 characters, with a
+formatted summary of at most 4,000 characters. When nothing is recognised, a
+bounded error-line or tail fallback is used and the log is kept for manual
+inspection.
 
-进程报告和日志不参与权限或 Evidence Gate；普通 exec 即使退出码为零、
-输出“全部通过”也不会产生检查证据。验证范围规则见[验证配置组](VERIFICATION_GROUPS.md)，
-持久化边界见 [ADR 0047](adr/0047-retained-process-output.md)。
+Logs are stored as local artifacts carrying a SHA-256 checksum; the completion
+event saves only the content address and bounded display information. Events
+referencing a live run protect its logs, and `haven gc` cleans unreferenced
+artifacts only after deleting the owning run. Artifact sweeping is deferred
+while a run is active, so a log just written but not yet followed by a
+completion event is not deleted. Sweep candidates are limited to artifacts that
+already existed before the sweep began; logs carry their owning run and call ID,
+so a new run's log cannot fall into an older sweep set by reusing old output
+content. Old runs, or cancelled calls without a completion event, may have no
+log, and review reports that explicitly; a compatible older executor that
+returned only a tail is saved with its truncation flag, and already-discarded
+content cannot be recovered. A missing or corrupted artifact is reported as an
+error; the original command is never re-run.
+
+Process reports and logs take no part in permission or the Evidence Gate:
+ordinary exec produces no check evidence even with exit code zero and output
+claiming everything passed. For verification-scope rules see
+[verification groups](VERIFICATION_GROUPS.md); for the persistence boundary see
+[ADR 0047](adr/0047-retained-process-output.md).
