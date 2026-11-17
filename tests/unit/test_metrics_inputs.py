@@ -33,6 +33,15 @@ def test_explicit_inputs_and_preserved_history_skip_restricted_reports(
         + "\n\nKeep this paragraph.\n"
     )
     target.write_text(original)
+    # 简历条目走同一套显式输入。给它一个过期值，main() 必须用测量值改写它；
+    # 同时也确认它不会去读受限的默认报告。
+    resume = tmp_path / "docs" / "RESUME.zh-CN.md"
+    resume.parent.mkdir(parents=True)
+    resume.write_text(
+        "最终验证 **1 项测试全部通过、`src/` 行覆盖率 1%、1 个模块通过严格类型检查、"
+        "1/1 离线评测通过且 9 安全违规**\n",
+        encoding="utf-8",
+    )
     report = tmp_path / "new-offline.json"
     report.write_text(json.dumps({"passed": 40, "total": 40, "security_violations": 0}))
     coverage_data = tmp_path / "new-coverage"
@@ -73,6 +82,10 @@ def test_explicit_inputs_and_preserved_history_skip_restricted_reports(
     assert f"| {new_label} | 7/9 (historical) |" in updated
     assert "90%" in updated and "40/40" in updated
     assert updated.endswith("Keep this paragraph.\n")
+    # 简历句也被同一批显式输入改写，而不是保留手写的过期值。
+    resume_text = resume.read_text()
+    assert "8 项测试全部通过" in resume_text and "90%" in resume_text
+    assert "1 项测试" not in resume_text
     monkeypatch.setattr(sys, "argv", [*argv, "--check"])
     assert metrics.main() == 0
     assert target.read_text() == updated

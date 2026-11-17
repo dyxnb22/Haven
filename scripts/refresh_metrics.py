@@ -110,6 +110,51 @@ def _line_total(paths: list[Path]) -> int:
     return sum(len(p.read_text(encoding="utf-8").splitlines()) for p in paths if p.is_file())
 
 
+#: `docs/RESUME.zh-CN.md` 是准备直接粘进简历的散文，数字内联在句子里而不是表格里。
+#: 它因此曾经静静腐烂：写著 885 项测试，而实际早已是 1456——而这是最不该出错的一份
+#: 文档。所以这里把那一句整体生成，并纳入 `--check` 的同一套守卫。
+#: 用相对路径而不是导入时算好的绝对路径：测试会替换 `ROOT`，绝对路径会因此失效。
+_RESUME_REL = "docs/RESUME.zh-CN.md"
+_RESUME_CLAIM = re.compile(
+    r"最终验证 \*\*(?P<tests>\d+) 项测试全部通过、`src/` 行覆盖率 (?P<cov>\d+)%、"
+    r"(?P<mods>\d+) 个模块通过严格类型检查、(?P<eval>\d+/\d+) 离线评测通过且 "
+    r"(?P<viol>\d+) 安全违规\*\*"
+)
+
+
+def render_resume_claim(metrics: dict[str, object]) -> str:
+    """渲染简历条目里那一句“最终验证 …”，数字全部来自测量。"""
+    return (
+        f"最终验证 **{metrics['tests']} 项测试全部通过、"
+        f"`src/` 行覆盖率 {metrics['coverage']}%、"
+        f"{metrics['modules']} 个模块通过严格类型检查、"
+        f"{metrics['eval']} 离线评测通过且 {metrics['violations']} 安全违规**"
+    )
+
+
+def measure(
+    coverage_data: Path | None = None, offline_report: Path | None = None
+) -> dict[str, object]:
+    """收集本脚本各处共用的测量值，避免同一件事算两遍。"""
+    coverage = _coverage_pct(coverage_data)
+    ev = _eval_summary(offline_report)
+    return {
+        "tests": _count_tests(),
+        "coverage": coverage,
+        "modules": len(_src_files()),
+        "src_lines": _line_total(_src_files()),
+        "test_lines": _line_total(_test_files()),
+        "adrs": len(list((ROOT / "docs" / "adr").glob("*.md"))),
+        "eval": f"{ev['passed']}/{ev['total']}" if ev else "n/a",
+        "violations": ev["security_violations"] if ev else "n/a",
+    }
+
+
+def _replace_resume_claim(text: str, claim: str) -> str:
+    """替换简历句；找不到时原样返回，由调用方判定为过期。"""
+    return _RESUME_CLAIM.sub(lambda _m: claim, text, count=1)
+
+
 def _src_files() -> list[Path]:
     return sorted(ROOT.glob("src/**/*.py"))
 
@@ -333,6 +378,22 @@ def main() -> int:
         elif updated != current:
             path.write_text(updated, encoding="utf-8")
             print(f"updated {rel}")
+
+    # 简历条目：同一套守卫，但它是一句内联散文而不是区块。
+    resume_path = ROOT / _RESUME_REL
+    resume_current = resume_path.read_text(encoding="utf-8")
+    resume_updated = _replace_resume_claim(
+        resume_current,
+        render_resume_claim(
+            measure(coverage_data=args.coverage_data, offline_report=args.offline_report)
+        ),
+    )
+    if args.check:
+        if resume_updated != resume_current:
+            stale.append(_RESUME_REL)
+    elif resume_updated != resume_current:
+        resume_path.write_text(resume_updated, encoding="utf-8")
+        print(f"updated {_RESUME_REL}")
 
     if args.check and stale:
         print("stale metrics in: " + ", ".join(stale))
