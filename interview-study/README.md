@@ -5,7 +5,7 @@
 > different portfolio project (Big-Market). They live beside `docs/` rather than
 > inside it so they do not read as part of Haven's documentation, and nothing in
 > Haven's docs depends on them. Haven's own entry point is
-> [`docs/LEARNING.md`](docs/LEARNING.md).
+> [`docs/LEARNING.md`](../docs/LEARNING.md).
 
 这套文档用于把当前简历中的两个作品集项目，转换成可以反复练习的代码阅读路线和面试回答。目标不是记住更多类名，而是做到：简历上的每句话都能定位到代码，能说明一次正常流程、一次失败流程，以及方案的适用边界。
 

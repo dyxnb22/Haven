@@ -29,6 +29,10 @@ DOC_PATHS = sorted(
         ROOT / "Haven_TUI_Coding_Agent_项目计划.md",
         *ROOT.glob("docs/**/*.md"),
         *ROOT.glob("course/**/*.md"),
+        # `interview-study/` 不是 Haven 文档，但它的链接同样会腐烂，而且腐烂时没有
+        # 任何门禁会报警——把目录移出 `docs/` 的那次改动就留下了一个断链。链接检查
+        # 只验证目标存在，不把这些文件拉进文档契约。
+        *ROOT.glob("interview-study/**/*.md"),
     }
 )
 
