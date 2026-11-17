@@ -20,8 +20,7 @@
 ## 历史内容
 
 - [`Haven_TUI_Coding_Agent_项目计划.md`](../Haven_TUI_Coding_Agent_项目计划.md) 是最初提案，其中的复选框表示计划范围，而不是当前完成度。
-- `docs/ROADMAP*.md` 保存实现如何设计和排序，包括针对 Reasonix、Codex CLI 和 opencode 的两轮外部差距分析，以及其中哪些声明经过代码核对。它们开头的状态说明会指出哪些内容后来被代码或 ADR 取代。
-- [`docs/research/2026-09-26-agent-project-selection.md`](research/2026-09-26-agent-project-selection.md) 是 Haven 范围背后的选题调研，带日期。它是建议，不是架构变更，其中任何内容都不是当前行为契约。
+- [`docs/ROADMAP3.md`](ROADMAP3.md) 是唯一保留的路线图。前两轮已于 2026-11-17 并入——其阶段计划已执行完毕、不再描述当前状态，但值得保留的两节（经代码核对的外部声明、三轮独立审计的共识）复制在篇首。它开头的状态说明会指出哪些内容后来被代码或 ADR 取代。
 - [`interview-study/`](../interview-study/README.md) **不是 Haven 文档**。它是面向 Java 后端岗位的个人面试复习材料，针对另一个作品集项目撰写。它被放在 `docs/` 旁边而不是里面，正是为了不让读者误以为它属于 Haven 的文档；其中没有任何内容描述 Haven 的行为，Haven 的文档也不依赖它。
 - ADR 是不可变的决策历史。后续发现会标注或取代 ADR，但不会改写原始推理。依赖旧结论前，先查看文档顶部的修订链接。
 - `docs/POSTMORTEM.md` 和 `docs/EVAL_LIVE.md` 的历史部分保留当时观察到的数字；它们是开发过程的证据，不是当前仓库总量。

@@ -273,7 +273,7 @@ uv run python scripts/gates.py --list        # 检查图及其依赖
 | [`docs/ADR_INDEX.md`](docs/ADR_INDEX.md) | 生效中的决策导航、历史裁决和新增 ADR 准入规则 |
 | [`docs/notes/`](docs/notes/) | 轻量级决策笔记 |
 | [`docs/adr/`](docs/adr/) | 不就地改写的架构决策历史记录 |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md)（及 [ROADMAP2](docs/ROADMAP2.md)、[ROADMAP3](docs/ROADMAP3.md)） | 已执行的改进计划和构建顺序记录 |
+| [`docs/ROADMAP3.md`](docs/ROADMAP3.md) | 已执行的改进计划——唯一保留的路线图。前两轮已于 2026-11-17 并入：其阶段计划已执行完毕，值得保留的两节（经代码核对的外部声明、三轮审计的共识）复制在篇首 |
 | [`docs/PERSONAL_ROADMAP.md`](docs/PERSONAL_ROADMAP.md) | 个人长期规划：优先级、阶段、验收标准与范围（尚未实施的路线图） |
 | [`docs/codebase/`](docs/codebase/README.md) | 七视角审计伴侣——结构、技术栈、约定、测试、集成、架构和分级风险登记册。改动策略、边界、门禁或 Provider 代码前先读 `CONCERNS.md` |
 

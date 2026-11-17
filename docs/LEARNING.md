@@ -32,14 +32,12 @@ metrics table instead of being copied there.
 - [`Haven_TUI_Coding_Agent_项目计划.md`](../Haven_TUI_Coding_Agent_项目计划.md)
   is the original proposal. Its checkboxes show planned scope, not current
   completion.
-- `docs/ROADMAP*.md` preserve how the implementation was designed and sequenced,
-  including the two rounds of external gap analysis against Reasonix, Codex CLI
-  and opencode and which of their claims verified against the code. Their opening
-  status notices say where later code or ADRs superseded them.
-- [`docs/research/2026-09-26-agent-project-selection.md`](research/2026-09-26-agent-project-selection.md)
-  is the dated project-selection research behind Haven's scope. It is a
-  proposal, not an architecture change, and nothing in it is a current behavior
-  contract.
+- [`docs/ROADMAP3.md`](ROADMAP3.md) is the only surviving roadmap. The two
+  earlier rounds were folded into it on 2026-11-17 — their phase plans are
+  executed and said nothing current, but the two sections worth keeping
+  (external claims verified against the code, and where three independent audits
+  agreed) are reproduced at its top. Its opening status notice says where later
+  code or ADRs superseded it.
 - [`interview-study/`](../interview-study/README.md) is **not Haven
   documentation**. It is personal interview-preparation material for a Java
   backend role, written against a different portfolio project. It sits beside

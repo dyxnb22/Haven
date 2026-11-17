@@ -356,7 +356,7 @@ including one where the security gate itself was wrong.
 | [`docs/ADR_INDEX.md`](docs/ADR_INDEX.md) | active decision map, historical verdicts, and the admission rule for new ADRs |
 | [`docs/notes/`](docs/notes/README.md) | lightweight decisions, experiments, and deferrals below the ADR threshold |
 | [`docs/adr/`](docs/adr/) | immutable architecture decision records (count in the metrics table) |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) · [`ROADMAP2`](docs/ROADMAP2.md) · [`ROADMAP3`](docs/ROADMAP3.md) | the executed improvement plans, kept as the record of what was built in which order and why |
+| [`docs/ROADMAP3.md`](docs/ROADMAP3.md) | the executed improvement plan — the only surviving roadmap. The two earlier rounds were folded into it on 2026-11-17: their phase plans are executed, and the two sections worth keeping (external claims verified against the code, and where three audits agreed) are reproduced at the top |
 | [`docs/PERSONAL_ROADMAP.md`](docs/PERSONAL_ROADMAP.md) | the author's personal-development roadmap — priorities, phases, acceptance criteria, and scope. Written in Chinese |
 | [`docs/codebase/`](docs/codebase/README.md) | seven-angle audit companion — structure, stack, conventions, testing, integrations, architecture, and a prioritized risk register. Read `CONCERNS.md` before touching policy, boundary, gate, or provider code |
 

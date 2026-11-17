@@ -12,11 +12,73 @@ The remaining sections are the original plan kept as written. Statements such
 as “cannot yet show” describe the pre-execution baseline and are not current
 product claims; use `docs/PROJECT_CARD.md` and `docs/LEARNING.md` for those.
 
-Written 2026-08-13, immediately after roadmap v2 was executed in full (see
-`ROADMAP2.md` execution status). The gap analysis behind this plan is the
+Written 2026-08-13, immediately after the second roadmap was executed in full.
+The gap analysis behind this plan is the
 post-v2 self-assessment against Codex CLI, opencode, and Reasonix: the
 *mechanism* gaps the audits named are now substantially closed, and what
 remains has changed character. This plan is organized around that change.
+
+## What the earlier rounds recorded
+
+The first two roadmaps were folded into this one on 2026-11-17. Their phase
+plans are executed and no longer say anything current, but two sections are
+the only record of what external reviews actually claimed and which of those
+claims verified against the code. They are kept verbatim below; read them as
+history, not as a description of today's system.
+
+### From roadmap v1: claims checked against the code
+
+
+Verified against the code before planning around it:
+
+| Claim | Verdict |
+|---|---|
+| Writes via `repo.exec` bypass the Evidence Gate | **True, and proven by running it.** A run rewrote `src/calc.py` and was reported `succeeded / final_answer` |
+| `repo.check` is not sandbox-fail-closed like `repo.exec` | True. Policy never consults `sandbox_available` for check |
+| `reasoning_effort` on `ModelProfile` is unwired | True. The spec said it would be; the code never was |
+| `AppServices.close()` leaks the provider's HTTPX client | True. It closes the store only |
+| Docs have drifted (tests, ADR count, line counts, live pass rate) | True on every count. `PROJECT_CARD` says 486 tests in the table and 335 in the résumé bullets |
+| No LICENSE file | True |
+| DeepSeek requires `reasoning_content` replay on tool-call turns | **True**, and confirmed against DeepSeek's own thinking-mode docs |
+
+The last one is the important correction, because Haven's source currently
+asserts the opposite. `openai_compatible.py` carries the comment "most
+providers reject their own reasoning on input", which was inferred from an
+earlier defect. DeepSeek's rule is the reverse in the case Haven always hits:
+
+- No tool call in the turn → `reasoning_content` may be omitted; if sent it is
+  ignored.
+- **Tool call in the turn → it must be replayed in every later request, or the
+  API returns 400.**
+
+Haven sends `tools` on every request and its whole loop is tool calls, so this
+is a latent break, not a nicety. langchain, laravel/ai, and opencode all shipped
+the same bug and fixed it. Why Haven's August live run passed anyway is an open
+question — the honest answer is that it needs one live call to settle, which is
+the first task of Phase 1.
+
+### From roadmap v2: where three independent audits agreed
+
+
+All three audits, independently:
+
+- **The security kernel is no longer the gap.** Digest-bound single-use
+  approvals, the Evidence Gate, workspace-read-only exec (ADR 0017), scope and
+  gaming detection, crash recovery — at or ahead of the comparison systems.
+  None of the plans below may trade this away for feature parity.
+- **The gap moved.** From correctness to: editing expressiveness (multi-file
+  atomic patches), session runtime (steering a *running* agent, fork/undo,
+  cross-process leases), provider protocol edge recovery, context precision,
+  evaluation realism, zero-config closure, and headless automation.
+- **Documentation drifted again**, in the same direction as before: the code
+  got better and the words did not keep up. A false claim outranks a missing
+  feature, so that is Phase 0 again.
+
+Where the audits differ: the Reasonix audit ranks the session runtime first;
+the Codex CLI and opencode audits rank the multi-file patch first. This plan
+orders patch before session runtime for two reasons: the patch is the smaller,
+more self-contained change, and it unblocks the tier-4 refactor evaluation
+that the project needs *before* deciding any larger architecture question.
 
 ## Where the gaps moved
 
