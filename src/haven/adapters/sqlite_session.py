@@ -626,7 +626,7 @@ class SqliteSessionStore:
         # 一个隐式事务：运行及其所有行要么全部删除，要么全部保留（连接在
         # 末尾一次性提交）。
         for table in ("events", "checkpoints", "approvals", "executions"):
-            await self._db.execute(f"DELETE FROM {table} WHERE run_id = ?", (run_id,))  # noqa: S608
+            await self._db.execute(f"DELETE FROM {table} WHERE run_id = ?", (run_id,))
         await self._db.execute("DELETE FROM runs WHERE id = ?", (run_id,))
         await self._db.commit()
 

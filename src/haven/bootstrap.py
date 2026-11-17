@@ -163,7 +163,7 @@ class AppServices:
             run_service=self.run_service,
             store=self.store,
             emitter=self.emitter,
-            approvals=self.run_service._approvals,  # noqa: SLF001
+            approvals=self.run_service._approvals,
             recovery=self.recovery,
         )
 

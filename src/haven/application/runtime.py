@@ -45,7 +45,7 @@ class HavenRuntime:
             run_service=services.run_service,
             store=services.store,
             emitter=services.emitter,
-            approvals=services.run_service._approvals,  # noqa: SLF001
+            approvals=services.run_service._approvals,
             recovery=services.recovery,
         )
 
@@ -164,7 +164,7 @@ class HavenRuntime:
         approval_id: str,
         decision: ApprovalDecision,
         *,
-        run_id: str | None = None,  # noqa: ARG002
+        run_id: str | None = None,
     ) -> bool:
         """响应工具调用的审批请求（支持 QueueApprovalBroker 等具有 resolve 能力的 responder）。"""
         resolver = getattr(self._approvals, "resolve", None)

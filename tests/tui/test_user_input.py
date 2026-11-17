@@ -40,8 +40,8 @@ async def test_question_form_validates_before_submitting_and_resumes_the_same_ru
         await _wait_ready(app, pilot)
         await _submit(app, pilot, "Inspect a component")
         await wait_for_question(app, pilot)
-        run_id = app._state.run_id  # noqa: SLF001
-        assert not app._state.running  # noqa: SLF001
+        run_id = app._state.run_id
+        assert not app._state.running
         await pilot.click("#question-submit")
         assert app.screen.__class__.__name__ == "QuestionScreen"
         app.screen.query_one("#choice-0", Select).value = "Parser"
@@ -49,9 +49,9 @@ async def test_question_form_validates_before_submitting_and_resumes_the_same_ru
         await pilot.pause(0.3)
         await pilot.click("#question-submit")
         await _settle(pilot, 25)
-        assert app._state.run_id == run_id  # noqa: SLF001
-        assert app._state.status == "succeeded"  # noqa: SLF001
-        assert app._state.pending_input is None  # noqa: SLF001
+        assert app._state.run_id == run_id
+        assert app._state.status == "succeeded"
+        assert app._state.pending_input is None
 
 
 @pytest.mark.timeout(30)
@@ -64,8 +64,8 @@ async def test_cancel_question_stops_the_task_without_another_model_call(tmp_pat
         await wait_for_question(app, pilot)
         await pilot.press("escape")
         await _settle(pilot, 20)
-        assert app._state.status == "cancelled"  # noqa: SLF001
-        model = app._services.run_service._model  # noqa: SLF001
+        assert app._state.status == "cancelled"
+        model = app._services.run_service._model
         assert len(model.requests_seen) == 1
 
 
@@ -77,15 +77,15 @@ async def test_restarting_the_tui_reopens_the_saved_question(tmp_path: Path) -> 
 
     async def builder(*, workspace: Path, approvals: Any, sinks: list[Any]) -> _Services:
         # 启动新界面时，历史事件只由恢复路径重放；新事件使用新的 UI sink。
-        h.service._emitter = EventEmitter(h.store, sinks)  # noqa: SLF001
-        h.service._checkpoints._emitter = h.service._emitter  # noqa: SLF001
-        h.service._finalizer._emitter = h.service._emitter  # noqa: SLF001
+        h.service._emitter = EventEmitter(h.store, sinks)
+        h.service._checkpoints._emitter = h.service._emitter
+        h.service._finalizer._emitter = h.service._emitter
         return _Services(h.service, h.store)
 
     app = HavenApp(workspace=repo, services_builder=builder, resume_run_id=waiting.run_id)
     async with app.run_test() as pilot:
         await _wait_ready(app, pilot)
         await wait_for_question(app, pilot)
-        assert app._state.run_id == waiting.run_id  # noqa: SLF001
+        assert app._state.run_id == waiting.run_id
         assert len(h.model.requests_seen) == 1
-        assert app._state.pending_input == waiting.pending_input  # noqa: SLF001
+        assert app._state.pending_input == waiting.pending_input

@@ -6,7 +6,6 @@ import uuid
 from typing import NewType
 
 RunId = NewType("RunId", str)
-StepId = NewType("StepId", str)
 ToolCallId = NewType("ToolCallId", str)
 ApprovalId = NewType("ApprovalId", str)
 

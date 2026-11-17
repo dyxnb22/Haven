@@ -24,7 +24,7 @@ def test_the_run_loop_uses_this_fingerprint_and_not_its_own() -> None:
     """
     from haven.application.run_actor import RunActor
 
-    source = inspect.getsource(RunActor.handle_tool_calls)  # noqa: SLF001
+    source = inspect.getsource(RunActor.handle_tool_calls)
     assert "call_fingerprint(" in source
     assert "digest_of(" not in source, "the loop must not compose its own fingerprint"
 

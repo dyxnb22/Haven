@@ -161,6 +161,15 @@ class ToolPipeline:
         self._execute_handlers: dict[str, ExecuteHandler] = self._tool_executor.handlers
 
     @property
+    def recipes(self) -> dict[str, RecipeSpec]:
+        """当前已注册的验证配方，含 `recipe.propose` 在本轮新增的。
+
+        调用方要的是"现在有哪些配方可用于记账和上下文注册"。让它穿过私有属性来取，
+        意味着每次内部改名都会静默破坏它们，而这里没有任何测试会因此变红。
+        """
+        return self._recipes
+
+    @property
     def approval_mode(self) -> ApprovalMode:
         """当前的审批分级模式（ask / smart / full）。"""
         return self._approval_coordinator.approval_mode

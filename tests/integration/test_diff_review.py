@@ -18,7 +18,6 @@ from haven.domain.enums import RunStatus
 from haven.interfaces.cli import app
 from tests.integration.fakes import RecordingLauncher
 from tests.integration.harness import Harness, finish, make_repo, text, tool
-from tests.integration.test_worktree_journey import git_repo as git_repo
 
 
 def edit_turns(path: str = "src/calc.py", recipe: str = "verify-calc") -> list[list[Any]]:

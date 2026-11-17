@@ -431,11 +431,6 @@ class RunActor:
         return self._steer_queue
 
     @property
-    def is_driving(self) -> bool:
-        """当前是否正在驱动主执行循环。"""
-        return self._is_driving
-
-    @property
     def is_closed(self) -> bool:
         """Actor 是否已被关闭。"""
         return self._closed
@@ -804,7 +799,7 @@ class RunActor:
                 and result.status is ToolStatus.OK
                 and builder is not None
             ):
-                for r_id, r_spec in self._pipeline._recipes.items():
+                for r_id, r_spec in self._pipeline.recipes.items():
                     self._recipes[r_id] = r_spec
                     builder.register_recipe(r_id)
             ctx.transcript.append(

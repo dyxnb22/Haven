@@ -12,7 +12,7 @@ from haven.contracts.checkpoint import CheckpointV1
 from haven.contracts.events import ReviewRequested, ReviewResolved
 from haven.contracts.review import ReviewSnapshot
 from haven.domain.digest import digest_of
-from haven.domain.enums import RunStatus
+from haven.domain.enums import AgentMode, RunStatus
 from haven.domain.evidence import evaluate_evidence_gate
 from haven.ports.session import SessionStorePort
 from haven.ports.workspace import WorkspacePort
@@ -104,7 +104,22 @@ class ReviewService:
         await RecoveryService(self._store, self._workspace).build_context(checkpoint)
         diff = await self._workspace.run_diff()
         ledger = checkpoint.evidence.to_domain()
-        gate = evaluate_evidence_gate(ledger, diff.diff, verification_available=True)
+        # 与活调用点（answer_resolution）取同一组输入：审阅要确认的是"这份快照
+        # 仍然满足当初成功时所用的同一条门禁"，否则一个只差必需检查的检查点会在
+        # 合流时被放过去。计划运行的验证延到实施，与活调用点一致。
+        gate = evaluate_evidence_gate(
+            ledger,
+            diff.diff,
+            # 只有已成功的运行会被审阅，而带改动的成功运行必然有过可用检查——否则
+            # 它在成功时就被证据门禁以 verification_missing 拦下，不会留下可审阅的
+            # 快照。因此这里无需再询问配方注册表，照实传递即可。
+            verification_available=True,
+            required_checks=(
+                checkpoint.verification.to_domain()
+                if checkpoint.verification and checkpoint.agent_mode is not AgentMode.PLAN
+                else ()
+            ),
+        )
         if not gate.passed:
             raise ValueError(f"review evidence is incomplete: {gate.reason_code}")
         first: dict[str, str] = {}

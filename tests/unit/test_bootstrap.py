@@ -44,7 +44,7 @@ async def test_close_closes_the_provider_client(tmp_path: Path) -> None:
         model=model,
         store_path=tmp_path / "haven.db",
     )
-    scratch = services.run_service._scratch_dir  # noqa: SLF001
+    scratch = services.run_service._scratch_dir
     assert scratch.is_dir()
     assert services.config.pricing.is_known
     assert services.config.sources["pricing"] == "model-profile:deepseek-v4-flash"

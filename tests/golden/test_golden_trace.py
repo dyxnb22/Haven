@@ -212,8 +212,8 @@ async def test_tui_and_headless_produce_the_same_trace(tmp_path: Path) -> None:
         await _submit(app, pilot, "Fix the bug in add()")
         await _approve_pending(app, pilot, "a", count=2)
         await _settle(pilot, 60)
-        assert app._state.status == "succeeded"  # noqa: SLF001
-        tui_run_id = app._state.run_id  # noqa: SLF001
-        tui = normalize(await app._services.store.load_events(tui_run_id))  # noqa: SLF001
+        assert app._state.status == "succeeded"
+        tui_run_id = app._state.run_id
+        tui = normalize(await app._services.store.load_events(tui_run_id))
 
     assert tui == headless

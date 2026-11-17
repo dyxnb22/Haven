@@ -78,7 +78,7 @@ async def run_suite(
                 model_factory,
                 events_path=events_dir / f"{case.id}.jsonl",
             )
-        except Exception as exc:  # noqa: BLE001 — 单个案例失败不能中止整个套件
+        except Exception as exc:  # 单个案例失败不能中止整个套件
             result = CaseResult(
                 case_id=case.id,
                 category=case.category,

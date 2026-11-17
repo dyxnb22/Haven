@@ -3,6 +3,7 @@
 import shlex
 
 from haven.contracts.events import ToolCompleted
+from haven.domain.enums import AgentMode
 from haven.domain.evidence import required_check_states
 from haven.ports.session import SessionStorePort
 
@@ -40,7 +41,7 @@ async def process_overview(store: SessionStorePort, run_id: str) -> str:
     if checkpoint and checkpoint.verification:
         ledger = checkpoint.evidence.to_domain()
         label = f"Required checks ({checkpoint.verification.group_name})"
-        if checkpoint.agent_mode == "plan":
+        if checkpoint.agent_mode is AgentMode.PLAN:
             label += " — deferred until implementation"
         lines.append(label)
         lines.extend(

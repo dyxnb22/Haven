@@ -13,7 +13,6 @@ from haven.interfaces.tui.app import HavenApp
 from haven.interfaces.tui.diff_review import DiffReviewScreen
 from tests.integration.fakes import RecordingLauncher
 from tests.integration.test_diff_review import edit_turns
-from tests.integration.test_worktree_journey import git_repo as git_repo
 from tests.tui.test_tui_journey import _settle, _submit, _wait_ready
 
 
@@ -48,14 +47,14 @@ async def test_tui_review_can_keep_inspect_and_apply(
         assert "+    return a + b" in str(app.screen.query_one("#review-diff", Static).render())
         await pilot.click("#review-keep")
         await _settle(pilot, 5)
-        assert app._state.review_pending  # noqa: SLF001
-        run_id = app._state.run_id  # noqa: SLF001
+        assert app._state.review_pending
+        run_id = app._state.run_id
         await _submit(app, pilot, "/new")
-        assert app._state.run_id == run_id  # noqa: SLF001
+        assert app._state.run_id == run_id
         await _submit(app, pilot, "/review")
         await _settle(pilot, 5)
         assert isinstance(app.screen, DiffReviewScreen)
         await pilot.click("#review-apply")
         await _settle(pilot, 10)
         assert "return a + b" in (git_repo / "calc.py").read_text()
-        assert not app._state.review_pending  # noqa: SLF001
+        assert not app._state.review_pending

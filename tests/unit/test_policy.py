@@ -217,8 +217,8 @@ class TestPolicyCompleteness:
             recipes={},
             mode=PermissionMode.INTERACTIVE,
         )
-        assert set(pipeline._facts_handlers) == set(ARGS_MODELS)  # noqa: SLF001
-        assert set(pipeline._execute_handlers) == set(ARGS_MODELS)  # noqa: SLF001
+        assert set(pipeline._facts_handlers) == set(ARGS_MODELS)
+        assert set(pipeline._execute_handlers) == set(ARGS_MODELS)
 
     def test_every_ask_tool_has_an_approval_card(self) -> None:
         """策略要求交给人类的工具必须渲染审批卡片。没有这项保证，新 ASK 工具会带着
@@ -239,7 +239,7 @@ class TestPolicyCompleteness:
             mode=PermissionMode.INTERACTIVE,
         )
         askable = EFFECT_TOOLS | EXEC_TOOLS
-        assert set(pipeline._card_handlers) == askable  # noqa: SLF001
+        assert set(pipeline._card_handlers) == askable
 
     def test_tool_categories_are_disjoint(self) -> None:
         groups = (READ_ONLY_TOOLS, EFFECT_TOOLS, STATE_TOOLS, EXEC_TOOLS)

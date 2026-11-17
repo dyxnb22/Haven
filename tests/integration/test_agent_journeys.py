@@ -585,7 +585,7 @@ class TestUnwinnableEvidenceGate:
 
     async def test_stops_immediately_with_an_accurate_reason(self, tmp_path: Path) -> None:
         h = Harness(make_repo(tmp_path), self._edit_turns())
-        h.service._recipes = {}  # type: ignore[attr-defined]  # noqa: SLF001
+        h.service._recipes = {}  # type: ignore[attr-defined]
 
         outcome = await h.service.run("Fix add()")
         assert outcome.status is RunStatus.STOPPED
@@ -594,7 +594,7 @@ class TestUnwinnableEvidenceGate:
 
     async def test_does_not_burn_the_budget_nudging(self, tmp_path: Path) -> None:
         h = Harness(make_repo(tmp_path), self._edit_turns())
-        h.service._recipes = {}  # type: ignore[attr-defined]  # noqa: SLF001
+        h.service._recipes = {}  # type: ignore[attr-defined]
 
         outcome = await h.service.run("Fix add()")
         # 读取、编辑和回答共 3 步，然后停止，而不是再发送两次 nudge 最终耗尽预算。
@@ -604,7 +604,7 @@ class TestUnwinnableEvidenceGate:
         self, tmp_path: Path
     ) -> None:
         h = Harness(make_repo(tmp_path), [[text("nothing to do"), finish()]])
-        h.service._recipes = {}  # type: ignore[attr-defined]  # noqa: SLF001
+        h.service._recipes = {}  # type: ignore[attr-defined]
 
         await h.service.run("Just answer")
         prompt = h.model.requests_seen[0].messages[0].content
@@ -803,7 +803,7 @@ class TestCancellation:
 
         repo = make_repo(tmp_path)
         h = Harness(repo, [])
-        h.service._model = SlowModel()  # type: ignore[attr-defined]  # noqa: SLF001
+        h.service._model = SlowModel()  # type: ignore[attr-defined]
 
         task = asyncio.create_task(h.service.run("Slow task"))
         await asyncio.sleep(0.3)
@@ -823,7 +823,7 @@ class TestCancellation:
         timed = Harness(
             make_repo(tmp_path / "timed"), [], budget=Budget(max_wall_time_seconds=0.05)
         )
-        timed.service._model = SlowModel()  # type: ignore[attr-defined]  # noqa: SLF001
+        timed.service._model = SlowModel()  # type: ignore[attr-defined]
         timed_outcome = await timed.service.run("Respect wall time")
         assert timed_outcome.status is RunStatus.STOPPED
         assert timed_outcome.stop_reason is StopReason.WALL_TIME_EXHAUSTED

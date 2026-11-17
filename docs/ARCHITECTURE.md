@@ -27,7 +27,7 @@ flowchart TB
     end
 
     subgraph PORTS["ports/ &mdash; Protocols owned by the core"]
-        PT["ModelPort · WorkspacePort · ExecutorPort<br/>SessionStorePort · EventSinkPort · ClockPort"]
+        PT["ModelPort · WorkspacePort · ExecutorPort<br/>SessionStorePort · EventSinkPort"]
     end
 
     subgraph DOM["domain/ &mdash; pure logic, zero I/O"]
@@ -62,7 +62,7 @@ three, so a reverse import fails CI rather than review.
   types, tool args/results, application events, versioned checkpoint).
 - `ports/` — `typing.Protocol` interfaces owned by the core: `ModelPort`,
   `WorkspacePort`, `ExecutorPort`, `SandboxLauncher`, `SessionStorePort`,
-  `EventSinkPort`, `ClockPort`.
+  `EventSinkPort`.
 - `application/` — use cases: `ContextBuilder`, `ToolPipeline`, `RunService`
   (the agent loop), `RecoveryService`, `ReplayService`, `EventEmitter`. Depends
   only on `domain`, `ports`, and `contracts`.

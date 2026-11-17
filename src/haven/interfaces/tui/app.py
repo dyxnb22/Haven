@@ -313,7 +313,7 @@ class HavenApp(App[None]):
                     fast_model=self._fast_model,
                     deep_model=self._deep_model,
                 )
-        except Exception as exc:  # noqa: BLE001 - 在 UI 中显示启动问题
+        except Exception as exc:  # 在 UI 中显示启动问题
             self._log_line("system", f"startup failed: {exc}")
             if hint := error_hint(str(exc)):
                 self._log_line("system", f"Next: {hint}")
@@ -329,7 +329,7 @@ class HavenApp(App[None]):
         except asyncio.CancelledError:
             await services.close()
             raise
-        except Exception as exc:  # noqa: BLE001 - 历史读取失败不应阻止正常运行
+        except Exception as exc:  # 历史读取失败不应阻止正常运行
             history = []
             history_warning = f"input history could not be loaded: {sanitize(str(exc), 200)}"
         self.query_one("#prompt", PromptInput).load_history(history)
@@ -619,7 +619,7 @@ class HavenApp(App[None]):
             prompt.remember(text)
             try:
                 await self._svc.store.record_input(self._input_history_workspace, text)
-            except Exception as exc:  # noqa: BLE001 - 保留内存历史，任务仍可正常执行
+            except Exception as exc:  # 保留内存历史，任务仍可正常执行
                 self._log_line(
                     "system", f"input history could not be saved: {sanitize(str(exc), 200)}"
                 )
@@ -679,7 +679,7 @@ class HavenApp(App[None]):
             async with self._input_history_lock:
                 await self._svc.store.clear_input_history(self._input_history_workspace)
                 prompt.clear_history()
-        except Exception as exc:  # noqa: BLE001 - 删除失败时保留导航和草稿
+        except Exception as exc:  # 删除失败时保留导航和草稿
             self._log_line(
                 "system", f"input history could not be cleared: {sanitize(str(exc), 200)}"
             )
@@ -708,7 +708,7 @@ class HavenApp(App[None]):
             return
         try:
             snapshot = await self._svc.run_service.reload_guidance()
-        except Exception as exc:  # noqa: BLE001 - 刷新失败保留已有快照
+        except Exception as exc:  # 刷新失败保留已有快照
             self._log_line(
                 "system", f"project guidance could not be reloaded: {sanitize(str(exc), 200)}"
             )
@@ -728,7 +728,7 @@ class HavenApp(App[None]):
         except ValueError as exc:
             self._log_line("system", f"project note update failed: {sanitize(str(exc), 200)}")
             return
-        except Exception as exc:  # noqa: BLE001 - 存储可能已写入，提示先核对而非盲目重试
+        except Exception as exc:  # 存储可能已写入，提示先核对而非盲目重试
             self._log_line(
                 "system",
                 f"project note update failed: {sanitize(str(exc), 200)}; "
@@ -998,7 +998,7 @@ class HavenApp(App[None]):
     async def _show_run_stats(self, run_id: str) -> None:
         try:
             text = await run_stats_text(self._svc.store, run_id)
-        except Exception as exc:  # noqa: BLE001 - 保持日志查询错误可见，运行可继续
+        except Exception as exc:  # 保持日志查询错误可见，运行可继续
             text = f"could not summarize run: {exc}"
         if self._state.run_id == run_id:
             self._log_line("system", sanitize(text, 3000))

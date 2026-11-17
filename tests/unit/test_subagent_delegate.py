@@ -22,7 +22,7 @@ class MemoryWorkspace:
     def __init__(self, tmp_path: Path) -> None:
         self.root = tmp_path
 
-    def path_facts(self, rel_path: str):  # noqa: ANN201
+    def path_facts(self, rel_path: str):
         p = self.root / rel_path
         exists = p.exists()
         is_f = p.is_file() if exists else False
@@ -37,7 +37,7 @@ class MemoryWorkspace:
             },
         )()
 
-    async def read_file(self, rel_path: str, start_line: int, max_lines: int):  # noqa: ANN201
+    async def read_file(self, rel_path: str, start_line: int, max_lines: int):
         p = self.root / rel_path
         text = p.read_text(encoding="utf-8")
         lines = text.splitlines()
@@ -52,7 +52,7 @@ class MemoryWorkspace:
             },
         )()
 
-    async def run_diff(self):  # noqa: ANN201
+    async def run_diff(self):
         diff_str = "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@\n-old\n+new"
         return type("DiffResult", (), {"diff": diff_str})()
 

@@ -298,7 +298,7 @@ def verify_provider(
                 f"chars={chars} reasoning_chars={reasoning_chars}"
             )
             return EXIT_OK
-        except Exception as exc:  # noqa: BLE001 - 报告任何提供商故障
+        except Exception as exc:  # 报告任何提供商故障
             typer.echo(f"provider verification failed: {exc}")
             return EXIT_PROVIDER
         finally:

@@ -199,7 +199,7 @@ class TestLiveTuiRobustness:
             await _submit(app, pilot, UNICODE_SOUP)
             await _settle(pilot, 40)
             assert app.is_running
-            assert app._state.status == "succeeded"  # noqa: SLF001
+            assert app._state.status == "succeeded"
             # 仓库中的恶意字节永远不会到达渲染状态
-            assert "\x1b" not in app._state.chat_text  # noqa: SLF001
-            assert all("\x1b" not in e.text for e in app._state.timeline)  # noqa: SLF001
+            assert "\x1b" not in app._state.chat_text
+            assert all("\x1b" not in e.text for e in app._state.timeline)

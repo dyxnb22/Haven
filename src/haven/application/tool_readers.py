@@ -432,8 +432,8 @@ class ReadToolExecutor:
         ctx: RunContext,
         call: ToolCallProposal,
         args: ToolArgs,
-        ticket_digest: str,  # noqa: ARG002
-        preview: ToolPreview,  # noqa: ARG002
+        ticket_digest: str,
+        preview: ToolPreview,
     ) -> ToolExecution:
         """向受限只读子 Agent 委派专门子任务（规划书 Phase P5）。"""
         if not isinstance(args, AgentDelegateArgs):

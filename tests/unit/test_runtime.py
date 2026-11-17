@@ -176,7 +176,7 @@ class SlowStreamingModel:
     def model_name(self) -> str:
         return "deepseek-chat"
 
-    async def _stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:  # noqa: ARG002
+    async def _stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
         self.started.set()
         await asyncio.sleep(10)
         yield TextDelta(text="Done")

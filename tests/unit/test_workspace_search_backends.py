@@ -107,6 +107,6 @@ class TestRipgrepHardening:
 
     async def test_missing_ripgrep_falls_back_silently(self, repo: Path) -> None:
         workspace = FsWorkspace(repo, use_ripgrep=True)
-        workspace._ripgrep = "/nonexistent/rg"  # noqa: SLF001
+        workspace._ripgrep = "/nonexistent/rg"
         result = await workspace.search("BUG", ".", 50)
         assert {m.path for m in result.matches} == {"src/calc.py", "src/util.py"}

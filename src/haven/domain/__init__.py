@@ -46,7 +46,6 @@ from haven.domain.exec_policy import ExecClass, classify_argv, split_pipeline
 from haven.domain.ids import (
     ApprovalId,
     RunId,
-    StepId,
     ToolCallId,
     new_approval_id,
     new_run_id,
@@ -105,7 +104,6 @@ __all__ = [
     "RiskLevel",
     "RunId",
     "RunStatus",
-    "StepId",
     "StopReason",
     "StuckLoopDetector",
     "SyntaxDiagnostic",

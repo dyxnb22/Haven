@@ -38,7 +38,7 @@ class OverflowingModel:
 
 
 def install(h: Harness, model: object) -> None:
-    h.service._model = model  # type: ignore[attr-defined]  # noqa: SLF001
+    h.service._model = model  # type: ignore[attr-defined]
 
 
 class TestContextOverflowRecovery:

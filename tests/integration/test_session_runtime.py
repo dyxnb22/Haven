@@ -43,7 +43,7 @@ class TestSteering:
         # 在第 1 步的工具调用收尾时排队（轮次中途），因此必须在下一边界——
         # 请求 2——投递，不能更早。
         steerer = _SteerOnToolCompleted("c1", "also check the README licensing section")
-        h.emitter._sinks.append(steerer)  # noqa: SLF001 - 仅测试 wiring
+        h.emitter._sinks.append(steerer)  # 仅测试 wiring
         steerer.service = h.service
 
         outcome = await h.service.run("Look around the repository")
@@ -91,7 +91,7 @@ class TestSteering:
                     await self.service.steer("too late for this run")
 
         steerer = _SteerOnFinalAnswer()
-        h.emitter._sinks.append(steerer)  # noqa: SLF001
+        h.emitter._sinks.append(steerer)
 
         await h.service.run("First goal")
         steerer.service = None  # type: ignore[assignment]

@@ -9,13 +9,11 @@
     sandbox.py     包装 argv，使操作系统限制子进程
     session.py     持久存储：运行、事件、检查点、审批、执行日志、构件
     event_sink.py  发出的事件封装前往的目标（UI、JSONL、重放）
-    clock.py       可注入的时间
 
 替换适配器（例如在测试中将 SQLite 换成内存存储）可以改变性能和持久化方式，但
 永远不会改变权限或证据规则——这些规则位于领域层。
 """
 
-from haven.ports.clock import ClockPort
 from haven.ports.event_sink import EventSinkPort
 from haven.ports.executor import CheckOutcome, ExecutorPort
 from haven.ports.model import ModelPort, ProviderError, ProviderErrorCode
@@ -36,7 +34,6 @@ from haven.ports.workspace import (
 
 __all__ = [
     "CheckOutcome",
-    "ClockPort",
     "EditOutcome",
     "EditPreview",
     "EventSinkPort",

@@ -23,7 +23,7 @@ flowchart TB
     end
 
     subgraph PORTS["ports/ — 核心拥有的 Protocol"]
-        PT["ModelPort · WorkspacePort · ExecutorPort<br/>SessionStorePort · EventSinkPort · ClockPort"]
+        PT["ModelPort · WorkspacePort · ExecutorPort<br/>SessionStorePort · EventSinkPort"]
     end
 
     subgraph DOM["domain/ — 纯逻辑，零 I/O"]
@@ -51,7 +51,7 @@ flowchart TB
 
 - `domain/` — 纯业务逻辑：枚举、预算、策略、审批 / ticket digest、证据门禁、卡死循环检测和运行状态机。不访问 I/O，也不导入框架。
 - `contracts/` — 所有边界上的严格 Pydantic v2 DTO，包括与模型线协议无关的类型、工具参数 / 结果、应用事件和版本化检查点。
-- `ports/` — 核心拥有的 `typing.Protocol` 接口：`ModelPort`、`WorkspacePort`、`ExecutorPort`、`SandboxLauncher`、`SessionStorePort`、`EventSinkPort`、`ClockPort`。
+- `ports/` — 核心拥有的 `typing.Protocol` 接口：`ModelPort`、`WorkspacePort`、`ExecutorPort`、`SandboxLauncher`、`SessionStorePort`、`EventSinkPort`。
 - `application/` — 用例：`ContextBuilder`、`ToolPipeline`、`RunService`（代理循环）、`RecoveryService`、`ReplayService`、`EventEmitter`。只依赖 `domain`、`ports` 和 `contracts`。
 - `adapters/` — 具体实现：文件系统工作区、子进程执行器、操作系统沙箱启动器（macOS 的 Seatbelt、Linux 的 Landlock）、OpenAI-compatible 与 scripted Provider、SQLite / 内存 session store、Git baseline，以及单写者工作区租约（ADR 0020）。
 - `interfaces/` — Typer CLI 和 Textual TUI，不能直接导入适配器。

@@ -165,7 +165,7 @@ async def test_planning_only_advertises_mcp_tools_declared_read_only(tmp_path: P
         )
         for name, read_only in (("lookup", True), ("publish", False))
     )
-    h.service._mcp_manager._tools = {t.namespaced_name: t for t in tools}  # noqa: SLF001
+    h.service._mcp_manager._tools = {t.namespaced_name: t for t in tools}
     await h.service.run("Plan the fix", agent_mode=AgentMode.PLAN)
     for request in h.model.requests_seen:
         names = {schema.name for schema in request.tools}

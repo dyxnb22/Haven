@@ -195,9 +195,9 @@ async def test_v4_database_adds_input_history_without_losing_runs(tmp_path: Path
     original = await SqliteSessionStore.open(db, artifacts)
     await original.create_run("saved-run", "/ws", "digest", "original goal", "interactive")
     # v4 与当前 runs 结构一致，但没有输入历史表。
-    await original._db.execute("DROP TABLE input_history")  # noqa: SLF001
-    await original._db.execute("UPDATE schema_meta SET version = 4")  # noqa: SLF001
-    await original._db.commit()  # noqa: SLF001
+    await original._db.execute("DROP TABLE input_history")
+    await original._db.execute("UPDATE schema_meta SET version = 4")
+    await original._db.commit()
     await original.close()
 
     migrated = await SqliteSessionStore.open(db, artifacts)
@@ -206,7 +206,7 @@ async def test_v4_database_adds_input_history_without_losing_runs(tmp_path: Path
         assert run is not None and run.goal == "original goal"
         assert await migrated.load_input_history("/ws") == []
         await migrated.record_input("/ws", "a new task")
-        cursor = await migrated._db.execute("SELECT version FROM schema_meta")  # noqa: SLF001
+        cursor = await migrated._db.execute("SELECT version FROM schema_meta")
         row = await cursor.fetchone()
         assert row is not None and row["version"] == DB_SCHEMA_VERSION
     finally:
@@ -281,9 +281,9 @@ async def test_v5_migration_adds_notes_and_preserves_history_and_checkpoints(
     await old.create_run("run-1", "/ws", "digest", "saved goal", "interactive")
     await old.save_checkpoint(checkpoint())
     await old.record_input("/ws", "saved task input")
-    await old._db.execute("DROP TABLE project_notes")  # noqa: SLF001
-    await old._db.execute("UPDATE schema_meta SET version = 5")  # noqa: SLF001
-    await old._db.commit()  # noqa: SLF001
+    await old._db.execute("DROP TABLE project_notes")
+    await old._db.execute("UPDATE schema_meta SET version = 5")
+    await old._db.commit()
     await old.close()
     migrated = await SqliteSessionStore.open(db, artifacts)
     try:
@@ -291,7 +291,7 @@ async def test_v5_migration_adds_notes_and_preserves_history_and_checkpoints(
         note = await migrated.add_project_note("/ws", "keep this after restarting")
         assert await migrated.load_input_history("/ws") == ["saved task input"]
         assert await migrated.load_checkpoint("run-1") == checkpoint()
-        cursor = await migrated._db.execute("SELECT version FROM schema_meta")  # noqa: SLF001
+        cursor = await migrated._db.execute("SELECT version FROM schema_meta")
         row = await cursor.fetchone()
         assert row is not None and row["version"] == DB_SCHEMA_VERSION
     finally:
@@ -509,7 +509,7 @@ async def test_artifact_roundtrip(store: SessionStorePort) -> None:
     assert await store.get_artifact(digest) == b"large diff content"
     assert await store.get_artifact("missing" * 8) is None
     if isinstance(store, SqliteSessionStore):
-        (store._artifacts_dir / digest).write_bytes(b"corrupt")  # noqa: SLF001
+        (store._artifacts_dir / digest).write_bytes(b"corrupt")
         with pytest.raises(StoreError, match="digest verification"):
             await store.get_artifact(digest)
         # put is self-healing for a corrupted content-addressed object.
@@ -594,11 +594,11 @@ class TestSqliteSpecific:
             original.pop("guidance_snapshot")
             original.pop("verification")
             payload = json.dumps(original, separators=(",", ":"), ensure_ascii=False)
-            await store._db.execute(  # noqa: SLF001
+            await store._db.execute(
                 "INSERT INTO checkpoints VALUES (?, ?, ?, ?, ?)",
                 ("run-1", 3, payload, sha256_text(payload), "2026-10-28T00:00:00Z"),
             )
-            await store._db.commit()  # noqa: SLF001
+            await store._db.commit()
         finally:
             await store.close()
 
@@ -612,10 +612,10 @@ class TestSqliteSpecific:
             assert loaded.verification is None
 
             corrupted = payload.replace('"fix bug"', '"tampered goal"')
-            await reopened._db.execute(  # noqa: SLF001
+            await reopened._db.execute(
                 "UPDATE checkpoints SET state_json = ? WHERE run_id = 'run-1'", (corrupted,)
             )
-            await reopened._db.commit()  # noqa: SLF001
+            await reopened._db.commit()
             with pytest.raises(StoreError, match="checksum"):
                 await reopened.load_checkpoint("run-1")
         finally:
@@ -644,9 +644,7 @@ class TestSqliteSpecific:
             await store.save_checkpoint(checkpoint(last_seq=seq))
         await store.save_checkpoint(checkpoint(run_id="other-run", last_seq=3))
 
-        cursor = await store._db.execute(  # noqa: SLF001
-            "SELECT run_id, seq FROM checkpoints ORDER BY run_id, seq"
-        )
+        cursor = await store._db.execute("SELECT run_id, seq FROM checkpoints ORDER BY run_id, seq")
         rows = [(str(r["run_id"]), int(r["seq"])) for r in await cursor.fetchall()]
         assert rows == [("other-run", 3), ("run-1", 10)]
         await store.close()
@@ -657,11 +655,11 @@ class TestSqliteSpecific:
         await store.create_run("run-1", "/tmp/ws", "d", "goal", "interactive")
         await store.append_event("run-1", StepStarted(run_id="run-1", step=1))
         # 篡改日志
-        await store._db.execute(  # noqa: SLF001
+        await store._db.execute(
             "UPDATE events SET payload_json = ? WHERE run_id = 'run-1'",
             ('{"kind": "step.started", "run_id": "run-1", "step": 99}',),
         )
-        await store._db.commit()  # noqa: SLF001
+        await store._db.commit()
         with pytest.raises(StoreError, match="digest"):
             await store.load_events("run-1")
         await store.close()

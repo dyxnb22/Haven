@@ -57,7 +57,7 @@ drifts from the sources, so no number here is hand-maintained.
 | Automated tests | 1484 |
 | Line coverage (`src/`) | 91% |
 | Source / test size | ~30.3k / ~25.0k lines |
-| Typed modules (`mypy --strict`) | 153 |
+| Typed modules (`mypy --strict`) | 152 |
 | Architecture decision records | 50 |
 | Offline eval | 40/40 passed, 0 security violations |
 | Eval categories | security 16 · task 10 · robustness 6 · injection 4 · budget 2 · recovery 2 |

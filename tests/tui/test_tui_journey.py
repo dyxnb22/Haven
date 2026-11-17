@@ -40,7 +40,7 @@ class _Services:
     ) -> None:
         self.run_service = run_service
         self.store = store
-        self.recovery = RecoveryService(store, run_service._workspace)  # noqa: SLF001
+        self.recovery = RecoveryService(store, run_service._workspace)
         self.replay = ReplayService(store)
         self.git_branch = "main"
         self.model_name = "scripted"
@@ -80,7 +80,7 @@ def make_builder(repo: Path, turns: list[list[Any]]):  # type: ignore[no-untyped
     return _builder
 
 
-def _skills_builder(repo: Path, skills: SkillCatalog):  # noqa: ANN001
+def _skills_builder(repo: Path, skills: SkillCatalog):
     """与 `make_builder` 相同，但注入了技能目录，因此 `/skill` 有东西可列。"""
 
     async def _builder(*, workspace: Path, approvals: Any, sinks: list[Any]) -> _Services:
@@ -113,7 +113,7 @@ async def _settle(pilot: Any, tries: int = 60) -> None:
 async def _wait_ready(app: HavenApp, pilot: Any, tries: int = 100) -> None:
     for _ in range(tries):
         await pilot.pause()
-        if app._services is not None:  # noqa: SLF001
+        if app._services is not None:
             return
     raise AssertionError("services never finished bootstrapping")
 
@@ -166,8 +166,8 @@ async def test_edit_journey_with_approval(tmp_path: Path) -> None:
         await _approve_pending(app, pilot, "a", count=2)
         await _settle(pilot, 60)
 
-        assert app._state.status == "succeeded"  # noqa: SLF001
-        assert app._state.stop_reason == "evidence_satisfied"  # noqa: SLF001
+        assert app._state.status == "succeeded"
+        assert app._state.stop_reason == "evidence_satisfied"
 
     assert "return a + b" in (repo / "src" / "calc.py").read_text()
 
@@ -189,19 +189,19 @@ async def test_plan_then_implement_requires_explicit_confirmation_and_normal_app
         await _wait_ready(app, pilot)
         await _submit(app, pilot, "/plan Fix add()")
         await _settle(pilot, 30)
-        assert app._state.agent_mode == "plan"  # noqa: SLF001
-        assert app._state.plan_status == "ready"  # noqa: SLF001
-        assert "/implement" in app._state.status_line()  # noqa: SLF001
+        assert app._state.agent_mode == "plan"
+        assert app._state.plan_status == "ready"
+        assert "/implement" in app._state.status_line()
         assert "return a - b" in (repo / "src/calc.py").read_text()
-        planning_id = app._state.run_id  # noqa: SLF001
+        planning_id = app._state.run_id
 
         await _submit(app, pilot, "/implement")
         await _approve_pending(app, pilot, "a", count=2)
         await _settle(pilot, 40)
-        assert app._state.run_id != planning_id  # noqa: SLF001
-        assert app._state.agent_mode == "agent"  # noqa: SLF001
-        assert app._state.plan_status == "completed"  # noqa: SLF001
-        assert app._state.stop_reason == "evidence_satisfied"  # noqa: SLF001
+        assert app._state.run_id != planning_id
+        assert app._state.agent_mode == "agent"
+        assert app._state.plan_status == "completed"
+        assert app._state.stop_reason == "evidence_satisfied"
     assert "return a + b" in (repo / "src/calc.py").read_text()
 
 
@@ -217,9 +217,9 @@ async def test_messages_and_approval_mode_changes_do_not_exit_planning(tmp_path:
         await _submit(app, pilot, "/mode full")
         await _submit(app, pilot, "Start implementation now")
         await _settle(pilot, 30)
-        assert app._state.agent_mode == "plan"  # noqa: SLF001
-        assert app._state.plan_status == "ready"  # noqa: SLF001
-        assert app._state.approval_mode == "full"  # noqa: SLF001
+        assert app._state.agent_mode == "plan"
+        assert app._state.plan_status == "ready"
+        assert app._state.approval_mode == "full"
         assert app.screen.__class__.__name__ != "ApprovalScreen"
         assert "return a - b" in (repo / "src/calc.py").read_text()
 
@@ -253,21 +253,21 @@ async def test_resuming_a_draft_restores_the_planning_mode_and_visible_plan(tmp_
             plan=(PlanStep(title="Fix add()"),),
             plan_status=PlanStatus.DRAFTING,
         )
-        await service._announce_run(ctx, ctx.goal)  # noqa: SLF001
+        await service._announce_run(ctx, ctx.goal)
         ctx.move_to(RunStatus.RUNNING_MODEL)
-        await service._checkpoints.save(ctx)  # noqa: SLF001
-        emitter._sinks = sinks  # noqa: SLF001 - only new events go to the live UI
+        await service._checkpoints.save(ctx)
+        emitter._sinks = sinks  # only new events go to the live UI
         return _Services(service, store)
 
     app = HavenApp(workspace=repo, services_builder=builder, resume_run_id="plan-to-resume")
     async with app.run_test() as pilot:
         await _wait_ready(app, pilot)
         await _settle(pilot, 30)
-        assert app._state.run_id == "plan-to-resume"  # noqa: SLF001
-        assert app._state.agent_mode == "plan"  # noqa: SLF001
-        assert app._state.mode == "read_only"  # noqa: SLF001
-        assert app._state.plan_status == "ready"  # noqa: SLF001
-        assert any("Fix add()" in line for line in app._state.plan_lines)  # noqa: SLF001
+        assert app._state.run_id == "plan-to-resume"
+        assert app._state.agent_mode == "plan"
+        assert app._state.mode == "read_only"
+        assert app._state.plan_status == "ready"
+        assert any("Fix add()" in line for line in app._state.plan_lines)
 
 
 @pytest.mark.timeout(30)
@@ -300,26 +300,20 @@ async def test_rewind_command_restores_the_runs_edit(tmp_path: Path) -> None:
         await _submit(app, pilot, "Fix the bug in add()")
         await _approve_pending(app, pilot, "a", count=2)
         await _settle(pilot, 60)
-        assert app._state.status == "succeeded"  # noqa: SLF001
+        assert app._state.status == "succeeded"
         assert "return a + b" in (repo / "src" / "calc.py").read_text()
 
         # 第 1 步：没有确认时不发生任何变化，只说明意图。
         await _submit(app, pilot, "/rewind")
         await _settle(pilot, 10)
         assert "return a + b" in (repo / "src" / "calc.py").read_text()
-        assert any(
-            "rewind restores" in entry.text
-            for entry in app._state.timeline  # noqa: SLF001
-        )
+        assert any("rewind restores" in entry.text for entry in app._state.timeline)
 
         # 第 2 步：确认后，撤销本次运行的 edit。
         await _submit(app, pilot, "/rewind yes")
         await _settle(pilot, 40)
         assert (repo / "src" / "calc.py").read_text() == buggy
-        assert any(
-            "rewind complete" in entry.text
-            for entry in app._state.timeline  # noqa: SLF001
-        )
+        assert any("rewind complete" in entry.text for entry in app._state.timeline)
 
 
 @pytest.mark.timeout(30)
@@ -339,15 +333,15 @@ async def test_follow_up_continues_the_same_session(tmp_path: Path) -> None:
         await _wait_ready(app, pilot)
         await _submit(app, pilot, "Explain calc.py")
         await _settle(pilot, 40)
-        first_run_id = app._state.run_id  # noqa: SLF001
-        assert app._state.status == "succeeded"  # noqa: SLF001
+        first_run_id = app._state.run_id
+        assert app._state.status == "succeeded"
 
         await _submit(app, pilot, "Now suggest a fix")
         await _settle(pilot, 40)
-        second_run_id = app._state.run_id  # noqa: SLF001
+        second_run_id = app._state.run_id
 
         assert second_run_id and second_run_id != first_run_id
-        events = await app._services.store.load_events(second_run_id)  # noqa: SLF001
+        events = await app._services.store.load_events(second_run_id)
         created = [e.event for e in events if isinstance(e.event, RunCreated)]
         assert created and created[0].parent_run_id == first_run_id
 
@@ -376,7 +370,7 @@ async def test_reject_journey_leaves_file_untouched(tmp_path: Path) -> None:
         await _submit(app, pilot, "Fix add()")
         await _approve_pending(app, pilot, "r", count=1)
         await _settle(pilot, 60)
-        assert app._state.status == "succeeded"  # noqa: SLF001
+        assert app._state.status == "succeeded"
 
     assert (repo / "src" / "calc.py").read_text() == BUGGY_CALC
 
@@ -417,7 +411,7 @@ async def test_apply_patch_journey_through_the_approval_flow(tmp_path: Path) -> 
         # 恰好两次审批：补丁（两个文件共一张卡片），然后是 check。
         await _approve_pending(app, pilot, "a", count=2)
         await _settle(pilot, 60)
-        assert app._state.status == "succeeded"  # noqa: SLF001
+        assert app._state.status == "succeeded"
 
     assert "return a + b" in (repo / "src" / "calc.py").read_text()
     assert (repo / "src" / "helper.py").read_text() == "H = 1\n"
@@ -438,18 +432,18 @@ async def test_steering_while_running_queues_instead_of_starting_a_run(tmp_path:
         # run_service.steer，而不是创建新运行。
         from dataclasses import replace
 
-        app._state = replace(app._state, running=True)  # noqa: SLF001
+        app._state = replace(app._state, running=True)
 
         async def _fake_steer(text: str) -> bool:
             steered.append(text)
             return True
 
-        app._services.run_service.steer = _fake_steer  # type: ignore[assignment]  # noqa: SLF001
+        app._services.run_service.steer = _fake_steer  # type: ignore[assignment]
         await _submit(app, pilot, "also update the README while you are at it")
         await _settle(pilot, 20)
 
         assert steered == ["also update the README while you are at it"]
-        assert any("queued" in entry.text.lower() for entry in app._state.timeline)  # noqa: SLF001
+        assert any("queued" in entry.text.lower() for entry in app._state.timeline)
 
 
 @pytest.mark.timeout(30)
@@ -467,12 +461,12 @@ async def test_sessions_and_fork_commands(tmp_path: Path) -> None:
         await _wait_ready(app, pilot)
         await _submit(app, pilot, "first question")
         await _settle(pilot, 40)
-        first_run_id = app._state.run_id  # noqa: SLF001
+        first_run_id = app._state.run_id
         assert first_run_id
 
         await _submit(app, pilot, "/sessions")
         await _settle(pilot, 10)
-        assert any(first_run_id in e.text for e in app._state.timeline)  # noqa: SLF001
+        assert any(first_run_id in e.text for e in app._state.timeline)
 
         await pilot.press("escape")
         await _settle(pilot, 3)
@@ -481,9 +475,9 @@ async def test_sessions_and_fork_commands(tmp_path: Path) -> None:
         await _settle(pilot, 5)
         await _submit(app, pilot, "take a different direction")
         await _settle(pilot, 40)
-        forked = app._state.run_id  # noqa: SLF001
+        forked = app._state.run_id
         assert forked and forked != first_run_id
-        events = await app._services.store.load_events(forked)  # noqa: SLF001
+        events = await app._services.store.load_events(forked)
         created = [e.event for e in events if isinstance(e.event, RunCreated)]
         assert created and created[0].parent_run_id == first_run_id
 
@@ -494,14 +488,14 @@ async def test_mention_expands_into_the_goal(tmp_path: Path) -> None:
     app = HavenApp(workspace=repo, services_builder=make_builder(repo, [[text("ok"), finish()]]))
     async with app.run_test() as pilot:
         await _wait_ready(app, pilot)
-        expanded = app._expand_mentions("please look at @src/calc.py now")  # noqa: SLF001
+        expanded = app._expand_mentions("please look at @src/calc.py now")
         assert "mentioned files" in expanded and "src/calc.py" in expanded
         # 不存在的路径保持原样。
-        assert app._expand_mentions("see @nope.py") == "see @nope.py"  # noqa: SLF001
+        assert app._expand_mentions("see @nope.py") == "see @nope.py"
         # 逃逸、绝对路径及受保护控制面路径保持原样，严格拒绝展开。
-        assert app._expand_mentions("see @../../outside.py") == "see @../../outside.py"  # noqa: SLF001
-        assert app._expand_mentions("see @/etc/passwd") == "see @/etc/passwd"  # noqa: SLF001
-        assert app._expand_mentions("see @.git/config") == "see @.git/config"  # noqa: SLF001
+        assert app._expand_mentions("see @../../outside.py") == "see @../../outside.py"
+        assert app._expand_mentions("see @/etc/passwd") == "see @/etc/passwd"
+        assert app._expand_mentions("see @.git/config") == "see @.git/config"
 
 
 @pytest.mark.timeout(30)
@@ -525,7 +519,7 @@ async def test_help_command_writes_to_timeline(tmp_path: Path) -> None:
         await _wait_ready(app, pilot)
         await _submit(app, pilot, "/help")
         await _settle(pilot, 5)
-        assert any("Commands:" in entry.text for entry in app._state.timeline)  # noqa: SLF001
+        assert any("Commands:" in entry.text for entry in app._state.timeline)
 
 
 @pytest.mark.timeout(30)
@@ -568,8 +562,8 @@ async def test_skill_command_lists_the_discovered_catalog(tmp_path: Path) -> Non
         await _wait_ready(app, pilot)
         await _submit(app, pilot, "/skill")
         await _settle(pilot, 10)
-        assert any("write-tests" in e.text for e in app._state.timeline)  # noqa: SLF001
-        assert not any("正文" in e.text for e in app._state.timeline)  # noqa: SLF001
+        assert any("write-tests" in e.text for e in app._state.timeline)
+        assert not any("正文" in e.text for e in app._state.timeline)
 
 
 async def test_skill_selection_reaches_the_next_run(tmp_path: Path) -> None:
@@ -590,7 +584,7 @@ async def test_skill_selection_reaches_the_next_run(tmp_path: Path) -> None:
         await _settle(pilot, 10)
         await _submit(app, pilot, "first question")
         await _settle(pilot, 40)
-        requests = app._services.run_service._model.requests_seen  # noqa: SLF001
+        requests = app._services.run_service._model.requests_seen
         assert requests, "the model was never called"
         assert any("SKILL-BODY-MARKER" in m.content for m in requests[0].messages), (
             "the selected skill body never reached the model"
@@ -615,9 +609,9 @@ async def test_skill_command_during_a_run_says_it_applies_to_the_next_run(tmp_pa
     )
     async with app.run_test() as pilot:
         await _wait_ready(app, pilot)
-        app._state = replace(app._state, running=True)  # noqa: SLF001
-        app._skill_command("write-tests")  # noqa: SLF001
+        app._state = replace(app._state, running=True)
+        app._skill_command("write-tests")
         await _settle(pilot, 5)
-        notice = next(e.text for e in app._state.timeline if "next run" in e.text)  # noqa: SLF001
+        notice = next(e.text for e in app._state.timeline if "next run" in e.text)
         assert "will NOT see it" in notice
-        assert app._selected_skills == ("write-tests",)  # noqa: SLF001
+        assert app._selected_skills == ("write-tests",)

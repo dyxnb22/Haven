@@ -153,12 +153,12 @@ class TestProcessToolsAcrossTurns:
             [text("Ran it again."), finish()],
         ]
         h = Harness(repo, turns)
-        first_scratch = h.service._scratch_dir  # noqa: SLF001 - 生命周期不变量
+        first_scratch = h.service._scratch_dir  # 生命周期不变量
         first = await h.service.run("Run the command")
         assert not first_scratch.exists()
         h.sink.envelopes.clear()
         second = await h.service.continue_run(first.run_id, "Run it once more")
-        second_scratch = h.service._scratch_dir  # noqa: SLF001 - 生命周期不变量
+        second_scratch = h.service._scratch_dir  # 生命周期不变量
 
         assert second.status is RunStatus.SUCCEEDED
         assert second_scratch != first_scratch

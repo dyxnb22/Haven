@@ -60,8 +60,8 @@ async def test_actor_isolation_and_scratch_cleanup(tmp_path: Path) -> None:
             run_id=new_run_id(), goal="Goal 2", mode=PermissionMode.READ_ONLY, budget=Budget()
         )
 
-        actor1 = services.run_service._create_actor(ctx1)  # noqa: SLF001
-        actor2 = services.run_service._create_actor(ctx2)  # noqa: SLF001
+        actor1 = services.run_service._create_actor(ctx1)
+        actor2 = services.run_service._create_actor(ctx2)
 
         # 状态隔离断言
         assert actor1.run_id != actor2.run_id
@@ -94,13 +94,13 @@ async def test_actor_steering_queue(tmp_path: Path) -> None:
         ctx = RunContext(
             run_id=new_run_id(), goal="Goal", mode=PermissionMode.READ_ONLY, budget=Budget()
         )
-        actor = services.run_service._create_actor(ctx)  # noqa: SLF001
+        actor = services.run_service._create_actor(ctx)
 
         # 未处于 driving 状态时拒绝 steering
         assert await actor.steer("Instruction 1") is False
 
         # 模拟进入 driving 状态
-        actor._is_driving = True  # noqa: SLF001
+        actor._is_driving = True
         assert await actor.steer("Instruction 1") is True
         assert await actor.steer("Instruction 2") is True
         assert await actor.steer("   ") is False
@@ -133,9 +133,9 @@ async def test_actor_drive_success(tmp_path: Path) -> None:
             mode=PermissionMode.READ_ONLY,
             budget=Budget(),
         )
-        await services.run_service._announce_run(ctx, ctx.goal)  # noqa: SLF001
+        await services.run_service._announce_run(ctx, ctx.goal)
 
-        actor = services.run_service._create_actor(ctx)  # noqa: SLF001
+        actor = services.run_service._create_actor(ctx)
         scratch = actor.scratch_dir
         assert scratch.is_dir()
 
@@ -162,8 +162,8 @@ async def test_actor_stuck_detection(tmp_path: Path) -> None:
             run_id=new_run_id(), goal="Check repo", mode=PermissionMode.READ_ONLY, budget=Budget()
         )
         ctx.status = RunStatus.RUNNING_MODEL
-        await services.run_service._announce_run(ctx, ctx.goal)  # noqa: SLF001
-        actor = services.run_service._create_actor(ctx)  # noqa: SLF001
+        await services.run_service._announce_run(ctx, ctx.goal)
+        actor = services.run_service._create_actor(ctx)
 
         stuck = StuckLoopDetector(threshold=3)
         calls = (

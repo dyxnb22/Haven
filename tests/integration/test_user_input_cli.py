@@ -14,7 +14,6 @@ from haven.interfaces.cli import app
 from tests.integration.fakes import RecordingLauncher
 from tests.integration.harness import finish, text, tool
 from tests.integration.test_user_input import ask_turn
-from tests.integration.test_worktree_journey import git_repo as git_repo
 
 
 @pytest.mark.parametrize("review", [False, True])

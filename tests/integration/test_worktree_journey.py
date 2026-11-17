@@ -2,48 +2,13 @@
 
 from __future__ import annotations
 
-import subprocess
-import sys
 from pathlib import Path
-
-import pytest
 
 from haven.adapters.providers.scripted import ScriptedModel
 from haven.application.approvals import AutoApprover
 from haven.bootstrap import build_services
 from haven.domain.enums import PermissionMode, RunStatus
 from tests.integration.harness import CollectingSink, finish, text, tool, usage
-
-
-@pytest.fixture()
-def git_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
-    subprocess.run(
-        ["git", "config", "user.email", "test@haven.dev"],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "config", "user.name", "Haven Test"],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-    )
-    (repo / "calc.py").write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
-    (repo / "README.md").write_text("# Demo\n", encoding="utf-8")
-    verify_cmd = f'argv = ["{sys.executable}", "-c", "import calc; assert calc.add(2, 3) == 5"]'
-    (repo / ".haven.toml").write_text(f"[recipes.verify]\n{verify_cmd}\n", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
-    subprocess.run(
-        ["git", "commit", "-m", "Initial commit"],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-    )
-    return repo
 
 
 class TestWorktreeJourney:
