@@ -1,13 +1,18 @@
 """ADR 0038 沙箱隔离的技术文档查询与抓取单元测试。"""
 
+import asyncio
+import time
 import urllib.error
 import urllib.request
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from haven.application import web_lookup
 from haven.application.web_lookup import (
+    _fetch_web_page,
     _SafeRedirectHandler,
+    _search_web_docs,
     fetch_web_page,
     html_to_markdown,
     is_safe_url,
@@ -75,12 +80,12 @@ class TestHTMLToMarkdown:
 
 
 class TestFetchAndSearch:
-    def test_fetch_blocks_unsafe_url(self) -> None:
-        res = fetch_web_page("http://127.0.0.1:8000/secret")
+    async def test_fetch_blocks_unsafe_url(self) -> None:
+        res = await fetch_web_page("http://127.0.0.1:8000/secret")
         assert res["status"] == "error"
         assert "SSRF" in res["error"]
 
-    def test_fetch_converts_html_content(self) -> None:
+    async def test_fetch_converts_html_content(self) -> None:
         mock_resp = MagicMock()
         mock_resp.headers.get_content_type.return_value = "text/html"
         mock_resp.headers.get_content_charset.return_value = "utf-8"
@@ -88,12 +93,12 @@ class TestFetchAndSearch:
         mock_resp.__enter__.return_value = mock_resp
 
         with patch.object(urllib.request.OpenerDirector, "open", return_value=mock_resp):
-            res = fetch_web_page("https://example.com/docs")
-            assert res["status"] == "ok"
-            assert "# Docs Title" in res["content"]
-            assert "Doc content body." in res["content"]
+            res = await fetch_web_page("https://example.com/docs")
+        assert res["status"] == "ok"
+        assert "# Docs Title" in res["content"]
+        assert "Doc content body." in res["content"]
 
-    def test_search_docs_normalizes_wrapped_urls(self) -> None:
+    async def test_search_docs_normalizes_wrapped_urls(self) -> None:
         ddg_link = (
             'href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.python.org%2F3%2Fast.html&amp;rut=1"'
         )
@@ -109,19 +114,19 @@ class TestFetchAndSearch:
         mock_resp.__enter__.return_value = mock_resp
 
         with patch.object(urllib.request.OpenerDirector, "open", return_value=mock_resp):
-            res = search_web_docs("python ast")
-            assert res["status"] == "ok"
-            assert len(res["results"]) == 1
-            assert res["results"][0]["url"] == "https://docs.python.org/3/ast.html"
-            assert res["results"][0]["title"] == "Python AST"
+            res = await search_web_docs("python ast")
+        assert res["status"] == "ok"
+        assert len(res["results"]) == 1
+        assert res["results"][0]["url"] == "https://docs.python.org/3/ast.html"
+        assert res["results"][0]["title"] == "Python AST"
 
-    def test_search_docs_fallback_on_network_failure(self) -> None:
+    async def test_search_docs_fallback_on_network_failure(self) -> None:
         with patch.object(
             urllib.request.OpenerDirector, "open", side_effect=Exception("connection refused")
         ):
-            res = search_web_docs("python ast parse")
-            assert res["status"] == "ok"
-            assert "unavailable" in res["note"]
+            res = await search_web_docs("python ast parse")
+        assert res["status"] == "ok"
+        assert "unavailable" in res["note"]
 
     def test_redirect_to_private_ip_is_blocked(self) -> None:
         handler = _SafeRedirectHandler()
@@ -132,6 +137,60 @@ class TestFetchAndSearch:
             )
         assert exc_info.value.code == 302
         assert "SSRF redirect blocked" in str(exc_info.value)
+
+
+class TestEventLoopIsNeverBlocked:
+    """DNS 与 HTTP 都是阻塞调用，因此两个入口必须卸载到工作线程。"""
+
+    async def _measure_progress_during(self, coro: object) -> int:
+        """在 `coro` 在途期间，同一个循环上的另一个协程推进了多少步。"""
+        ticks = 0
+
+        async def ticker() -> None:
+            nonlocal ticks
+            for _ in range(6):
+                await asyncio.sleep(0.02)
+                ticks += 1
+
+        task = asyncio.create_task(coro)  # type: ignore[arg-type]
+        ticker_task = asyncio.create_task(ticker())
+        await task
+        ticks_during = ticks
+        await ticker_task
+        return ticks_during
+
+    async def test_fetch_runs_off_the_event_loop(self) -> None:
+        """抓取在途时，同一个循环上的协程必须继续前进。
+
+        替身真的睡 0.3 秒：直接调用会把循环冻结那么久，ticker 一步都走不了；
+        卸载生效时它应该已经跑完自己的 6 步。
+        """
+
+        def blocking_stand_in(*args: object, **kwargs: object) -> dict[str, object]:
+            time.sleep(0.3)
+            return {"status": "ok", "url": "u", "content": "x", "truncated": False}
+
+        with patch.object(web_lookup, "_fetch_web_page", blocking_stand_in):
+            ticks = await self._measure_progress_during(fetch_web_page("https://example.com"))
+        assert ticks >= 4
+
+    async def test_search_runs_off_the_event_loop(self) -> None:
+        """检索同理：一次失败的 DNS 不该把 TUI 一起按住。"""
+
+        def blocking_stand_in(*args: object, **kwargs: object) -> dict[str, object]:
+            time.sleep(0.3)
+            return {"status": "ok", "query": "q", "results": []}
+
+        with patch.object(web_lookup, "_search_web_docs", blocking_stand_in):
+            ticks = await self._measure_progress_during(search_web_docs("python ast"))
+        assert ticks >= 4
+
+    def test_the_sync_helpers_still_work_without_a_loop(self) -> None:
+        """卸载不改变同步实现的契约：`_fetch_web_page` 仍可直接单测。"""
+        res = _fetch_web_page("http://127.0.0.1:8000/secret", 100, 1.0)
+        assert res["status"] == "error"
+        assert "SSRF" in res["error"]
+        assert _search_web_docs("", 5)["status"] == "error"
 
 
 def test_web_policy_evaluation() -> None:

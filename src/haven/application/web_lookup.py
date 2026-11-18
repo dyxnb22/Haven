@@ -6,10 +6,14 @@
 - 抓取请求由受控的只读网络通道发起，严格防范 SSRF（阻断私网/回环/链路本地 IP）；
 - 自动剥离 HTML/JS/CSS，转为清洁 Markdown；
 - 抓取内容自动标记为 untrusted，以安全隔离框形式投递给模型。
+
+DNS 与 HTTP 都是阻塞调用，因此两个公开入口都是 `async` 并整体卸载到工作线程：
+在事件循环上跑它们，等于让代理和 TUI 一起冻结最长数秒。
 """
 
 from __future__ import annotations
 
+import asyncio
 import html
 import ipaddress
 import re
@@ -23,7 +27,12 @@ from urllib.parse import urlparse
 
 
 def is_safe_url(url: str) -> tuple[bool, str]:
-    """验证 URL 是否为安全的公网 HTTP/HTTPS 地址（防范 SSRF）。"""
+    """验证 URL 是否为安全的公网 HTTP/HTTPS 地址（防范 SSRF）。
+
+    同步函数，因为它唯一的另一个调用者 `_SafeRedirectHandler.redirect_request`
+    是 urllib 的同步回调，没有机会 await。它内含阻塞 DNS，因此只能从工作线程里
+    调用——`fetch_web_page` / `search_web_docs` 正是那样做的。
+    """
     try:
         parsed = urlparse(url)
     except Exception as exc:
@@ -197,8 +206,19 @@ def html_to_markdown(html_content: str) -> str:
         return re.sub(r"\s+", " ", stripped).strip()
 
 
-def fetch_web_page(url: str, max_chars: int = 10000, timeout: float = 8.0) -> dict[str, Any]:
-    """安全抓取技术文档网页并转换为有界 Markdown。"""
+async def fetch_web_page(url: str, max_chars: int = 10000, timeout: float = 8.0) -> dict[str, Any]:
+    """安全抓取技术文档网页并转换为有界 Markdown。
+
+    DNS 解析（`socket.getaddrinfo`）和 HTTP 抓取都是阻塞调用，且前者根本不受
+    `timeout` 约束——系统解析器卡住时它能挂住数十秒。直接在事件循环上跑，就会把
+    代理连同 TUI 一起冻结同样长的时间，因此整体卸载到工作线程：与
+    `adapters/workspace_search.py` 对阻塞文件系统搜索的做法一致。
+    """
+    return await asyncio.to_thread(_fetch_web_page, url, max_chars, timeout)
+
+
+def _fetch_web_page(url: str, max_chars: int, timeout: float) -> dict[str, Any]:
+    """同步实现；只经由 `fetch_web_page` 的工作线程调用。"""
     safe, reason = is_safe_url(url)
     if not safe:
         return {"status": "error", "url": url, "error": f"SSRF security check failed: {reason}"}
@@ -235,11 +255,19 @@ def fetch_web_page(url: str, max_chars: int = 10000, timeout: float = 8.0) -> di
     }
 
 
-def search_web_docs(query: str, max_results: int = 5) -> dict[str, Any]:
+async def search_web_docs(query: str, max_results: int = 5) -> dict[str, Any]:
     """在网络上检索官方文档或技术问答。
 
     支持 DuckDuckGo 轻量 HTML 接口；在受限网络或离线测试中安全降级返回有界结果。
+
+    与 `fetch_web_page` 同理：DNS 与 HTTP 都是阻塞调用，必须在工作线程里跑，
+    否则一次检索失败就能把整个代理冻结数秒。
     """
+    return await asyncio.to_thread(_search_web_docs, query, max_results)
+
+
+def _search_web_docs(query: str, max_results: int) -> dict[str, Any]:
+    """同步实现；只经由 `search_web_docs` 的工作线程调用。"""
     max_results = max(1, min(max_results, 10))
     query_str = query.strip()
     if not query_str:

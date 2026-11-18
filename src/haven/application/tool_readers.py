@@ -408,7 +408,7 @@ class ReadToolExecutor:
         preview: ToolPreview,
     ) -> ToolExecution:
         assert isinstance(args, WebSearchArgs)
-        payload = search_web_docs(args.query, args.max_results)
+        payload = await search_web_docs(args.query, args.max_results)
         return ToolExecution(ok_result(call, payload))
 
     async def execute_web_fetch(
@@ -420,7 +420,7 @@ class ReadToolExecutor:
         preview: ToolPreview,
     ) -> ToolExecution:
         assert isinstance(args, WebFetchArgs)
-        payload = fetch_web_page(args.url, args.max_chars)
+        payload = await fetch_web_page(args.url, args.max_chars)
         if payload.get("status") == "error":
             return ToolExecution(
                 error_result(call, ToolErrorCode.INTERNAL, payload.get("error", "fetch failed"))
