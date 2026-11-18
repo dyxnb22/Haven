@@ -55,9 +55,9 @@ RIPGREP_TIMEOUT_SECONDS = 20.0
 #: 会让 `read_bytes()` 直接分配 2GB。
 READ_CHUNK_BYTES = 1 << 20
 
-#: `str.splitlines()` 认定的换行边界。流式扫描必须逐字判断而不是调用 `splitlines()`
-#: （后者要求手上已有全文），因此这套集合要与它逐字节一致——行号是编辑前像和差异
-#: 的一部分，悄悄漂移会让审计记录对不上文件。
+#: `str.splitlines()` 认定的换行边界。流式切行用 `splitlines()` 本身（C 速度），
+#: 只需要这套集合判断"最后一段是否已经写完"——行号是编辑前像和差异的一部分，
+#: 悄悄漂移会让审计记录对不上文件。
 _LINE_BOUNDARY_CHARS = frozenset("\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
 
 #: 工具永远不能触碰的路径组件（代理不能重写自身配置、Git 历史或审计表面）。
@@ -99,25 +99,23 @@ IGNORED_DIRS = frozenset(
 def _split_complete_lines(buffer: str) -> tuple[list[str], str]:
     """切出 buffer 中已确定完整的行，返回 (行, 未定的尾部)。
 
+    切分交给 `str.splitlines()`（C 速度）——逐字符判断在这里是个陷阱：一个没有
+    换行的 20MB 单行会让缓冲逐块累积，而每个块都要重扫一遍，总计 O(n²) 次字符
+    访问。实测那会让一次读取超过 30 秒。
+
     尾部必须留下，因为它有两种可能：一个还没写完的行，或者一个 `\\r`——后面紧跟
     `\\n` 时它们是同一个边界，提前断开就会多数一行。块边界上这两件事都会发生。
     """
-    lines: list[str] = []
-    start = 0
-    index = 0
-    size = len(buffer)
-    while index < size:
-        char = buffer[index]
-        if char not in _LINE_BOUNDARY_CHARS:
-            index += 1
-            continue
-        if char == "\r" and index + 1 >= size:
-            break
-        step = 2 if char == "\r" and buffer[index + 1] == "\n" else 1
-        lines.append(buffer[start : index + step])
-        index += step
-        start = index
-    return lines, buffer[start:]
+    parts = buffer.splitlines(keepends=True)
+    if not parts:
+        return [], buffer
+    if buffer.endswith("\r"):
+        # 结尾的 \r 可能是 \r\n 的前半：留给下一个块才知道。
+        return parts[:-1], parts[-1]
+    last = parts[-1]
+    if last[-1] not in _LINE_BOUNDARY_CHARS:
+        return parts[:-1], last
+    return parts, ""
 
 
 def _scan_file(handle: BinaryIO, on_line: Callable[[int, str], None]) -> str:

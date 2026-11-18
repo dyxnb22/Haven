@@ -486,3 +486,19 @@ class TestSnapshotReusesProtectedDigests:
         (repo / ".git").mkdir()
         (repo / ".git" / "config").write_text("[core]\n")
         assert workspace.capture_snapshot().protected_digests
+
+    def test_the_boundary_set_covers_everything_splitlines_uses(self) -> None:
+        """`_LINE_BOUNDARY_CHARS` 必须与 `splitlines()` 的边界集合完全一致。
+
+        它只用来判断"最后一段是否已经写完"；漏掉任何一个字符，那个字符就会把
+        两行粘成一行——而行号是编辑前像和差异的一部分。全 Unicode 扫一遍，
+        而不是凭记忆列举。
+        """
+        actual = {
+            char
+            for code in range(0x110000)
+            if not (0xD800 <= code <= 0xDFFF)  # 代理区没有字符
+            for char in (chr(code),)
+            if len(("x" + char + "y").splitlines()) > 1
+        }
+        assert actual == set(workspace_fs._LINE_BOUNDARY_CHARS)
