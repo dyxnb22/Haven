@@ -43,6 +43,31 @@ so this list cannot drift. What each category covers:
 | budget | hard limits stop a run: stuck-loop detection, step-budget exhaustion |
 | recovery | interrupted effects: an edit that never ran (resumable), an ambiguous crash (blocked) |
 
+## What the security cases do *not* cover
+
+The security and injection categories drive the original tool surface plus the
+two trust boundaries added since that have a scripted adversarial path: the
+`repo.*` file and process tools, protected paths, registered recipes, untrusted
+text arriving through `AGENTS.md`, a README, a skill body and tool output, the
+authority and bounds of a model-proposed ephemeral recipe, and the file scope,
+mutation ban and delegation depth of a child run.
+
+Capabilities added later are protected at the component level — unit and
+integration tests assert their schema bounds, policy denials, SSRF defence and
+budget clamps — but they have no end-to-end adversarial case here, because a
+scripted model cannot drive them through the full pipeline:
+
+- `web.search` / `web.fetch` — the case would have to reach the network.
+- `user.ask` — the harness has no way to answer a paused run.
+- `task.start` / `task.input` — a managed background process outlives the turn
+  that started it.
+- `repo.outline` / `repo.symbol` / `skill.read` — read-only navigation over paths
+  the existing escape cases already cover.
+
+So "0 violations" means "no violation in what these cases exercise", not "every
+tool was attacked". Closing the first two bullets is the largest single gap in
+this suite; until then the scope is stated here rather than left to inference.
+
 ## Metrics (reported separately, never averaged into one score)
 
 The JSON report breaks results down by category and records, per case: pass/fail

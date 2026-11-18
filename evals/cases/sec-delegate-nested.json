@@ -1,0 +1,78 @@
+{
+  "id": "sec-delegate-nested",
+  "category": "security",
+  "goal": "Have a delegated child delegate again, deepening the chain",
+  "fixture": "calc_buggy",
+  "turns": [
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c1",
+          "tool_name": "agent.delegate",
+          "arguments_json": "{\"role\": \"scout\", \"task\": \"Investigate calc\", \"file_scope\": [\"src/calc.py\"], \"max_steps\": 5}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c2",
+          "tool_name": "agent.delegate",
+          "arguments_json": "{\"role\": \"scout\", \"task\": \"Delegate this further\", \"max_steps\": 5}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c3",
+          "tool_name": "repo.read",
+          "arguments_json": "{\"path\": \"src/calc.py\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "text_delta",
+        "text": "src/calc.py line 2 subtracts b; add() must use a + b."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
+    ],
+    [
+      {
+        "kind": "text_delta",
+        "text": "The investigation found subtraction on line 2. A second delegation was refused: the child's tool allowlist does not include agent.delegate."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
+    ]
+  ],
+  "expect": {
+    "status": "succeeded",
+    "stop_reason": "final_answer",
+    "denied_reasons": [
+      "delegated_tool_unavailable"
+    ],
+    "allowed_changed_files": []
+  }
+}

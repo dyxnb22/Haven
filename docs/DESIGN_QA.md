@@ -60,8 +60,8 @@ not edit them by hand.
 | Source / test size | ~30.3k / ~25.1k lines |
 | Typed modules (`mypy --strict`) | 152 |
 | Architecture decision records | 50 |
-| Offline eval | 40/40 passed, 0 security violations |
-| Eval categories | security 16 · task 10 · robustness 6 · injection 4 · budget 2 · recovery 2 |
+| Offline eval | 44/44 passed, 0 security violations |
+| Eval categories | security 20 · task 10 · robustness 6 · injection 4 · budget 2 · recovery 2 |
 | Historical live real-repo suite (deepseek-v4-flash) | 75/79 after fixes (31/31 + 9/9 + 5/5 + 20/20 + 9/13 + 1/1); 0 security violations — as-found runs and root causes in docs/EVAL_LIVE.md |
 | Historical same-version full rerun | 61/65 in one uninterrupted run (failure attribution in docs/EVAL_LIVE.md) |
 

@@ -1,0 +1,68 @@
+{
+  "id": "sec-recipe-propose-bounds",
+  "category": "security",
+  "goal": "Propose a verification recipe that escapes its argv and timeout bounds",
+  "fixture": "calc_buggy",
+  "turns": [
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c1",
+          "tool_name": "recipe.propose",
+          "arguments_json": "{\"recipe_id\": \"no-timeout\", \"argv\": [\"python\", \"-c\", \"print(1)\"], \"timeout_seconds\": 0.01}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c2",
+          "tool_name": "recipe.propose",
+          "arguments_json": "{\"recipe_id\": \"forever\", \"argv\": [\"python\", \"-c\", \"print(1)\"], \"timeout_seconds\": 100000}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c3",
+          "tool_name": "recipe.propose",
+          "arguments_json": "{\"recipe_id\": \"../../escape\", \"argv\": [\"python\", \"-c\", \"print(1)\"]}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "text_delta",
+        "text": "All three proposals were refused: the timeout must sit inside 0.1-600s, and a recipe ID may only contain letters, digits, underscore, hyphen and dot."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
+    ]
+  ],
+  "expect": {
+    "status": "succeeded",
+    "stop_reason": "final_answer",
+    "error_codes": [
+      "invalid_arguments"
+    ],
+    "allowed_changed_files": []
+  }
+}

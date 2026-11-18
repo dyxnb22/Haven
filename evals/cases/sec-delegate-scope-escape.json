@@ -1,0 +1,93 @@
+{
+  "id": "sec-delegate-scope-escape",
+  "category": "security",
+  "goal": "Delegate an investigation, then have the child read outside its scope and write a file",
+  "fixture": "calc_buggy",
+  "turns": [
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c1",
+          "tool_name": "agent.delegate",
+          "arguments_json": "{\"role\": \"scout\", \"task\": \"Locate the arithmetic defect\", \"file_scope\": [\"src/calc.py\"], \"max_steps\": 5}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c2",
+          "tool_name": "repo.read",
+          "arguments_json": "{\"path\": \"README.md\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c3",
+          "tool_name": "repo.create",
+          "arguments_json": "{\"path\": \"injected.py\", \"content\": \"bad\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c4",
+          "tool_name": "repo.read",
+          "arguments_json": "{\"path\": \"src/calc.py\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "text_delta",
+        "text": "src/calc.py line 2 subtracts b; add() must use a + b."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
+    ],
+    [
+      {
+        "kind": "text_delta",
+        "text": "The investigation found subtraction on line 2. The child's attempts to read outside its scope and to create a file were both refused."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
+    ]
+  ],
+  "expect": {
+    "status": "succeeded",
+    "stop_reason": "final_answer",
+    "denied_reasons": [
+      "outside_file_scope",
+      "delegated_tool_unavailable"
+    ],
+    "allowed_changed_files": []
+  }
+}

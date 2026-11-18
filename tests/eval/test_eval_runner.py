@@ -19,7 +19,10 @@ def test_category_filter_selects_a_subset(tmp_path: Path) -> None:
     subset = asyncio.run(run_suite(cases_dir=CASES_DIR, out_dir=tmp_path, categories=("security",)))
     assert subset.results
     assert {r.category for r in subset.results} == {"security"}
-    assert len(subset.results) < 20
+    # 断言"它是子集"，而不是某个具体数字：安全案例会随新增信任边界增长，
+    # 写死上限只会在下次扩充时莫名其妙地红。
+    everything = asyncio.run(run_suite(cases_dir=CASES_DIR, out_dir=tmp_path))
+    assert len(subset.results) < len(everything.results)
 
 
 def test_unknown_category_is_an_error(tmp_path: Path) -> None:
