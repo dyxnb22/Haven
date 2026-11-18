@@ -141,7 +141,10 @@ def edit_journey_turns() -> list[list[Any]]:
 
 class TestGoldenTrace:
     async def test_edit_journey_matches_golden(self, tmp_path: Path) -> None:
-        h = Harness(make_repo(tmp_path), edit_journey_turns())
+        # 钉死纯 Python 搜索回退：ripgrep 与回退的搜索结果一致，但 `files_scanned`
+        # 这个计数器不同。黄金追踪要的是"始终相同"，所以不能让它随机器上有没有 rg
+        # 而变——CI 的 runner 默认不装 rg，此前正是因此挂了很久。
+        h = Harness(make_repo(tmp_path), edit_journey_turns(), use_ripgrep=False)
         outcome = await h.service.run("Fix the bug in add()")
         assert outcome.status is RunStatus.SUCCEEDED
 

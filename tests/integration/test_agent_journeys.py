@@ -862,7 +862,10 @@ class TestCancellation:
         assert len(finished) == 1
         assert isinstance(finished[0], RunFinished)
         assert finished[0].status == "cancelled"
-        assert finished[0].duration_ms >= 250
+        # 只断言"确实计量了"和"取消真的打断了 60 秒的模型休眠"，不断言下限：
+        # 前者用 > 0 抓住"忘记填 duration"，后者用远小于休眠时长抓住"没取消成"。
+        # 曾经写的是 >= 250，在 CI 上以 247 挂过一次——那是调度精度，不是行为。
+        assert 0 < finished[0].duration_ms < 60_000
         run = await h.store.get_run(finished[0].run_id)
         assert run is not None
         assert run.status is RunStatus.CANCELLED

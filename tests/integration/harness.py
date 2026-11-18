@@ -133,8 +133,11 @@ class Harness:
         skills: SkillCatalog | None = None,
         approval_mode: ApprovalMode = ApprovalMode.ASK,
         verification_groups: dict[str, tuple[str, ...]] | None = None,
+        use_ripgrep: bool = True,
     ) -> None:
-        self.workspace = FsWorkspace(repo)
+        # `use_ripgrep=False` 强制纯 Python 搜索回退。黄金追踪用它钉住后端：否则
+        # `files_scanned` 会随机器上有没有 rg 而变，追踪就不再是"始终相同"。
+        self.workspace = FsWorkspace(repo, use_ripgrep=use_ripgrep)
         self.store = MemorySessionStore()
         self.sink = CollectingSink()
         self.emitter = EventEmitter(self.store, [self.sink])

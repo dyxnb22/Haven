@@ -127,7 +127,7 @@
     "tool_name": "repo.search",
     "status": "ok",
     "error_code": "",
-    "summary": "{\"matches\": [{\"path\": \"src/calc.py\", \"line\": 2, \"text\": \"return a - b  # BUG: should be +\"}], \"files_scanned\": 1}",
+    "summary": "{\"matches\": [{\"path\": \"src/calc.py\", \"line\": 2, \"text\": \"return a - b  # BUG: should be +\"}], \"files_scanned\": 3}",
     "truncated": false
   },
   {

@@ -28,6 +28,19 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked
 
+      - name: Install ripgrep
+        # 搜索后端二选一：有 rg 走 ripgrep，没有就走纯 Python 回退。两者结果一致，
+        # 但覆盖的行不同——因此 `src/` 的覆盖率数字和 golden trace 都会随环境变化。
+        # 发布出来的数字是在有 rg 的环境下录的，CI 必须装，否则 metrics 门禁会以
+        # "表格过期"失败，而那只是环境差异，不是代码回退。
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew install ripgrep
+          else
+            sudo apt-get update
+            sudo apt-get install -y ripgrep
+          fi
+
       - name: Report sandbox backend
         run: >
           uv run python -c "from haven.bootstrap import select_launcher;
