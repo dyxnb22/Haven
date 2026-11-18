@@ -42,27 +42,26 @@ class TestBackendParity:
             allow_network=False,
         )
 
-    def test_both_backends_grant_the_same_device_writes(self) -> None:
-        """按解析后的路径比较：Seatbelt 匹配的是解析结果，`/dev/stdout` 实为
-        `/dev/fd/1`，不解析就对不上。"""
+    def test_seatbelt_grants_the_writable_devices(self) -> None:
+        """Seatbelt 显式放行这些设备：拒绝它们会破坏普通解释器（重定向到
+        /dev/null 是最常见的一种）。"""
         seatbelt = build_profile(self._spec())
-        landlock = json.loads(encode_spec(self._spec()))
         for device in WRITABLE_DEVICES:
             resolved = str(Path(device).resolve())
-            assert resolved in landlock["writable"], f"landlock 不放行 {resolved}"
             assert f'(allow file-write-data (literal "{resolved}"))' in seatbelt, (
                 f"seatbelt 不再放行 {resolved}"
             )
 
-    def test_dev_null_is_writable_in_both_backends(self) -> None:
-        """`cmd > /dev/null` 是最常见的重定向，两端都必须成立。
+    def test_landlock_cannot_express_a_per_device_grant(self) -> None:
+        """Landlock 只有 `path_beneath` 一种规则，作用于文件层级。
 
-        这是本次不对称修复的核心：`/dev/stdout` 之类的 fd 符号链接在 Landlock 侧
-        只能放空操作，但 /dev/null 是真正的设备节点，规则有效。
+        内核对 `/dev/null` 这类设备节点返回 EINVAL，因此这里**不能**照抄 Seatbelt——
+        曾经照抄过，结果是所有沙箱命令以 125 退出。`cmd > /dev/null` 在 Linux 上
+        不被允许，这是一条已记录在案的残留差异，不是疏漏。
         """
         landlock = json.loads(encode_spec(self._spec()))
-        assert "/dev/null" in landlock["writable"]
-        assert '(allow file-write-data (literal "/dev/null"))' in build_profile(self._spec())
+        for device in WRITABLE_DEVICES:
+            assert str(Path(device).resolve()) not in landlock["writable"]
 
     def test_landlock_covers_the_standard_system_roots(self) -> None:
         """/usr/local 是本地安装软件的默认位置；漏掉它，调用那里的工具会失败。"""

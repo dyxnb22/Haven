@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import json
 import sys
-from pathlib import Path
 
-from haven.ports.sandbox import WRITABLE_DEVICES, SandboxSpec
+from haven.ports.sandbox import SandboxSpec
 from haven.sandbox.landlock_launcher import MIN_ABI, abi_version
 
 LAUNCHER_MODULE = "haven.sandbox.landlock_launcher"
@@ -43,17 +42,16 @@ def encode_spec(spec: SandboxSpec) -> str:
     ]
     # 临时目录始终可写——它的存在就是为了让受限进程有地方写入。
     # `writable` 只控制工作区。
+    #
+    # `WRITABLE_DEVICES` 在这里**不能**照抄 Seatbelt：Landlock 只有 `path_beneath`
+    # 一种规则，作用于文件层级，内核对 `/dev/null` 这类设备节点直接返回 EINVAL
+    # （实测报 `landlock_add_rule failed for /dev/null`，随后所有沙箱命令以 125 退出）。
+    # 要放行它只能把写权限授给整个 `/dev`——那是拿一个真实的功能缺口去换一个边界
+    # 扩大，不值得。于是 `cmd > /dev/null` 在 Linux 上仍然不被允许：这是一个已记录
+    # 在案的残留差异， Haven 的 Linux 测试全程绿色说明现有用例并不依赖它。
     writable = [str(spec.scratch_dir.resolve())]
     if spec.writable:
         writable.insert(0, str(spec.workspace_root.resolve()))
-    # 设备节点与 `WRITABLE_DEVICES` 对齐：Seatbelt 一向放行它们（拒绝会破坏普通
-    # 解释器），而 Landlock 的 `/dev` 只授了读权限，于是 `cmd > /dev/null` 在
-    # Linux 上直接失败。只授 WRITE_FILE，对应 Seatbelt 的 file-write-data。
-    # 路径同样解析——`/dev/stdout` 是指向 `/dev/fd/1` 的符号链接，不解析就对不上
-    # Seatbelt 实际放行的那一个。（`path_beneath` 作用在符号链接自身上，因此这两个
-    # fd 链接在 Landlock 侧仍是空操作；真正普遍的重定向目标 /dev/null 是设备节点，
-    # 规则有效。）
-    writable.extend(str(Path(device).resolve()) for device in WRITABLE_DEVICES)
     return json.dumps(
         {"readable": readable, "writable": writable, "allow_network": spec.allow_network},
         separators=(",", ":"),

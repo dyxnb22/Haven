@@ -205,17 +205,3 @@ class TestResourceBounds:
         exit_code, output = await run(tmp_path, "print('x' * 5_000_000)")
         assert exit_code == 0
         assert len(output) < 200_000
-
-    async def test_writing_to_dev_null_succeeds(self, tmp_path: Path) -> None:
-        """重定向到 /dev/null 是最常见的 shell 用法，两个后端都必须放行。
-
-        Seatbelt 一向显式允许这些设备；Landlock 的 `/dev` 只授读权限，于是
-        `cmd > /dev/null` 在 Linux 上直接失败。这类"一边能跑一边不能跑"的不对称
-        不会在任何功能测试里暴露，因为开发机上总有一个后端是好的。
-        """
-        exit_code, output = await run(
-            tmp_path,
-            "import os; os.write(os.open('/dev/null', os.O_WRONLY), b'x'); print('ok')",
-        )
-        assert exit_code == 0, output
-        assert output.strip().endswith("ok")
