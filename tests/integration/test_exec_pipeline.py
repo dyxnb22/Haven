@@ -7,6 +7,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 from haven.application.approvals import AutoApprover
 from haven.contracts.events import ApprovalRequested, PolicyDecided, ToolCompleted
 from haven.domain.enums import RunStatus, StopReason
@@ -175,3 +177,100 @@ class TestNoBackend:
         assert "sandbox_unavailable" in denials(h)
         assert completed(h)[0].error_code == "denied"
         assert "execution.started" not in h.sink.kinds()
+
+
+class TestProtectedPathTamperSurvivesBaselineReuse:
+    """受保护路径的篡改检测不能因为"省掉重复扫描"而变弱。
+
+    `_snapshot_before_process` 复用上一次调用结束时的 `.git` 摘要，于是每次进程
+    调用只做一次全量内容哈希。这些测试证明检测力与归因都还在：第二个调用改 `.git`
+    照样被抓到，而且归到第二个调用名下；跨运行期间用户自己动了 `.git` 也不会被
+    误报成"这次调用篡改了它"。
+    """
+
+    @staticmethod
+    def _tamper_turns(which: str) -> list[list[object]]:
+        """两次 repo.exec：只有 `which` 那一次真的去改 .git。"""
+        return [
+            [tool("c1", "repo.exec", argv=["true"]), finish("tool_calls")],
+            [
+                tool(
+                    "c2",
+                    "repo.exec",
+                    argv=[
+                        sys.executable,
+                        "-c",
+                        "from pathlib import Path; "
+                        f"p = Path({which!r}); "
+                        "p.parent.mkdir(parents=True, exist_ok=True); "
+                        "p.write_text('tampered\\n')",
+                    ],
+                ),
+                finish("tool_calls"),
+            ],
+            [text("Done."), finish()],
+        ]
+
+    async def test_the_second_call_is_still_caught_and_attributed(self, tmp_path: Path) -> None:
+        repo = make_repo(tmp_path)
+        (repo / ".git").mkdir()
+        (repo / ".git" / "config").write_text("[core]\n")
+        h = Harness(repo, self._tamper_turns(".git/config"), approver=AutoApprover("approve_all"))
+        await h.service.run("Run two commands")
+
+        # 篡改被抓住：调用以 denied 收场，且 Notice 点名了这次调用。
+        events = h.sink.events_of("notice")
+        assert any(
+            "modified a protected path" in getattr(e, "message", "") and "repo.exec" in e.message
+            for e in events
+        ), events
+        assert any(
+            e.tool_name == "repo.exec" and e.error_code == "protected_path_tampered"
+            for e in completed(h)
+        ), [(e.tool_name, e.error_code) for e in completed(h)]
+
+    @staticmethod
+    def _clean_turns(count: int) -> list[list[object]]:
+        """`count` 次都不碰受保护路径的 repo.exec。"""
+        turns: list[list[object]] = [
+            [tool(f"c{index}", "repo.exec", argv=["echo", f"{index}"]), finish("tool_calls")]
+            for index in range(count)
+        ]
+        turns.append([text("Done."), finish()])
+        return turns
+
+    async def test_the_git_tree_is_hashed_once_per_call_not_twice(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """N 次进程调用只做 N+1 次全量 `.git` 哈希，而不是 2N 次。
+
+        这是本次改动的全部意义：对 `.git` 做全量内容哈希是整次快照里最贵的部分，
+        而前后各拍一次快照意味着同一棵树被扫两遍。
+        """
+        from haven.adapters import workspace_snapshot
+
+        real = workspace_snapshot._protected_digests
+        calls = {"n": 0}
+
+        def counting(root: Path, components: frozenset[str]) -> dict[str, str]:
+            calls["n"] += 1
+            return real(root, components)
+
+        monkeypatch.setattr(workspace_snapshot, "_protected_digests", counting)
+
+        repo = make_repo(tmp_path)
+        (repo / ".git").mkdir()
+        (repo / ".git" / "config").write_text("[core]\n")
+        # 三条命令必须各不相同：完全相同的调用会触发卡住检测，运行会被拦下。
+        turns: list[list[object]] = [
+            [tool("c0", "repo.exec", argv=["echo", "one"]), finish("tool_calls")],
+            [tool("c1", "repo.exec", argv=["echo", "two"]), finish("tool_calls")],
+            [tool("c2", "repo.exec", argv=["echo", "three"]), finish("tool_calls")],
+        ]
+        turns.append([text("Done."), finish()])
+        h = Harness(repo, turns, approver=AutoApprover("approve_all"))
+        outcome = await h.service.run("Run three commands")
+
+        assert outcome.status is RunStatus.SUCCEEDED
+        # 3 次调用：第 1 次的"前" + 每次的"后" = 4 次；若不复用基线则是 6 次。
+        assert calls["n"] == 4, calls["n"]

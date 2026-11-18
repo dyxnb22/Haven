@@ -247,3 +247,65 @@ async def test_process_tool_executor_no_launcher_edges(tmp_path: Path) -> None:
     exec_args = RepoExecArgs(argv=("echo", "1"))
     with pytest.raises(RuntimeError, match="refusing to exec without a sandbox backend"):
         await executor.execute_exec(ctx, exec_call, exec_args, "t2", preview)
+
+
+class TestProtectedBaselineIsPerRun:
+    """`_snapshot_before_process` 的基线必须按 run_id 归属。
+
+    复用它能省掉一次对整个 `.git` 的全量重新哈希，但执行器若跨运行存活，用户在两次
+    运行之间对 `.git` 做的修改就会被记成"这次调用篡改了受保护路径"——一条凭空出现
+    的边界违规。换 run_id 就必须重新算基线。
+    """
+
+    @staticmethod
+    def _executor(tmp_path: Path) -> ProcessToolExecutor:
+        scratch = tmp_path / "scratch"
+        scratch.mkdir(exist_ok=True)
+        return ProcessToolExecutor(
+            workspace=FsWorkspace(tmp_path),
+            executor=ProcessExecutor(),
+            store=MemorySessionStore(),
+            emitter=EventEmitter(MemorySessionStore(), ()),
+            recipes={},
+            launcher=RecordingLauncher(),
+            scratch_dir=scratch,
+        )
+
+    @staticmethod
+    def _ctx(run_id: str) -> RunContext:
+        return RunContext(
+            run_id=RunId(run_id),
+            goal="baseline scope",
+            mode=PermissionMode.INTERACTIVE,
+            budget=Budget(),
+        )
+
+    async def test_the_baseline_is_dropped_when_the_run_changes(self, tmp_path: Path) -> None:
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".git" / "config").write_text("[core]\n")
+        executor = self._executor(tmp_path)
+
+        first = await executor._snapshot_before_process(self._ctx("run-a"))
+        assert first.protected_digests, "第一次调用没有基线，必须照常计算"
+
+        # 模拟上一次调用结束：记住基线，然后用户自己改了 .git。
+        executor._remember_protected_baseline(self._ctx("run-a"), first)
+        (tmp_path / ".git" / "config").write_text("[core]\n\tborrowed = true\n")
+
+        reused = await executor._snapshot_before_process(self._ctx("run-a"))
+        assert reused.protected_digests == first.protected_digests, "同一次运行内应当复用"
+
+        # 换成另一次运行：基线作废，必须重新计算，否则会把用户的改动算成篡改。
+        fresh = await executor._snapshot_before_process(self._ctx("run-b"))
+        assert fresh.protected_digests != first.protected_digests
+
+    async def test_the_baseline_survives_repeated_calls_in_one_run(self, tmp_path: Path) -> None:
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".git" / "config").write_text("[core]\n")
+        executor = self._executor(tmp_path)
+        ctx = self._ctx("run-a")
+
+        first = await executor._snapshot_before_process(ctx)
+        executor._remember_protected_baseline(ctx, first)
+        second = await executor._snapshot_before_process(ctx)
+        assert second.protected_digests == first.protected_digests

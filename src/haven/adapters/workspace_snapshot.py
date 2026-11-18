@@ -14,8 +14,13 @@ def capture_workspace_snapshot(
     max_text_bytes: int,
     ignored_dirs: frozenset[str],
     protected_components: frozenset[str],
+    protected_digests: dict[str, str] | None = None,
 ) -> WorkspaceSnapshot:
-    """扫描工作区文件摘要，并为可解码的小文件保留内容快照。"""
+    """扫描工作区文件摘要，并为可解码的小文件保留内容快照。
+
+    `protected_digests` 非 None 时直接采用，跳过对受保护目录的全量内容哈希：那是
+    整次快照里最贵的部分，而调用方（进程工具）往往已经算过一遍。
+    """
     digests: dict[str, str] = {}
     contents: dict[str, str] = {}
     for file_path in iter_workspace_files(root, ignored_dirs, protected_components):
@@ -31,7 +36,11 @@ def capture_workspace_snapshot(
     return WorkspaceSnapshot(
         digests=digests,
         contents=contents,
-        protected_digests=_protected_digests(root, protected_components),
+        protected_digests=(
+            _protected_digests(root, protected_components)
+            if protected_digests is None
+            else protected_digests
+        ),
     )
 
 

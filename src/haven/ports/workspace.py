@@ -406,8 +406,15 @@ class WorkspacePort(Protocol):
         """恢复运行级差异基线；调用方负责更高层授权。"""
         ...
 
-    def capture_snapshot(self) -> WorkspaceSnapshot:
-        """捕获用于归因进程外部写入的完整工作区摘要快照。"""
+    def capture_snapshot(
+        self, *, protected_digests: dict[str, str] | None = None
+    ) -> WorkspaceSnapshot:
+        """捕获用于归因进程外部写入的完整工作区摘要快照。
+
+        `protected_digests` 非 None 时直接采用调用方给的值，跳过对受保护目录的全量
+        内容哈希。对 `.git` 做这件事是整次快照里最贵的部分，而进程工具前后各拍一次
+        快照——不复用就等于把同一棵树扫两遍，`.git` 越大越贵。
+        """
         ...
 
     def register_run_original(self, path: str, content: OriginalContent) -> None:

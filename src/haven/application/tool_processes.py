@@ -73,6 +73,10 @@ class ProcessToolExecutor:
         self._launcher = launcher
         self._scratch_dir = scratch_dir
         self._task_manager = TaskManager()
+        #: 上一次进程调用结束时算到的受保护路径摘要，以及它所属的运行。
+        #: 见 `_snapshot_before_process`：复用它能省掉一次对整个 .git 的重新哈希。
+        self._protected_baseline: dict[str, str] | None = None
+        self._protected_baseline_run: str = ""
         self.handlers: dict[str, ExecuteHandler] = {
             "repo.exec": self.execute_exec,
             "repo.check": self.execute_check,
@@ -114,6 +118,29 @@ class ProcessToolExecutor:
         """在线程中计算完整快照，避免 exec/check 冻结事件循环。"""
         return await asyncio.to_thread(self._workspace.capture_snapshot)
 
+    def _remember_protected_baseline(self, ctx: RunContext, snapshot: WorkspaceSnapshot) -> None:
+        """把本次调用结束时的受保护路径摘要存成下一次调用的基线。"""
+        self._protected_baseline = snapshot.protected_digests
+        self._protected_baseline_run = ctx.run_id
+
+    async def _snapshot_before_process(self, ctx: RunContext) -> WorkspaceSnapshot:
+        """进程调用前的快照：受保护路径摘要复用上一次调用结束时的值。
+
+        对 `.git` 做全量内容哈希是整次快照里最贵的部分，而进程工具前后各拍一次
+        快照，等于把同一棵树扫两遍。受保护路径只有进程调用才可能被改动——Haven
+        自己的写入工具一律拒绝它们——因此上一次调用结束时的摘要就是本次调用前的
+        基线，复用它不损失任何检测能力。
+
+        基线按 run_id 归属：跨运行期间用户可能自己动过 `.git`，沿用旧值会误报成
+        "这次调用篡改了受保护路径"。
+        """
+        if self._protected_baseline_run != ctx.run_id:
+            self._protected_baseline_run = ctx.run_id
+            self._protected_baseline = None
+        return await asyncio.to_thread(
+            self._workspace.capture_snapshot, protected_digests=self._protected_baseline
+        )
+
     async def execute_exec(
         self,
         ctx: RunContext,
@@ -126,7 +153,7 @@ class ProcessToolExecutor:
         assert isinstance(args, RepoExecArgs)
         if self._launcher is None:
             raise RuntimeError("refusing to exec without a sandbox backend")
-        before = await self.capture_snapshot()
+        before = await self._snapshot_before_process(ctx)
         await self._store.record_execution(
             ExecutionRecord(
                 call_id=call.call_id,
@@ -148,6 +175,7 @@ class ProcessToolExecutor:
         try:
             outcome = await self._executor.run_exec(spec)
             after = await self.capture_snapshot()
+            self._remember_protected_baseline(ctx, after)
             tampered = await self.record_process_writes(ctx, call.tool_name, before, after)
         except BaseException:
             await self._store.update_execution_state(
@@ -212,7 +240,7 @@ class ProcessToolExecutor:
         """执行已注册检查配方，拒绝保护路径被改写的结果并记录检查证据。"""
         assert isinstance(args, RepoCheckArgs)
         recipe = self._recipes[args.recipe_id]
-        before = await self.capture_snapshot()
+        before = await self._snapshot_before_process(ctx)
         await self._store.record_execution(
             ExecutionRecord(
                 call_id=call.call_id,
@@ -228,6 +256,7 @@ class ProcessToolExecutor:
         try:
             outcome = await self._executor.run_recipe(recipe, self._workspace.root, args.args)
             after = await self.capture_snapshot()
+            self._remember_protected_baseline(ctx, after)
             tampered = await self.record_process_writes(ctx, call.tool_name, before, after)
         except BaseException:
             await self._store.update_execution_state(

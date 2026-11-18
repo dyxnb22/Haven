@@ -460,13 +460,19 @@ class FsWorkspace:
         """恢复运行级原始内容索引，不直接执行文件恢复。"""
         self._editor.restore_originals(originals)
 
-    def capture_snapshot(self) -> WorkspaceSnapshot:
-        """捕获普通文件内容和受保护路径摘要，用于进程写入归因。"""
+    def capture_snapshot(
+        self, *, protected_digests: dict[str, str] | None = None
+    ) -> WorkspaceSnapshot:
+        """捕获普通文件内容和受保护路径摘要，用于进程写入归因。
+
+        `protected_digests` 非 None 时直接采用，跳过对受保护目录的全量内容哈希。
+        """
         return capture_workspace_snapshot(
             root=self._root,
             max_text_bytes=MAX_EDIT_FILE_BYTES,
             ignored_dirs=IGNORED_DIRS,
             protected_components=PROTECTED_COMPONENTS,
+            protected_digests=protected_digests,
         )
 
     def register_run_original(self, path: str, content: OriginalContent) -> None:

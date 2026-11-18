@@ -447,3 +447,42 @@ class TestReadIsBounded:
         await workspace.read_file("src/calc.py", 1, 10)
         assert seen, "扫描应该发生过"
         assert seen[0] != threading.get_ident()
+
+
+class TestSnapshotReusesProtectedDigests:
+    """`capture_snapshot(protected_digests=...)` 让调用方复用已知的受保护路径摘要。
+
+    对 `.git` 做全量内容哈希是整次快照里最贵的部分（实测：8000 个 object、125MB
+    的 .git 占整次快照的 101%），而进程工具前后各拍一次快照。复用必须保持检测力：
+    采用的值要与现场算出来的一模一样。
+    """
+
+    def test_a_reused_value_is_used_verbatim(self, workspace: FsWorkspace, repo: Path) -> None:
+        (repo / ".git").mkdir()
+        (repo / ".git" / "config").write_text("[core]\n")
+        computed = workspace.capture_snapshot().protected_digests
+        assert computed, "受保护路径应当被摘要"
+
+        reused = workspace.capture_snapshot(protected_digests=computed)
+        assert reused.protected_digests == computed
+        # 复用不该影响快照的其余部分。
+        assert reused.digests == workspace.capture_snapshot().digests
+
+    def test_a_reused_value_is_not_recomputed(self, workspace: FsWorkspace, repo: Path) -> None:
+        """磁盘上改了，复用的值必须还是旧值——否则就白复用了。"""
+        (repo / ".git").mkdir()
+        (repo / ".git" / "config").write_text("[core]\n")
+        baseline = workspace.capture_snapshot().protected_digests
+
+        (repo / ".git" / "config").write_text("[core]\n\tborrowed = true\n")
+        reused = workspace.capture_snapshot(protected_digests=baseline)
+        assert reused.protected_digests == baseline
+        assert reused.protected_digests != workspace.capture_snapshot().protected_digests
+
+    def test_omitting_the_argument_still_computes_it(
+        self, workspace: FsWorkspace, repo: Path
+    ) -> None:
+        """默认行为不变：不传就照常算。"""
+        (repo / ".git").mkdir()
+        (repo / ".git" / "config").write_text("[core]\n")
+        assert workspace.capture_snapshot().protected_digests
