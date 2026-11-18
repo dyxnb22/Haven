@@ -37,8 +37,8 @@ class TestModelRouter:
             mode=PermissionMode.INTERACTIVE,
             budget=Budget(),
         )
-        assert router.select_model(ctx, step=1) is fast
-        assert router.active_model is fast
+        assert router.choose_model(ctx, step=1).model is fast
+        assert router.choose_model(ctx, step=1).model is fast
         assert "routed(" in router.model_name
 
     def test_switches_to_deep_coder_after_edits_occur(self) -> None:
@@ -52,7 +52,7 @@ class TestModelRouter:
             mode=PermissionMode.INTERACTIVE,
             budget=Budget(),
         )
-        assert router.select_model(ctx, step=1) is fast
+        assert router.choose_model(ctx, step=1).model is fast
 
         # 记录一条文件编辑证据
         ctx.ledger = ctx.ledger.with_edit(
@@ -64,8 +64,8 @@ class TestModelRouter:
             )
         )
 
-        assert router.select_model(ctx, step=2) is deep
-        assert router.active_model is deep
+        assert router.choose_model(ctx, step=2).model is deep
+        assert router.choose_model(ctx, step=1).model is deep
 
     def test_switches_to_deep_coder_when_plan_is_active(self) -> None:
         fast = FakeModel("fast-explorer-v3")
@@ -79,16 +79,16 @@ class TestModelRouter:
             budget=Budget(),
         )
         # 初始未进入计划：使用 fast
-        assert router.select_model(ctx, step=1) is fast
+        assert router.choose_model(ctx, step=1).model is fast
 
         # 计划所有步骤均为 pending：继续探索
         ctx.plan = (PlanStep(title="Step 1", status="pending"),)
-        assert router.select_model(ctx, step=2) is fast
+        assert router.choose_model(ctx, step=2).model is fast
 
         # 计划有步骤变为 in_progress：提前切至 deep 深度推理
         ctx.plan = (PlanStep(title="Step 1", status="in_progress"),)
-        assert router.select_model(ctx, step=3) is deep
-        assert router.active_model is deep
+        assert router.choose_model(ctx, step=3).model is deep
+        assert router.choose_model(ctx, step=1).model is deep
 
     def test_always_deep_override(self) -> None:
         fast = FakeModel("fast-explorer-v3")
@@ -101,26 +101,18 @@ class TestModelRouter:
             mode=PermissionMode.INTERACTIVE,
             budget=Budget(),
         )
-        assert router.select_model(ctx, step=1) is deep
-        assert router.active_model is deep
+        assert router.choose_model(ctx, step=1).model is deep
+        assert router.choose_model(ctx, step=1).model is deep
 
-    async def test_generate_stream_proxies_to_active_model(self) -> None:
-        fast = FakeModel("fast-v3")
-        deep = FakeModel("deep-r1")
-        router = ModelRouter(fast_model=fast, deep_model=deep)
+    async def test_the_router_is_not_a_model_and_streams_nothing_itself(self) -> None:
+        """路由器只做调度：它没有 `generate_stream`。
 
-        ctx = RunContext(
-            run_id=RunId("run-4"),
-            goal="Read code",
-            mode=PermissionMode.INTERACTIVE,
-            budget=Budget(),
-        )
-        router.select_model(ctx, step=1)
-
-        req = ModelRequest(messages=(), tools=())
-        events = [e async for e in router.generate_stream(req)]
-        assert len(events) == 1
-        assert isinstance(events[0], StreamFinished)
+        离开了"本步选了谁"这个上下文，它无从知道该把流导向哪里。留着这个方法只会
+        诱导调用方跳过 `choose_model`——而那正是它此前依赖可变状态的原因。
+        """
+        router = ModelRouter(fast_model=FakeModel("fast-v3"), deep_model=FakeModel("deep-r1"))
+        assert not hasattr(router, "generate_stream")
+        assert not hasattr(router, "active_model")
 
     async def test_aclose_closes_both_underlying_models(self) -> None:
         class ClosableFake(FakeModel):

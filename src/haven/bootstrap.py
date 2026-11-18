@@ -35,7 +35,7 @@ from haven.application.diff_review import ReviewService
 from haven.application.emitter import EventEmitter
 from haven.application.mcp_resources import load_imported_resources
 from haven.application.model_catalog import ModelCatalog
-from haven.application.model_router import ModelRouter
+from haven.application.model_router import ModelRouter, RunnableModel
 from haven.application.profiles import ModelProfile, profile_for, provider_profile_for
 from haven.application.project_memory import ProjectMemoryService
 from haven.application.recovery_service import RecoveryService
@@ -100,7 +100,7 @@ class AppServices:
     #: 配置的模型标识符。
     model_name: str
     #: 模型适配器；离线或仅恢复命令时为空。
-    model: ModelPort | None = None
+    model: RunnableModel | None = None
     #: 选中的操作系统沙箱后端名称。
     sandbox_backend: str = "none"
     #: 当本进程可以修改工作区时使用的单写者租约；只读模式下或另一个存活进程
@@ -221,7 +221,7 @@ async def build_services(
     mode: PermissionMode,
     approvals: ApprovalResponder,
     sinks: list[EventSinkPort],
-    model: ModelPort | None = None,
+    model: RunnableModel | None = None,
     store_path: Path | None = None,
     tier: str | None = None,
     approval_mode: ApprovalMode | None = None,
@@ -486,7 +486,7 @@ async def review_saved_run(
         await store.close()
 
 
-async def _close_model(model: ModelPort | None) -> None:
+async def _close_model(model: RunnableModel | None) -> None:
     """关闭可关闭的模型适配器；测试/离线端口可以没有 ``aclose``。"""
     closer = getattr(model, "aclose", None)
     if closer is not None:

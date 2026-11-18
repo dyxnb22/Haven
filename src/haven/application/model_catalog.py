@@ -5,7 +5,7 @@ from collections.abc import Callable
 from contextlib import AsyncExitStack
 from dataclasses import asdict
 
-from haven.application.model_router import ModelRouter
+from haven.application.model_router import ModelRouter, RunnableModel
 from haven.application.profiles import ModelProfile, provider_profile_for
 from haven.contracts.model_call import ModelSelection, ModelSpec
 from haven.domain.digest import sha256_text
@@ -61,7 +61,7 @@ class ModelCatalog:
             for name in selection.spec.model_names
         )
 
-    def bind(self, selection: ModelSelection) -> ModelPort:
+    def bind(self, selection: ModelSelection) -> RunnableModel:
         spec = selection.spec
         model = self._port(spec.model)
         if spec.fast_model:

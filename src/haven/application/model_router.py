@@ -9,11 +9,9 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 from haven.application.state import RunContext
-from haven.contracts.model import ModelEvent, ModelRequest
 from haven.contracts.model_call import ModelRouteReason
 from haven.ports.model import ModelPort
 
@@ -25,7 +23,11 @@ class ModelChoice:
 
 
 class ModelRouter:
-    """基于运行上下文自适应调度快速探索与深度编码模型的双轨路由器。"""
+    """基于运行上下文自适应调度快速探索与深度编码模型的双轨路由器。
+
+    只做调度，不当模型：`choose_model` 是无副作用的纯函数，同一步问多少次都得到
+    同一个答案，因此轨迹可以逐字节复现。
+    """
 
     def __init__(
         self,
@@ -39,17 +41,11 @@ class ModelRouter:
         self.deep_model = deep_model
         self.always_deep = always_deep
         self.fast_turns = fast_turns
-        self._active_model: ModelPort = deep_model if always_deep else fast_model
 
     @property
     def model_name(self) -> str:
         """返回复合路由器标识。"""
         return f"routed({self.fast_model.model_name}+{self.deep_model.model_name})"
-
-    @property
-    def active_model(self) -> ModelPort:
-        """返回当前选中的活动底层模型。"""
-        return self._active_model
 
     def choose_model(self, ctx: RunContext, step: int) -> ModelChoice:
         """根据当前运行状态确定性选择本步应调用的模型。
@@ -75,15 +71,6 @@ class ModelRouter:
 
         return ModelChoice(self.fast_model, "exploration")
 
-    def select_model(self, ctx: RunContext, step: int) -> ModelPort:
-        """保留直接调用方的本地代理接口；运行器使用无可变状态的 choose_model。"""
-        self._active_model = self.choose_model(ctx, step).model
-        return self._active_model
-
-    def generate_stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
-        """流式代理至当前活跃模型。"""
-        return self._active_model.generate_stream(request)
-
     async def aclose(self) -> None:
         """尽力关闭底层快速探索与深度编码模型的异步资源。"""
         try:
@@ -98,3 +85,10 @@ class ModelRouter:
                 res = closer()
                 if inspect.isawaitable(res):
                     await res
+
+
+#: 运行器真正需要的"模型"：一个具体的 ModelPort，或者一个决定本步用哪个 ModelPort
+#: 的路由器。两者都有 `model_name` 与 `aclose`；`choose_model` 只有路由器有，由
+#: `isinstance` 区分。路由器自己**不是**模型——它没有 `generate_stream`，因为离开了
+#: "本步选了谁"这个上下文，它无从知道该把流导向哪里。
+RunnableModel = ModelPort | ModelRouter

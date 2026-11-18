@@ -28,7 +28,7 @@ from haven.application.context_builder import ContextBuilder
 from haven.application.emitter import EventEmitter
 from haven.application.mcp_client import MCPClientManager
 from haven.application.mcp_resources import load_imported_resources
-from haven.application.model_router import ModelChoice, ModelRouter
+from haven.application.model_router import ModelChoice, ModelRouter, RunnableModel
 from haven.application.model_stream import ModelStreamer
 from haven.application.profiles import DEFAULT_PROFILE, ModelProfile, profile_for
 from haven.application.registry import ToolRegistry
@@ -94,7 +94,7 @@ class RunActor:
         self,
         *,
         ctx: RunContext,
-        model: ModelPort,
+        model: RunnableModel,
         workspace: WorkspacePort,
         executor: ExecutorPort,
         store: SessionStorePort,

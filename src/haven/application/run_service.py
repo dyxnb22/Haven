@@ -50,7 +50,7 @@ from haven.application.emitter import EventEmitter
 from haven.application.handoff import latest_handoff
 from haven.application.mcp_client import MCPClientManager
 from haven.application.model_catalog import ModelCatalog
-from haven.application.model_router import ModelRouter
+from haven.application.model_router import ModelRouter, RunnableModel
 from haven.application.model_stream import (
     MODEL_RETRY_MAX_DELAY,
     ModelStreamer,
@@ -102,7 +102,6 @@ from haven.domain.enums import (
 from haven.domain.ids import RunId, new_run_id
 from haven.domain.pricing import Pricing
 from haven.ports.executor import ExecutorPort
-from haven.ports.model import ModelPort
 from haven.ports.sandbox import SandboxLauncher
 from haven.ports.session import SessionStorePort
 from haven.ports.workspace import WorkspacePort
@@ -146,7 +145,7 @@ class RunService:
     def __init__(
         self,
         *,
-        model: ModelPort,
+        model: RunnableModel,
         workspace: WorkspacePort,
         executor: ExecutorPort,
         store: SessionStorePort,
@@ -272,7 +271,7 @@ class RunService:
             raise ValueError("this run requires its configured Provider to resume")
         return None
 
-    def _model_for(self, ctx: RunContext) -> ModelPort:
+    def _model_for(self, ctx: RunContext) -> RunnableModel:
         if self._model_catalog is not None and ctx.model_selection is not None:
             return self._model_catalog.bind(ctx.model_selection)
         return self._model
