@@ -108,7 +108,10 @@ class ResolvedConfig:
                 else (router and router.deep_model) or self.provider.model,
                 fast_model=fast_model
                 if fast_model is not None
-                else (router and router.fast_model) or DEFAULT_MODEL,
+                # 缺省走配置里的模型，不是内置的 DEFAULT_MODEL：用户配了
+                # [provider].model 时，快轨沉默地换成 gpt-4o-mini 会让
+                # `config explain` 显示的值与实际调用的模型不一致。
+                else (router and router.fast_model) or self.provider.model,
                 fast_turns=fast_turns
                 if fast_turns is not None
                 else router.fast_turns
@@ -450,15 +453,6 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
         ):
             worktree = bool(runtime_raw["worktree"])
             sources["worktree"] = "user"
-        if (router_raw := raw.get("router")) and isinstance(router_raw, dict):
-            fast_turns_val = router_raw.get("fast_turns")
-            router = RouterConfig(
-                enabled=bool(router_raw.get("enabled", True)),
-                fast_model=str(router_raw.get("fast_model", "")),
-                deep_model=str(router_raw.get("deep_model", provider.model)),
-                fast_turns=int(fast_turns_val) if fast_turns_val is not None else None,
-            )
-            sources["router"] = "user"
         if (provider_raw := raw.get("provider")) is not None:
             if not isinstance(provider_raw, dict):
                 raise ConfigError(f"[provider] in {user_path} must be a table")
@@ -483,6 +477,19 @@ def load_config(workspace: Path | None = None, tier: str | None = None) -> Resol
             for key in ("base_url", "model", "api_key_env"):
                 if key in provider_raw:
                     sources[f"provider.{key}"] = "user"
+        # [router] 必须在 [provider] 之后解析：`deep_model`/`fast_model` 缺省时取
+        # `provider.model`，而这里的 `provider` 是上面刚解析出的用户值。顺序颠倒
+        # 会让缺省值落到内置的 `DEFAULT_MODEL` 上——用户配了 model 却静默用了
+        # 另一个模型，且 `config explain` 显示的又是另一个值。
+        if (router_raw := raw.get("router")) and isinstance(router_raw, dict):
+            fast_turns_val = router_raw.get("fast_turns")
+            router = RouterConfig(
+                enabled=bool(router_raw.get("enabled", True)),
+                fast_model=str(router_raw.get("fast_model", "")),
+                deep_model=str(router_raw.get("deep_model", provider.model)),
+                fast_turns=int(fast_turns_val) if fast_turns_val is not None else None,
+            )
+            sources["router"] = "user"
         if budget_raw := raw.get("budget"):
             budget = _parse_budget(budget_raw, str(user_path))
             sources["budget"] = "user"

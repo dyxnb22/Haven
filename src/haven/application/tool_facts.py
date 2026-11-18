@@ -164,7 +164,12 @@ class ToolFactsCollector:
                 "invalid_arguments",
                 f"read {facts.normalized!r} with repo.read before editing it",
             )
-        if facts.digest != recorded:
+        # `path_facts` 对超过 MAX_EDIT_FILE_BYTES 的文件不计算摘要（返回 None），
+        # 而 `repo.read` 没有这个上限、记录的 digest 是真的。若无条件比较，大文件
+        # 会每次都误报 stale_preimage，而模型按提示重读也修不好——它会一直重试到
+        # 被卡死检测停掉。这里只在真有摘要时比较，否则交给 preview_edit 用那条
+        # 准确的"文件过大"错误拒绝（与 repo.apply_patch 的答复一致）。
+        if facts.digest is not None and facts.digest != recorded:
             raise WorkspaceError(
                 "stale_preimage",
                 f"{facts.normalized!r} changed since it was last read; read it again",

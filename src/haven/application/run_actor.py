@@ -526,9 +526,20 @@ class RunActor:
         return await self.finish(ctx, RunStatus.STOPPED, stop, summary)
 
     async def _closing_summary(self, ctx: RunContext, final_text: str) -> str | RunOutcome:
-        """做一次不带工具的收尾调用，返回模型的文字；自身终判时返回该终态。"""
+        """做一次不带工具的收尾调用，返回模型的文字；自身终判时返回该终态。
+
+        这一次调用照常计费：`_call_model_step` 只负责构建、记录信封和流式返回，
+        记账发生在主循环里，所以这里必须自己调一次 `charge_usage`。漏掉它，
+        `RunFinished` 和 `RunOutcome` 就会少报整整一次模型调用——而注释里"token
+        照常计费"的承诺正是靠这一行成立的。
+        """
         try:
             choice = self._choose_model(ctx, ctx.usage.steps)
+            profile = (
+                self._profile_for(choice.model.model_name)
+                if isinstance(self._model, ModelRouter)
+                else self._profile
+            )
             outcome = await self._call_model_step(
                 ctx,
                 ctx.usage.steps,
@@ -550,7 +561,10 @@ class RunActor:
             return ""
         if isinstance(outcome, RunOutcome):
             return outcome
-        return outcome[1].text.strip()
+        request, result, _digest = outcome
+        pricing = self._pricing if self._pricing_is_override else profile.pricing
+        self._telemetry.charge_usage(ctx, request, result, pricing=pricing)
+        return result.text.strip()
 
     async def close(self) -> None:
         """安全释放流水线资源与本 Actor 专属的临时目录。"""

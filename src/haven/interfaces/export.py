@@ -40,7 +40,12 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     ),  # 完整 PEM/OpenSSH 私钥块
     re.compile(r"\bsk-ant-[A-Za-z0-9_-]{16,}"),  # Anthropic 密钥
     re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"),  # OpenAI 及兼容服务密钥
-    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),  # AWS 访问密钥 ID
+    # ASIA 与 rk- 与 domain/review.py 的密钥形状保持一致：那边的 diff 审查会把
+    # 它们判为已提交凭据并阻断成功，而导出脱敏若漏掉，同一个字符串就会从
+    # "本该被拦住的东西" 变成 "本该被遮住却漏出去的东西"。两套模式各自维护就会
+    # 这样漂移，改一边时记得对照另一边。
+    re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),  # AWS 访问密钥 ID（含临时会话密钥）
+    re.compile(r"\b(?:sk|rk)-[A-Za-z0-9_-]{20,}\b"),  # API token
     re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}"),  # GitHub 令牌
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}"),
     re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"),  # Slack 令牌

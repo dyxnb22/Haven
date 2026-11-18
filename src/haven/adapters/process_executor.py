@@ -37,6 +37,9 @@ from haven.ports.sandbox import (
 OUTPUT_CAP_BYTES = 64 * 1024
 SAVED_OUTPUT_CAP_BYTES = 2 * 1024 * 1024
 TERMINATE_GRACE_SECONDS = 2.0
+#: 没有沙箱后端时执行器的退出码。沿用 shell 的 "command found but not
+#: executable" 约定值，让调用方与日志都能把它和普通失败区分开。
+NO_SANDBOX_EXIT_CODE = 126
 
 
 class _OutputBuffer:
@@ -161,10 +164,18 @@ class ProcessExecutor:
         env.update(EXEC_ENV_FIXED)
         env.update(self._extra_env)
 
-        commands = [
-            self._launcher.wrap(seg, sandbox) if self._launcher is not None else seg
-            for seg in pipeline
-        ]
+        # 与 _run 相同的理由：没有后端就在执行器内失败关闭，不依赖调用方记得检查。
+        if self._launcher is None:
+            return ExecOutcome(
+                exit_code=NO_SANDBOX_EXIT_CODE,
+                duration_ms=0,
+                stdout_tail="",
+                stderr_tail="no sandbox backend available; refusing to run unconfined",
+                truncated=False,
+                timed_out=False,
+            )
+
+        commands = [self._launcher.wrap(seg, sandbox) for seg in pipeline]
 
         started = time.monotonic()
         procs: list[Process] = []
@@ -314,7 +325,21 @@ class ProcessExecutor:
         env.update(EXEC_ENV_FIXED)
         env.update(self._extra_env)
 
-        command = self._launcher.wrap(argv, sandbox) if self._launcher is not None else argv
+        # 没有后端就必须在这里失败，而不是把 argv 原样交出去。调用方各自检查
+        # 过一次（execute_exec、execute_task_start 都拒绝了），但 execute_check
+        # 没有——而 recipe.propose 让模型能注册任意 argv 再交给 repo.check。
+        # 任何一个调用方忘记检查，就等于在没有 OS 限制的主机上裸跑模型提供的命令。
+        if self._launcher is None:
+            return ExecOutcome(
+                exit_code=NO_SANDBOX_EXIT_CODE,
+                duration_ms=0,
+                stdout_tail="",
+                stderr_tail="no sandbox backend available; refusing to run unconfined",
+                truncated=False,
+                timed_out=False,
+            )
+
+        command = self._launcher.wrap(argv, sandbox)
 
         started = time.monotonic()
         try:

@@ -725,6 +725,40 @@ class TestApprovalBinding:
         # 被篡改的内容不会被过时的 edit 触碰
         assert (repo / "src" / "calc.py").read_text() == "everything changed\n"
 
+    async def test_an_oversized_file_reports_the_real_reason_not_a_stale_preimage(
+        self, tmp_path: Path
+    ) -> None:
+        """超过 MAX_EDIT_FILE_BYTES 的文件必须得到"过大"这个准确原因。
+
+        `path_facts` 对超大文件不算摘要（digest 为 None），而 `repo.read` 没有这个
+        上限、记录的 digest 是真的。若无条件比较，模型每次编辑都得到
+        `stale_preimage`，而重读根本修不好——它会一路重试到被卡死检测停掉。
+        """
+        repo = make_repo(tmp_path)
+        big = repo / "src" / "big.py"
+        big.write_text("x = 1\n" + ("# pad\n" * 60_000), encoding="utf-8")
+        assert big.stat().st_size > 256 * 1024
+
+        turns: list[list[ModelEvent]] = [
+            [tool("c1", "repo.read", path="src/big.py"), finish("tool_calls")],
+            [
+                tool("c2", "repo.edit", path="src/big.py", old_string="x = 1", new_string="x = 2"),
+                finish("tool_calls"),
+            ],
+            [text("The file is too large to edit."), finish()],
+        ]
+        h = Harness(repo, turns)
+        await h.service.run("Edit the big file")
+
+        completed = [
+            e
+            for e in h.sink.events_of("tool.completed")
+            if isinstance(e, ToolCompleted) and e.call_id == "c2"
+        ]
+        assert completed[0].error_code != "stale_preimage"
+        # 文件未被触碰：错误发生在执行之前
+        assert "x = 1" in big.read_text()
+
 
 class TestBudgetsAndStops:
     async def test_step_budget_stops_run(self, tmp_path: Path) -> None:
@@ -755,8 +789,12 @@ class TestBudgetsAndStops:
         把已得到的说出来——成功的定义没有变松，只是一个 stopped 运行能带上内容。
         """
         turns: list[list[ModelEvent]] = [
-            [tool("c1", "repo.list", path="."), finish("tool_calls")],
-            [text("I found the defect but ran out of steps before fixing it."), finish()],
+            [tool("c1", "repo.list", path="."), usage(30, 10), finish("tool_calls")],
+            [
+                text("I found the defect but ran out of steps before fixing it."),
+                usage(5, 40),
+                finish(),
+            ],
         ]
         h = Harness(make_repo(tmp_path), turns, budget=Budget(max_steps=1))
         outcome = await h.service.run("Explore forever")
@@ -767,6 +805,12 @@ class TestBudgetsAndStops:
         assert outcome.steps == 1
         # 收尾请求不带工具，所以模型没有可提议的东西。
         assert h.model.requests_seen[-1].tools == ()
+        # 但 token 要照常计费：它确实发出了一次模型调用，少报就等于瞒报成本。
+        # （这一行曾缺失——收尾调用走了不经主循环的路径，于是整整一次调用
+        # 的用量从 RunFinished 里消失了。）
+        # 用脚本模型给出确定的用量，因此可以精确断言两次调用都被计入：
+        # 工具轮 30/10 + 收尾轮 5/40。少了收尾那轮就只会看到 30/10。
+        assert (outcome.input_tokens, outcome.output_tokens) == (35, 50)
 
     async def test_resource_exhaustion_does_not_spend_one_more_call(self, tmp_path: Path) -> None:
         """token/成本耗尽是"别再花"的信号，不能再调一次模型去写总结。"""

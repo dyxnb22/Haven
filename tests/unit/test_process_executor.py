@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from haven.adapters.process_executor import (
+    NO_SANDBOX_EXIT_CODE,
     OUTPUT_CAP_BYTES,
     SAVED_OUTPUT_CAP_BYTES,
     ProcessExecutor,
@@ -35,7 +36,7 @@ def exec_spec(tmp_path: Path, *code: str, timeout: float = 10.0) -> ExecSpec:
 
 
 async def test_saved_output_keeps_early_errors_outside_the_observation_tail(tmp_path: Path) -> None:
-    outcome = await ProcessExecutor().run_recipe(
+    outcome = await ProcessExecutor(launcher=RecordingLauncher()).run_recipe(
         recipe(f"print('early error'); print('x' * {OUTPUT_CAP_BYTES * 2}); print('last line')"),
         tmp_path,
     )
@@ -47,7 +48,7 @@ async def test_saved_output_keeps_early_errors_outside_the_observation_tail(tmp_
 
 
 async def test_saved_output_is_bounded_and_marks_the_missing_middle(tmp_path: Path) -> None:
-    outcome = await ProcessExecutor().run_recipe(
+    outcome = await ProcessExecutor(launcher=RecordingLauncher()).run_recipe(
         recipe(
             f"import sys; print('BEGIN' + 'x' * {SAVED_OUTPUT_CAP_BYTES * 2} + 'END'); "
             f"sys.stderr.write('ERR_BEGIN' + 'y' * {SAVED_OUTPUT_CAP_BYTES * 2} + 'ERR_END')"
@@ -65,7 +66,7 @@ async def test_saved_output_is_bounded_and_marks_the_missing_middle(tmp_path: Pa
 
 
 async def test_timeout_preserves_output_emitted_before_termination(tmp_path: Path) -> None:
-    outcome = await ProcessExecutor().run_recipe(
+    outcome = await ProcessExecutor(launcher=RecordingLauncher()).run_recipe(
         recipe("import time; print('before timeout', flush=True); time.sleep(30)", timeout=0.2),
         tmp_path,
     )
@@ -96,15 +97,37 @@ async def test_pipeline_saved_output_includes_each_stderr_and_timeout_prefix(
     assert "before pipeline timeout" in outcome.output.stdout
 
 
+async def test_no_sandbox_backend_refuses_to_run(tmp_path: Path) -> None:
+    """没有 OS 后端时必须在执行器内拒绝，而不是把 argv 原样交出去。
+
+    `repo.exec` 和 `task.start` 的调用方各自检查过，`repo.check` 没有——而
+    `recipe.propose` 让模型能注册任意 argv 再交给它。任何一个调用方忘记检查，
+    就等于在没有 OS 限制的主机上裸跑模型提供的命令，所以不变量归执行器所有。
+    """
+    outcome = await ProcessExecutor(launcher=None).run_recipe(recipe("print('pwned')"), tmp_path)
+    assert outcome.exit_code == NO_SANDBOX_EXIT_CODE
+    assert "pwned" not in outcome.stdout_tail
+    assert "no sandbox backend" in outcome.stderr_tail
+
+
+async def test_no_sandbox_backend_refuses_a_pipeline_too(tmp_path: Path) -> None:
+    """管道路径同样失败关闭：它此前有自己的条件包装，是同一个洞的另一半。"""
+    outcome = await ProcessExecutor(launcher=None).run_exec(exec_spec(tmp_path, "print('pwned')"))
+    assert outcome.exit_code == NO_SANDBOX_EXIT_CODE
+    assert "pwned" not in outcome.stdout_tail
+
+
 async def test_successful_command(tmp_path: Path) -> None:
-    outcome = await ProcessExecutor().run_recipe(recipe("print('ok')"), tmp_path)
+    outcome = await ProcessExecutor(launcher=RecordingLauncher()).run_recipe(
+        recipe("print('ok')"), tmp_path
+    )
     assert outcome.exit_code == 0
     assert "ok" in outcome.stdout_tail
     assert not outcome.timed_out
 
 
 async def test_run_recipe_with_extra_args(tmp_path: Path) -> None:
-    outcome = await ProcessExecutor().run_recipe(
+    outcome = await ProcessExecutor(launcher=RecordingLauncher()).run_recipe(
         recipe("import sys; print(sys.argv[1:])"), tmp_path, extra_args=("-k", "foo")
     )
     assert outcome.exit_code == 0
@@ -112,12 +135,14 @@ async def test_run_recipe_with_extra_args(tmp_path: Path) -> None:
 
 
 async def test_failing_command(tmp_path: Path) -> None:
-    outcome = await ProcessExecutor().run_recipe(recipe("import sys; sys.exit(3)"), tmp_path)
+    outcome = await ProcessExecutor(launcher=RecordingLauncher()).run_recipe(
+        recipe("import sys; sys.exit(3)"), tmp_path
+    )
     assert outcome.exit_code == 3
 
 
 async def test_timeout_terminates_process(tmp_path: Path) -> None:
-    outcome = await ProcessExecutor().run_recipe(
+    outcome = await ProcessExecutor(launcher=RecordingLauncher()).run_recipe(
         recipe("import time; time.sleep(60)", timeout=0.5), tmp_path
     )
     assert outcome.timed_out
@@ -130,7 +155,9 @@ async def test_timeout_terminates_process(tmp_path: Path) -> None:
         f"subprocess.Popen([sys.executable, '-c', {child!r}]); "
         "time.sleep(60)"
     )
-    outcome = await ProcessExecutor().run_recipe(recipe(parent, timeout=0.2), tmp_path)
+    outcome = await ProcessExecutor(launcher=RecordingLauncher()).run_recipe(
+        recipe(parent, timeout=0.2), tmp_path
+    )
     assert outcome.timed_out
     await asyncio.sleep(0.6)
     assert not marker.exists(), "a timed-out command left a live grandchild"
@@ -145,7 +172,9 @@ async def test_timeout_terminates_process(tmp_path: Path) -> None:
         f"{background_child!r}], "
         "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)"
     )
-    outcome = await ProcessExecutor().run_recipe(recipe(background), tmp_path)
+    outcome = await ProcessExecutor(launcher=RecordingLauncher()).run_recipe(
+        recipe(background), tmp_path
+    )
     assert outcome.exit_code == 0
     await asyncio.sleep(0.6)
     assert not background_marker.exists(), "a completed command left a live background child"
@@ -157,14 +186,18 @@ async def test_timeout_terminates_process(tmp_path: Path) -> None:
     inherited = (
         f"import subprocess, sys; subprocess.Popen([sys.executable, '-c', {inherited_child!r}])"
     )
-    outcome = await ProcessExecutor().run_recipe(recipe(inherited), tmp_path)
+    outcome = await ProcessExecutor(launcher=RecordingLauncher()).run_recipe(
+        recipe(inherited), tmp_path
+    )
     assert outcome.exit_code == 0
     await asyncio.sleep(0.6)
     assert not inherited_marker.exists(), "an inherited pipe delayed descendant cleanup"
 
 
 async def test_output_bomb_is_bounded(tmp_path: Path) -> None:
-    outcome = await ProcessExecutor().run_recipe(recipe("print('x' * 100_000_000)"), tmp_path)
+    outcome = await ProcessExecutor(launcher=RecordingLauncher()).run_recipe(
+        recipe("print('x' * 100_000_000)"), tmp_path
+    )
     assert outcome.exit_code == 0
     assert outcome.truncated
     assert len(outcome.stdout_tail.encode()) <= OUTPUT_CAP_BYTES
@@ -172,7 +205,9 @@ async def test_output_bomb_is_bounded(tmp_path: Path) -> None:
 
 async def test_cancellation_kills_process(tmp_path: Path) -> None:
     task = asyncio.create_task(
-        ProcessExecutor().run_recipe(recipe("import time; time.sleep(60)"), tmp_path)
+        ProcessExecutor(launcher=RecordingLauncher()).run_recipe(
+            recipe("import time; time.sleep(60)"), tmp_path
+        )
     )
     await asyncio.sleep(0.3)
     task.cancel()
@@ -182,7 +217,7 @@ async def test_cancellation_kills_process(tmp_path: Path) -> None:
 
 async def test_env_is_scrubbed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HAVEN_SECRET_TOKEN", "leak-me")
-    outcome = await ProcessExecutor().run_recipe(
+    outcome = await ProcessExecutor(launcher=RecordingLauncher()).run_recipe(
         recipe("import os; print(os.environ.get('HAVEN_SECRET_TOKEN', 'MISSING'))"),
         tmp_path,
     )
@@ -289,7 +324,7 @@ class TestRunExec:
         assert "scratch" in outcome.stdout_tail
 
     async def test_run_exec_pipeline(self, tmp_path: Path) -> None:
-        executor = ProcessExecutor()
+        executor = ProcessExecutor(launcher=RecordingLauncher())
         code1 = "import sys; print('apple\\nbanana\\ncherry')"
         code2 = (
             "import sys; lines = [l.strip() for l in sys.stdin if 'an' in l];"
@@ -309,7 +344,7 @@ class TestRunExec:
         assert outcome.timed_out is False
 
     async def test_run_exec_pipeline_early_exit(self, tmp_path: Path) -> None:
-        executor = ProcessExecutor()
+        executor = ProcessExecutor(launcher=RecordingLauncher())
         code1 = "import sys; [print(f'line {i}') for i in range(10000)]"
         code2 = "import sys; [print(sys.stdin.readline().strip()) for _ in range(2)]"
         spec = ExecSpec(
@@ -326,7 +361,7 @@ class TestRunExec:
         assert "line 1" in outcome.stdout_tail
 
     async def test_run_exec_pipeline_missing_command_is_result(self, tmp_path: Path) -> None:
-        executor = ProcessExecutor()
+        executor = ProcessExecutor(launcher=RecordingLauncher())
         spec = ExecSpec(
             argv=(PY, "-c", "print('hi')", "|", "definitely-not-real-prog"),
             cwd=tmp_path,

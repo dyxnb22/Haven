@@ -443,6 +443,7 @@ class TestResume:
         from haven.adapters.process_executor import ProcessExecutor
         from haven.adapters.providers.scripted import ScriptedModel
         from haven.domain.enums import PermissionMode
+        from tests.integration.fakes import RecordingLauncher
 
         resumed_model = ScriptedModel(
             [
@@ -465,7 +466,7 @@ class TestResume:
         service = RunService(
             model=resumed_model,
             workspace=h.workspace,
-            executor=ProcessExecutor(),
+            executor=ProcessExecutor(launcher=RecordingLauncher()),
             store=h.store,
             emitter=h.emitter,
             approvals=h.approver,
