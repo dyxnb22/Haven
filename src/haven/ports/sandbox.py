@@ -69,3 +69,11 @@ def default_readable_roots() -> tuple[Path, ...]:
     """当前解释器的前缀目录，使位于 $HOME 下的 virtualenv 仍能被检查配方执行。"""
     roots = {Path(sys.prefix), Path(sys.base_prefix), Path(sys.executable).parent}
     return tuple(sorted(roots))
+
+
+#: 两个后端都必须放行写入的设备节点。
+#:
+#: 这里不追求 IPC 隔离：拒绝它们会破坏普通程序（重定向到 /dev/null 是最常见的一
+#: 种），却堵不住这个沙箱要解决的文件系统或网络问题。两个后端必须共用同一份
+#: 列表——曾经只有 Seatbelt 放行，于是 `cmd > /dev/null` 在 Linux 上直接失败。
+WRITABLE_DEVICES = ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/dtracehelper")

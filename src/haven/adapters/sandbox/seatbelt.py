@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from haven.ports.sandbox import SandboxSpec
+from haven.ports.sandbox import WRITABLE_DEVICES, SandboxSpec
 
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 
@@ -24,8 +24,6 @@ _PREAMBLE = """\
 (allow mach-lookup)
 (allow ipc-posix-shm)
 (allow file-read-metadata)"""
-
-_WRITABLE_DEVICES = ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/dtracehelper")
 
 
 def _literal(path: Path) -> str:
@@ -56,7 +54,7 @@ def build_profile(spec: SandboxSpec) -> str:
         lines.append(f"(allow file-write* (subpath {_literal(spec.workspace_root)}))")
         for subpath in spec.protected_subpaths:
             lines.append(f"(deny file-write* (subpath {_literal(spec.workspace_root / subpath)}))")
-    for device in _WRITABLE_DEVICES:
+    for device in WRITABLE_DEVICES:
         lines.append(f"(allow file-write-data (literal {_literal(Path(device))}))")
 
     if not spec.allow_network:

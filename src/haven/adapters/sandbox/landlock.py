@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
-from haven.ports.sandbox import SandboxSpec
+from haven.ports.sandbox import WRITABLE_DEVICES, SandboxSpec
 from haven.sandbox.landlock_launcher import MIN_ABI, abi_version
 
 LAUNCHER_MODULE = "haven.sandbox.landlock_launcher"
@@ -14,6 +15,7 @@ LAUNCHER_MODULE = "haven.sandbox.landlock_launcher"
 #: 列表可以适用于所有发行版。
 SYSTEM_ROOTS = (
     "/usr",
+    "/usr/local",
     "/bin",
     "/sbin",
     "/lib",
@@ -44,6 +46,14 @@ def encode_spec(spec: SandboxSpec) -> str:
     writable = [str(spec.scratch_dir.resolve())]
     if spec.writable:
         writable.insert(0, str(spec.workspace_root.resolve()))
+    # 设备节点与 `WRITABLE_DEVICES` 对齐：Seatbelt 一向放行它们（拒绝会破坏普通
+    # 解释器），而 Landlock 的 `/dev` 只授了读权限，于是 `cmd > /dev/null` 在
+    # Linux 上直接失败。只授 WRITE_FILE，对应 Seatbelt 的 file-write-data。
+    # 路径同样解析——`/dev/stdout` 是指向 `/dev/fd/1` 的符号链接，不解析就对不上
+    # Seatbelt 实际放行的那一个。（`path_beneath` 作用在符号链接自身上，因此这两个
+    # fd 链接在 Landlock 侧仍是空操作；真正普遍的重定向目标 /dev/null 是设备节点，
+    # 规则有效。）
+    writable.extend(str(Path(device).resolve()) for device in WRITABLE_DEVICES)
     return json.dumps(
         {"readable": readable, "writable": writable, "allow_network": spec.allow_network},
         separators=(",", ":"),

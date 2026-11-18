@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from haven.adapters.sandbox.landlock import LandlockLauncher, encode_spec
-from haven.ports.sandbox import SandboxSpec
+from haven.ports.sandbox import WRITABLE_DEVICES, SandboxSpec
 
 
 def spec(**overrides: object) -> SandboxSpec:
@@ -26,15 +26,22 @@ def resolved(path: str) -> str:
 class TestEncoding:
     def test_writable_roots_are_the_workspace_and_scratch(self) -> None:
         payload = json.loads(encode_spec(spec()))
-        assert sorted(payload["writable"]) == sorted(
-            [resolved("/tmp/scratch"), resolved("/tmp/ws")]
-        )
+        # 设备节点另见 test_writable_devices_are_granted：`cmd > /dev/null` 在
+        # Linux 上曾经直接失败，因为 /dev 只授了读权限。
+        assert set(payload["writable"]) >= {resolved("/tmp/scratch"), resolved("/tmp/ws")}
+
+    def test_writable_devices_are_granted(self) -> None:
+        """重定向到 /dev/null 是最常见的 shell 用法；Seatbelt 一向放行这些设备。"""
+        writable = json.loads(encode_spec(spec()))["writable"]
+        for device in WRITABLE_DEVICES:
+            assert str(Path(device).resolve()) in writable
 
     def test_read_only_spec_grants_scratch_but_not_the_workspace(self) -> None:
         """只读指工作区只读：scratch 仍可写，使受限进程有地方写入（repo.exec profile，
         ADR 0017）。"""
         writable = json.loads(encode_spec(spec(writable=False)))["writable"]
-        assert writable == [str(Path("/tmp/scratch").resolve())]
+        assert str(Path("/tmp/scratch").resolve()) in writable
+        assert resolved("/tmp/ws") not in writable
 
     def test_system_roots_are_readable(self) -> None:
         assert "/usr" in json.loads(encode_spec(spec()))["readable"]

@@ -54,9 +54,9 @@ drifts from the sources, so no number here is hand-maintained.
 
 | Metric | Value |
 |---|---|
-| Automated tests | 1521 |
+| Automated tests | 1527 |
 | Line coverage (`src/`) | 91% |
-| Source / test size | ~30.9k / ~26.4k lines |
+| Source / test size | ~30.9k / ~26.5k lines |
 | Typed modules (`mypy --strict`) | 152 |
 | Architecture decision records | 50 |
 | Offline eval | 45/45 passed, 0 security violations |
