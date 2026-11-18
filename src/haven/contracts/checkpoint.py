@@ -29,6 +29,12 @@ from haven.domain.evidence import (
 
 CHECKPOINT_SCHEMA_VERSION = 1
 
+#: `original_artifacts` 里表示"运行前该路径存在，但内容未能保留"的保留值。
+#: 取一个不可能是构件摘要的形式：摘要恒为 64 位小写十六进制，因此这个值不可能
+#: 与真实构件撞车。它必须与空串分开——空串的含义是"运行前不存在"，而这里的
+#: 含义是"存在但不知道内容"，回滚时前者是删除、后者是拒绝覆盖。
+ORIGINAL_CONTENT_UNCAPTURED = "uncaptured"
+
 
 class BudgetSnapshot(StrictModel):
     """检查点中的预算上限快照。"""
@@ -297,7 +303,10 @@ class CheckpointV1(StrictModel):
     #: 文件第一次被本次运行编辑前的内容寻址快照。
     original_artifacts: dict[str, str] = Field(
         default_factory=dict,
-        description="路径 -> 本次运行首次编辑前文件内容的构件摘要",
+        description=(
+            "路径 -> 本次运行首次编辑前文件内容的构件摘要；空串表示运行前不存在；"
+            f"{ORIGINAL_CONTENT_UNCAPTURED} 表示运行前存在但内容未能保留"
+        ),
     )
     #: 本次运行冻结的能力快照摘要（ADR 规划书 P2）。
     catalog_digest: str = Field(

@@ -12,10 +12,10 @@ from typing import Literal
 
 from haven.application.run_service import build_run_context_from_checkpoint
 from haven.application.state import RunContext
-from haven.contracts.checkpoint import CheckpointV1
+from haven.contracts.checkpoint import ORIGINAL_CONTENT_UNCAPTURED, CheckpointV1
 from haven.domain.enums import ACTIVE_STATUSES, EffectState, RunStatus
 from haven.ports.session import ArtifactError, ExecutionRecord, SessionStorePort
-from haven.ports.workspace import WorkspacePort
+from haven.ports.workspace import OriginalContent, WorkspacePort
 
 Classification = Literal["not_run", "confirmed", "unknown"]
 
@@ -104,6 +104,9 @@ class RecoveryService:
             # 新检查点用空摘要明确表示“运行前不存在”；旧检查点曾把这种情况
             # 保存为空内容构件，可由第一条编辑的空 preimage 无歧义识别。
             if not digest or first_preimage.get(path) == "":
+                continue
+            if digest == ORIGINAL_CONTENT_UNCAPTURED:
+                # 内容从未保留，因此没有构件可校验；这本身不是恢复障碍。
                 continue
             try:
                 content = await self._store.get_artifact(digest)
@@ -322,6 +325,16 @@ class RecoveryService:
             elif expected is None or facts.digest != expected:
                 blocked.append(f"{path}: changed since this run; refusing to overwrite")
                 continue
+            if artifact_digest == ORIGINAL_CONTENT_UNCAPTURED:
+                # 运行前的内容没能保留（二进制或超出编辑大小上限）。我们不知道
+                # 回滚该写什么，所以绝不写：把文件截断成空或干脆删掉，都是在拿
+                # 无法证明的猜测毁掉真实数据。与 `EFFECT_UNKNOWN` 同一种立场——
+                # 停下来，让人类决定。
+                blocked.append(
+                    f"{path}: pre-run content was not captured; refusing to overwrite it "
+                    "with a guess"
+                )
+                continue
             if not artifact_digest or first_preimage.get(path) == "":
                 planned.append((path, None))  # 由运行创建 -> 删除
             else:
@@ -372,19 +385,22 @@ class RecoveryService:
 
     async def build_context(self, checkpoint: CheckpointV1) -> RunContext:
         """重建运行状态，并恢复运行级原始内容以便生成 diff。"""
-        originals: dict[str, str | None] = {}
+        originals: dict[str, OriginalContent] = {}
         first_preimage = {
             edit.path: edit.preimage_digest for edit in reversed(checkpoint.evidence.edits)
         }
         for path, digest in checkpoint.original_artifacts.items():
+            if digest == ORIGINAL_CONTENT_UNCAPTURED:
+                originals[path] = OriginalContent.uncaptured()
+                continue
             if not digest or first_preimage.get(path) == "":
-                originals[path] = None
+                originals[path] = OriginalContent.missing()
                 continue
             content = await self._store.get_artifact(digest)
             if content is None:
                 raise ValueError(f"original artifact for {path!r} is missing")
             try:
-                originals[path] = content.decode("utf-8")
+                originals[path] = OriginalContent.captured(content.decode("utf-8"))
             except UnicodeDecodeError as exc:
                 raise ValueError(f"original artifact for {path!r} is not UTF-8") from exc
         self._workspace.restore_originals(originals)

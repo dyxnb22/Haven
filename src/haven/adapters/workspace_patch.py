@@ -15,6 +15,7 @@ from haven.ports.workspace import (
     EditOutcome,
     EditPreview,
     EffectUnknownError,
+    OriginalContent,
     PatchEffect,
     PatchOpSpec,
     PatchPreview,
@@ -524,12 +525,14 @@ class WorkspacePatchEngine:
                             "stale_preimage",
                             f"path appeared while the patch was committing: {effect.path!r}",
                         ) from exc
-                    self._run_diff.remember(effect.path, None)
+                    self._run_diff.remember(effect.path, OriginalContent.missing())
                     performed.append(("write", effect.path, None, None))
                     os.unlink(staged_name)
                     staged.pop(effect.path)
                 else:
-                    self._run_diff.remember(effect.path, on_disk_text)
+                    # 走到这里意味着 tool_shape 是 repo.edit，上面已经读过磁盘文本。
+                    assert on_disk_text is not None
+                    self._run_diff.remember(effect.path, OriginalContent.captured(on_disk_text))
                     os.replace(staged.pop(effect.path), target)
                     performed.append(("write", effect.path, original, original_mode))
                 postimage = sha256_bytes(target.read_bytes())
@@ -548,7 +551,7 @@ class WorkspacePatchEngine:
                 target = self._root / effect.path
                 original = target.read_text(encoding="utf-8")
                 original_mode = target.stat().st_mode & 0o7777
-                self._run_diff.remember(effect.path, original)
+                self._run_diff.remember(effect.path, OriginalContent.captured(original))
                 target.unlink()
                 performed.append(("unlink", effect.path, original, original_mode))
                 outcomes.append(

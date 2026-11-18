@@ -45,7 +45,7 @@ from haven.domain.digest import sha256_text
 from haven.domain.enums import AgentMode, PlanStatus, ToolErrorCode
 from haven.domain.evidence import DiffEvidence
 from haven.ports.session import SessionStorePort
-from haven.ports.workspace import WorkspaceError, WorkspacePort
+from haven.ports.workspace import OriginalContent, WorkspaceError, WorkspacePort
 
 
 class ReadToolExecutor:
@@ -330,16 +330,25 @@ class ReadToolExecutor:
             chunks: list[str] = []
             originals = self._workspace.original_contents()
             for path in paths:
-                original = originals.get(path) or ""
+                original = originals.get(path, OriginalContent.missing())
                 current = ""
                 facts = self._workspace.path_facts(path)
                 if facts.exists:
                     current = (await self._workspace.read_file(path, 1, 2000)).content
+                if original.unavailable:
+                    # 运行前的内容没保留下来。不能把空串冒充成它——那会让这份
+                    # 有作用域的 diff 谎称文件是从空改成的，和全量 diff 说谎。
+                    chunks.append(
+                        f"--- a/{path}\n+++ b/{path}\n"
+                        "[pre-run content was not captured; this scoped diff cannot "
+                        "show what changed]\n"
+                    )
+                    continue
                 chunks.extend(
                     difflib.unified_diff(
-                        original.splitlines(True),
+                        original.text.splitlines(True),
                         current.splitlines(True),
-                        fromfile=f"a/{path}",
+                        fromfile=f"a/{path}" if not original.absent else "/dev/null",
                         tofile=f"b/{path}",
                     )
                 )

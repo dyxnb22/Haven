@@ -5,7 +5,7 @@ from __future__ import annotations
 import difflib
 from pathlib import Path
 
-from haven.ports.workspace import RunDiff
+from haven.ports.workspace import OriginalContent, RunDiff
 
 MAX_DIFF_BYTES = 64 * 1024
 
@@ -13,10 +13,9 @@ MAX_DIFF_BYTES = 64 * 1024
 class WorkspaceRunDiff:
     def __init__(self, root: Path) -> None:
         self._root = root
-        # None 表示路径在本次运行开始时不存在；空字符串表示确实存在的空文件。
-        self._originals: dict[str, str | None] = {}
+        self._originals: dict[str, OriginalContent] = {}
 
-    def remember(self, path: str, content: str | None) -> None:
+    def remember(self, path: str, content: OriginalContent) -> None:
         """只记录路径第一次被触碰时的原始内容，避免重置运行基线。"""
         self._originals.setdefault(path, content)
 
@@ -40,20 +39,42 @@ class WorkspaceRunDiff:
                     current = target.read_bytes().decode("utf-8", errors="replace")
                 except OSError:
                     current = None
-            if current == original:
+            if original.unavailable:
+                # 运行前的内容没留下来（二进制或超出大小上限）。这里不能编一个
+                # 基线：把全部现行行算成"新增"等于谎报进程做了什么，而增删计数
+                # 也会跟着说谎。文件仍然列出——它确实变了——但只说明为什么没有
+                # 文本差异，把判断留给读这份审计的人。
+                files.append(normalized)
+                note = (
+                    f"--- a/{normalized}\n"
+                    f"+++ b/{normalized}\n"
+                    "[pre-run content was not captured (binary or larger than the edit "
+                    "size limit); this diff cannot show what changed]\n"
+                )
+                chunks.append(note)
+                emitted_bytes += len(note.encode("utf-8"))
                 continue
+            if original.absent:
+                # 运行前不存在：只要现在还是不存在才算没变。这里不能改写成
+                # `current == original.text`——新建的空文件 current 是 ""，与
+                # `missing()` 的默认 text 相同，会把一次真实的创建判成无变化。
+                if current is None:
+                    continue
+            elif current == original.text:
+                continue
+            original_is_absent = original.absent
             diff_lines = list(
                 difflib.unified_diff(
-                    (original or "").splitlines(keepends=True),
+                    original.text.splitlines(keepends=True),
                     (current or "").splitlines(keepends=True),
-                    fromfile=f"a/{normalized}" if original is not None else "/dev/null",
-                    tofile=f"b/{normalized}" if current is not None else "/dev/null",
+                    fromfile="a/" + normalized if not original_is_absent else "/dev/null",
+                    tofile="b/" + normalized if current is not None else "/dev/null",
                 )
             )
             if not diff_lines:
                 # 空文件的创建/删除没有文本行，但文件存在性仍然是净变化。
                 diff_lines = [
-                    f"--- {'a/' + normalized if original is not None else '/dev/null'}\n",
+                    f"--- {'a/' + normalized if not original_is_absent else '/dev/null'}\n",
                     f"+++ {'b/' + normalized if current is not None else '/dev/null'}\n",
                 ]
             files.append(normalized)
@@ -81,11 +102,11 @@ class WorkspaceRunDiff:
             truncated=truncated,
         )
 
-    def original_contents(self) -> dict[str, str | None]:
+    def original_contents(self) -> dict[str, OriginalContent]:
         """返回当前保存的运行前内容副本。"""
         return dict(self._originals)
 
-    def restore(self, originals: dict[str, str | None]) -> None:
+    def restore(self, originals: dict[str, OriginalContent]) -> None:
         """用给定快照替换内部基线，供检查点恢复使用。"""
         self._originals = dict(originals)
 

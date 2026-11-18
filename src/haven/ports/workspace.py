@@ -229,6 +229,44 @@ class WorkspaceSnapshot:
     protected_digests: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class OriginalContent:
+    """一次运行开始前某个路径的内容，以及我们对它了解多少。
+
+    三种状态必须分开表示，因为下游动作完全不同：
+
+    - 运行前不存在（`absent`）——回滚是删除该路径；
+    - 内容确实拿到了（`text`）——回滚是写回这段文本，diff 能算出增删行数；
+    - 内容没能保留（`unavailable`：二进制文件，或超出 `MAX_EDIT_FILE_BYTES`）
+      ——我们不知道回滚该写什么，因此回滚必须拒绝，而不是把文件截断成空。
+
+    把第三种误报成"当时是空文件"，会让运行差异把一个 300KB 的文件谎称成
+    "从空改成现在这样"，更糟的是回滚会据此把它写成零字节。
+    """
+
+    #: 运行前保留的文本；`absent` 与 `unavailable` 时为 ""。
+    text: str = ""
+    #: 运行开始前该路径不存在。
+    absent: bool = False
+    #: 运行前存在，但内容未能保留（二进制或超出编辑大小上限）。
+    unavailable: bool = False
+
+    @classmethod
+    def missing(cls) -> OriginalContent:
+        """运行开始前该路径不存在。"""
+        return cls(absent=True)
+
+    @classmethod
+    def captured(cls, text: str) -> OriginalContent:
+        """运行前的内容确实保留下来了。"""
+        return cls(text=text)
+
+    @classmethod
+    def uncaptured(cls) -> OriginalContent:
+        """运行前该路径存在，但其内容没有保留下来。"""
+        return cls(unavailable=True)
+
+
 class WorkspaceError(Exception):
     """工作区违规时抛出；始终映射为稳定的工具错误。"""
 
@@ -356,11 +394,11 @@ class WorkspacePort(Protocol):
         """返回相对于本次运行原始内容的累计有界差异。"""
         ...
 
-    def original_contents(self) -> dict[str, str | None]:
-        """返回首次触碰时的原始文本；None 表示路径原本不存在。"""
+    def original_contents(self) -> dict[str, OriginalContent]:
+        """返回首次触碰时的运行前内容，含"不存在"与"未能保留"两种无文本状态。"""
         ...
 
-    def restore_originals(self, originals: dict[str, str | None]) -> None:
+    def restore_originals(self, originals: dict[str, OriginalContent]) -> None:
         """恢复运行级差异基线；调用方负责更高层授权。"""
         ...
 
@@ -368,6 +406,6 @@ class WorkspacePort(Protocol):
         """捕获用于归因进程外部写入的完整工作区摘要快照。"""
         ...
 
-    def register_run_original(self, path: str, content: str | None) -> None:
+    def register_run_original(self, path: str, content: OriginalContent) -> None:
         """登记文件的运行前内容，供 run_diff 和 rewind 使用。"""
         ...

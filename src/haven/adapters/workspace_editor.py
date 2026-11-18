@@ -33,6 +33,7 @@ from haven.ports.workspace import (
     EditOutcome,
     EditPreview,
     EffectUnknownError,
+    OriginalContent,
     PatchOpSpec,
     PatchPreview,
     PathFacts,
@@ -110,7 +111,9 @@ class WorkspaceEditor:
             if not syntax_diag.is_valid:
                 raise WorkspaceError("syntax_error", format_syntax_error(syntax_diag))
 
-        self._run_diff.remember(normalized, text)
+        # Haven 自己的编辑路径经过 `load_editable`，大小与 UTF-8 都已校验，
+        # 因此运行前内容必然拿得到——只有进程写入才可能留下 uncaptured。
+        self._run_diff.remember(normalized, OriginalContent.captured(text))
 
         postimage = self._atomic_write(target, normalized, new_text)
         return EditOutcome(path=normalized, preimage_digest=preimage, postimage_digest=postimage)
@@ -144,9 +147,9 @@ class WorkspaceEditor:
             postimage = self._atomic_create(target, normalized, content)
         except EffectUnknownError:
             # 发布已经发生但后像无法确认；仍要把可能落盘的文件纳入运行差异。
-            self._run_diff.remember(normalized, None)
+            self._run_diff.remember(normalized, OriginalContent.missing())
             raise
-        self._run_diff.remember(normalized, None)
+        self._run_diff.remember(normalized, OriginalContent.missing())
         return EditOutcome(path=normalized, preimage_digest="", postimage_digest=postimage)
 
     # -- 删除 ------------------------------------------------------------------
@@ -166,7 +169,7 @@ class WorkspaceEditor:
             raise WorkspaceError(
                 "stale_preimage", f"file changed since it was approved: {normalized!r}"
             )
-        self._run_diff.remember(normalized, text)
+        self._run_diff.remember(normalized, OriginalContent.captured(text))
         target.unlink()
         # 空 postimage 表示删除，与 ledger 使用相同约定。
         return EditOutcome(path=normalized, preimage_digest=preimage, postimage_digest="")
@@ -198,11 +201,11 @@ class WorkspaceEditor:
         try:
             postimage = self._atomic_create(dest_target, dest_norm, text)
         except EffectUnknownError:
-            self._run_diff.remember(src_norm, text)
-            self._run_diff.remember(dest_norm, None)
+            self._run_diff.remember(src_norm, OriginalContent.captured(text))
+            self._run_diff.remember(dest_norm, OriginalContent.missing())
             raise
-        self._run_diff.remember(src_norm, text)
-        self._run_diff.remember(dest_norm, None)
+        self._run_diff.remember(src_norm, OriginalContent.captured(text))
+        self._run_diff.remember(dest_norm, OriginalContent.missing())
         src_target.unlink()
         removal = EditOutcome(path=src_norm, preimage_digest=preimage, postimage_digest="")
         addition = EditOutcome(path=dest_norm, preimage_digest="", postimage_digest=postimage)
@@ -306,16 +309,16 @@ class WorkspaceEditor:
         """返回当前工作区相对本次运行基线的累计差异。"""
         return await self._run_diff.render()
 
-    def original_contents(self) -> dict[str, str | None]:
+    def original_contents(self) -> dict[str, OriginalContent]:
         """返回运行级差异组件保存的原始文件内容。"""
         return self._run_diff.original_contents()
 
-    def restore_originals(self, originals: dict[str, str | None]) -> None:
+    def restore_originals(self, originals: dict[str, OriginalContent]) -> None:
         """恢复运行级差异组件的原始内容索引，不直接写磁盘。"""
         self._run_diff.restore(originals)
 
     # -- 进程写入归因（ADR 0012）------------------------------------------------
 
-    def register_run_original(self, path: str, content: str | None) -> None:
+    def register_run_original(self, path: str, content: OriginalContent) -> None:
         """为进程修改过的路径填充运行 diff 的原始内容。"""
         self._run_diff.remember(path, content)

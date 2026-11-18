@@ -9,6 +9,7 @@ from haven.application.recovery_service import RecoveryService
 from haven.application.replay_service import ReplayService
 from haven.application.run_service import RunService
 from haven.contracts.checkpoint import (
+    ORIGINAL_CONTENT_UNCAPTURED,
     BudgetSnapshot,
     CheckpointV1,
     EvidenceSnapshot,
@@ -17,6 +18,7 @@ from haven.contracts.checkpoint import (
 from haven.contracts.model import ModelMessage
 from haven.domain.budget import Budget, BudgetUsage
 from haven.domain.enums import EffectState, RunStatus, StopReason
+from haven.domain.evidence import EditEvidence, EvidenceLedger
 from haven.ports.session import ExecutionRecord
 
 from ..integration.harness import (
@@ -534,3 +536,66 @@ class TestReplay:
         assert [e.seq for e in envelopes] == sorted(e.seq for e in envelopes)
         # replay 没有消耗任何模型轮次
         assert h.model.requests_seen is not None
+
+
+class TestRewindRefusesWhatItCannotProve:
+    """运行前内容没能保留时，回滚必须拒绝，而不是猜一个值写回去。"""
+
+    async def test_a_path_whose_pre_run_content_was_not_captured_blocks_rewind(
+        self, tmp_path: Path
+    ) -> None:
+        """`detect_changes` 曾把这种路径报成"当时是空文件"，回滚据此把它写成
+        零字节——一次无法证明的猜测毁掉真实数据。现在它必须停下来。"""
+        repo = make_repo(tmp_path)
+        h = Harness(repo, [[text("hi"), finish()]])
+        workspace = h.workspace
+        blob = repo / "assets" / "blob.bin"
+        blob.parent.mkdir(parents=True, exist_ok=True)
+        blob.write_bytes(b"\x00\x01\x02\x03\xff")
+        post = workspace.path_facts("assets/blob.bin")
+        assert post.digest is not None
+
+        run_id = "run-uncaptured"
+        await h.store.create_run(
+            run_id, str(repo), workspace.workspace_digest, "touch a blob", "interactive"
+        )
+        await h.store.update_run_status(run_id, RunStatus.EXECUTING_TOOL, "")
+        await h.store.save_checkpoint(
+            CheckpointV1(
+                run_id=run_id,
+                workspace_digest=workspace.workspace_digest,
+                goal="touch a blob",
+                mode="interactive",
+                status=RunStatus.EXECUTING_TOOL.value,
+                last_seq=2,
+                budget=BudgetSnapshot.from_domain(Budget()),
+                usage=UsageSnapshot.from_domain(BudgetUsage(steps=1, tool_calls=1)),
+                messages=(ModelMessage(role="assistant", content="working"),),
+                evidence=EvidenceSnapshot.from_domain(
+                    EvidenceLedger().with_edit(
+                        EditEvidence(1, "assets/blob.bin", "pre", post.digest)
+                    )
+                ),
+                files_read={},
+                # 内容从未保留：这正是当初会被误存成"空内容构件"的那一项。
+                original_artifacts={"assets/blob.bin": ORIGINAL_CONTENT_UNCAPTURED},
+            )
+        )
+        await h.store.record_execution(
+            ExecutionRecord(
+                call_id="c1",
+                run_id=run_id,
+                ticket_digest="t-uncaptured",
+                tool_name="repo.exec",
+                effect_state=EffectState.STARTED,
+                preimage_digest="pre",
+                postimage_digest=post.digest,
+                path="assets/blob.bin",
+            )
+        )
+
+        recovery = RecoveryService(h.store, workspace)
+        report = await recovery.rewind(run_id)
+        assert not report.rewound, "没有运行前内容，就不该动手"
+        assert any("not captured" in b for b in report.blockers)
+        assert blob.read_bytes() == b"\x00\x01\x02\x03\xff", "一个字节都没被改写"

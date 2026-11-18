@@ -48,7 +48,7 @@ from haven.ports.sandbox import (
     default_readable_roots,
 )
 from haven.ports.session import ExecutionRecord, SessionStorePort
-from haven.ports.workspace import WorkspacePort, WorkspaceSnapshot
+from haven.ports.workspace import OriginalContent, WorkspacePort, WorkspaceSnapshot
 
 
 class ProcessToolExecutor:
@@ -537,12 +537,20 @@ class ExternalChange:
     preimage_digest: str
     #: 进程返回后观察到的摘要。
     postimage_digest: str
-    #: 进程运行前保留的文本，用于生成可读差异。
-    before_content: str | None
+    #: 进程运行前的内容。三种状态不可混淆：`absent` 是当时不存在，`text` 是
+    #: 当时的内容（可能是空串，即确实是空文件），`unavailable` 是当时存在但
+    #: 内容没能保留——二进制文件或超出编辑大小上限。把最后一种报成空串，会让
+    #: 运行差异和回滚都把它当成"当时是空文件"处理。
+    before_content: OriginalContent
 
 
 def detect_changes(before: WorkspaceSnapshot, after: WorkspaceSnapshot) -> list[ExternalChange]:
-    """从两次工作区快照中提取摘要变化及可用的变更前文本。"""
+    """从两次工作区快照中提取摘要变化，以及我们对变更前内容了解多少。
+
+    `digests` 覆盖每个普通文件（含二进制），`contents` 只覆盖可生成差异的子集。
+    因此一个路径可能"摘要有变化但内容没保留"——这时必须说"不知道"，而不是
+    编一个空串出来：`WorkspaceRunDiff` 与回滚都把空串当作"当时确实是空文件"。
+    """
     changed = sorted(
         path
         for path in before.digests.keys() | after.digests.keys()
@@ -553,7 +561,16 @@ def detect_changes(before: WorkspaceSnapshot, after: WorkspaceSnapshot) -> list[
             path=path,
             preimage_digest=before.digests.get(path, ""),
             postimage_digest=after.digests.get(path, ""),
-            before_content=(before.contents.get(path, "") if path in before.digests else None),
+            before_content=_before_content(before, path),
         )
         for path in changed
     ]
+
+
+def _before_content(snapshot: WorkspaceSnapshot, path: str) -> OriginalContent:
+    """判断某个路径在快照里的内容属于三种状态中的哪一种。"""
+    if path not in snapshot.digests:
+        return OriginalContent.missing()
+    if path in snapshot.contents:
+        return OriginalContent.captured(snapshot.contents[path])
+    return OriginalContent.uncaptured()

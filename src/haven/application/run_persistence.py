@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from haven.application.emitter import EventEmitter
 from haven.application.state import RunContext
 from haven.contracts.checkpoint import (
+    ORIGINAL_CONTENT_UNCAPTURED,
     BudgetSnapshot,
     CheckpointV1,
     EvidenceSnapshot,
@@ -75,9 +76,17 @@ class CheckpointManager:
         original_artifacts: dict[str, str] = {}
         originals = self._workspace.original_contents() if self._include_originals else {}
         for path, content in originals.items():
-            original_artifacts[path] = (
-                "" if content is None else await self._store.put_artifact(content.encode("utf-8"))
-            )
+            if content.absent:
+                # 运行前不存在：空串是这个状态的既有编码，回滚据此删除该路径。
+                original_artifacts[path] = ""
+            elif content.unavailable:
+                # 运行前存在但内容没留下来。存成保留值而不是空串——空串会被回滚
+                # 当成"当时不存在"从而删掉它，也会被 diff 当成"当时是空文件"。
+                original_artifacts[path] = ORIGINAL_CONTENT_UNCAPTURED
+            else:
+                original_artifacts[path] = await self._store.put_artifact(
+                    content.text.encode("utf-8")
+                )
         checkpoint = CheckpointV1(
             run_id=ctx.run_id,
             workspace_digest=self._workspace.workspace_digest,

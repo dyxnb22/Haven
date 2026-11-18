@@ -20,6 +20,7 @@ from haven.ports.workspace import (
     EditPreview,
     ListEntry,
     ListResult,
+    OriginalContent,
     PatchOpSpec,
     PatchPreview,
     PathFacts,
@@ -358,11 +359,11 @@ class FsWorkspace:
         """返回运行级累计差异。"""
         return await self._editor.run_diff()
 
-    def original_contents(self) -> dict[str, str | None]:
+    def original_contents(self) -> dict[str, OriginalContent]:
         """返回工作区编辑器保存的运行前内容。"""
         return self._editor.original_contents()
 
-    def restore_originals(self, originals: dict[str, str | None]) -> None:
+    def restore_originals(self, originals: dict[str, OriginalContent]) -> None:
         """恢复运行级原始内容索引，不直接执行文件恢复。"""
         self._editor.restore_originals(originals)
 
@@ -375,6 +376,6 @@ class FsWorkspace:
             protected_components=PROTECTED_COMPONENTS,
         )
 
-    def register_run_original(self, path: str, content: str | None) -> None:
+    def register_run_original(self, path: str, content: OriginalContent) -> None:
         """登记进程外部写入路径的运行前内容，供差异和撤销使用。"""
         self._editor.register_run_original(path, content)
