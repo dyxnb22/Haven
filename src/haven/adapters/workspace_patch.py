@@ -513,7 +513,11 @@ class WorkspacePatchEngine:
                 original = on_disk_text = None
                 original_mode: int | None = None
                 if effect.tool_shape == "repo.edit":
-                    on_disk_text = target.read_text(encoding="utf-8")
+                    # 必须用 `load_editable` 而不是 `read_text`：后者以通用换行模式打开，
+                    # 会把 CRLF 折成 LF。这份文本是回滚和运行 diff 的"运行前内容"，
+                    # 折过一次之后，`haven rewind` 会按 LF 写回去——悄悄改掉文件的
+                    # 换行风格。预览阶段的 `seed` 用的就是 `load_editable`，两边必须一致。
+                    on_disk_text, _digest = load_editable(target, effect.path)
                     original = on_disk_text
                     original_mode = target.stat().st_mode & 0o7777
                 staged_name = staged[effect.path]
@@ -549,7 +553,8 @@ class WorkspacePatchEngine:
                 )
             for effect in removals:
                 target = self._root / effect.path
-                original = target.read_text(encoding="utf-8")
+                # 同写入分支：保留原始换行风格，回滚才是字节级的还原。
+                original, _digest = load_editable(target, effect.path)
                 original_mode = target.stat().st_mode & 0o7777
                 self._run_diff.remember(effect.path, OriginalContent.captured(original))
                 target.unlink()

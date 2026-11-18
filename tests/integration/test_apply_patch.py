@@ -284,3 +284,157 @@ class TestPatchEffectUnknown:
             record.effect_state is EffectState.EFFECT_UNKNOWN for record in executions
         )
         assert (repo / "src" / "calc.py").read_text() == original
+
+
+class TestPatchPreservesLineEndings:
+    """补丁的"运行前内容"必须字节级忠实，否则回滚会悄悄改掉换行风格。
+
+    提交循环原来用 `Path.read_text`，它以通用换行模式打开，把 CRLF 折成 LF。这份
+    文本同时喂给回滚和运行 diff（进而喂给 `haven rewind`），折过一次之后，还原
+    出来的就是另一个文件。
+    """
+
+    @staticmethod
+    def _crlf_repo(tmp_path: Path) -> Path:
+        repo = make_repo(tmp_path)
+        (repo / "src" / "calc.py").write_bytes(
+            b"def add(a, b):\r\n    return a - b  # BUG: should be +\r\n"
+        )
+        return repo
+
+    async def test_the_registered_pre_image_keeps_crlf(self, tmp_path: Path) -> None:
+        repo = self._crlf_repo(tmp_path)
+        h = Harness(
+            repo,
+            [
+                [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
+                [
+                    tool(
+                        "c2",
+                        "repo.apply_patch",
+                        operations=patch_ops(
+                            {
+                                "kind": "edit",
+                                "path": "src/calc.py",
+                                "old_string": "return a - b",
+                                "new_string": "return a + b",
+                            }
+                        ),
+                    ),
+                    finish("tool_calls"),
+                ],
+                [tool("c3", "repo.diff"), finish("tool_calls")],
+                [tool("c4", "repo.check", recipe_id="verify-calc"), finish("tool_calls")],
+                [text("Patched."), finish()],
+            ],
+        )
+        outcome = await h.service.run("Fix add with one atomic patch")
+        assert outcome.status is RunStatus.SUCCEEDED
+
+        originals = h.workspace.original_contents()
+        assert originals["src/calc.py"].text == (
+            "def add(a, b):\r\n    return a - b  # BUG: should be +\r\n"
+        ), "运行前内容带着 CRLF；haven rewind 才能把它按原样写回去"
+
+    async def test_a_deleted_file_keeps_crlf_in_its_registered_original(
+        self, tmp_path: Path
+    ) -> None:
+        """删除分支登记的是同一份"运行前内容"，`haven rewind` 靠它把文件找回来。"""
+        repo = self._crlf_repo(tmp_path)
+        (repo / "src" / "util.py").write_bytes(b"def sub(a, b):\r\n    return a - b\r\n")
+        h = Harness(
+            repo,
+            [
+                [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
+                [tool("c2", "repo.read", path="src/util.py"), finish("tool_calls")],
+                [
+                    tool(
+                        "c3",
+                        "repo.apply_patch",
+                        operations=patch_ops(
+                            {
+                                "kind": "edit",
+                                "path": "src/calc.py",
+                                "old_string": "return a - b",
+                                "new_string": "return a + b",
+                            },
+                            {"kind": "delete", "path": "src/util.py"},
+                        ),
+                    ),
+                    finish("tool_calls"),
+                ],
+                [tool("c4", "repo.diff"), finish("tool_calls")],
+                [tool("c5", "repo.check", recipe_id="verify-calc"), finish("tool_calls")],
+                [text("Removed."), finish()],
+            ],
+        )
+        outcome = await h.service.run("Drop the unused helper")
+        assert outcome.status is RunStatus.SUCCEEDED
+        assert not (repo / "src" / "util.py").exists()
+
+        originals = h.workspace.original_contents()
+        assert originals["src/util.py"].text == "def sub(a, b):\r\n    return a - b\r\n", (
+            "被删文件的运行前内容带着 CRLF，rewind 才能按原样恢复它"
+        )
+
+    async def test_rollback_restores_crlf_byte_for_byte(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """补丁失败后的回滚也必须是字节级还原。"""
+        repo = self._crlf_repo(tmp_path)
+        (repo / "src" / "util.py").write_bytes(b"def sub(a, b):\r\n    return a - b\r\n")
+        first_bytes = (repo / "src" / "calc.py").read_bytes()
+        second_bytes = (repo / "src" / "util.py").read_bytes()
+        h = Harness(
+            repo,
+            [
+                [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
+                [tool("c2", "repo.read", path="src/util.py"), finish("tool_calls")],
+                [
+                    tool(
+                        "c3",
+                        "repo.apply_patch",
+                        operations=patch_ops(
+                            {
+                                "kind": "edit",
+                                "path": "src/calc.py",
+                                "old_string": "return a - b",
+                                "new_string": "return a + b",
+                            },
+                            {
+                                "kind": "edit",
+                                "path": "src/util.py",
+                                "old_string": "return a - b",
+                                "new_string": "return a + b",
+                            },
+                        ),
+                    ),
+                    finish("tool_calls"),
+                ],
+                [text("Should not get here."), finish()],
+            ],
+        )
+
+        from haven.adapters import workspace_patch as patch_module
+
+        real_replace = patch_module.os.replace
+        calls = {"n": 0}
+
+        def flaky_replace(src: str, dst: str) -> None:
+            # 第一次 replace 是暂存文件落位；第二次让它炸，触发回滚。
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError("disk fell over mid-commit")
+            real_replace(src, dst)
+
+        monkeypatch.setattr(patch_module.os, "replace", flaky_replace)
+        await h.service.run("Fix add with one atomic patch")
+
+        completed = [
+            e
+            for e in h.sink.events_of("tool.completed")
+            if isinstance(e, ToolCompleted) and e.tool_name == "repo.apply_patch"
+        ]
+        assert completed and completed[0].error_code == "internal"
+        assert (repo / "src" / "calc.py").read_bytes() == first_bytes, "回滚把换行风格改掉了"
+        assert (repo / "src" / "util.py").read_bytes() == second_bytes
