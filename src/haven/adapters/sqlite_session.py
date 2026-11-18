@@ -34,7 +34,12 @@ from haven.contracts.project_memory import (
 )
 from haven.domain.digest import sha256_bytes, sha256_text
 from haven.domain.enums import ApprovalDecision, EffectState, RunStatus
-from haven.ports.session import INPUT_HISTORY_LIMIT, ArtifactError, ExecutionRecord, RunRecord
+from haven.ports.session import (
+    INPUT_HISTORY_LIMIT,
+    ExecutionRecord,
+    RunRecord,
+    StoreError,
+)
 
 DB_SCHEMA_VERSION = 6
 
@@ -150,10 +155,6 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
 }
 
 
-class StoreError(ArtifactError):
-    """持久化层无法完成事务时抛出的稳定错误。"""
-
-
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -247,14 +248,30 @@ class SqliteSessionStore:
     async def create_run(
         self, run_id: str, workspace: str, workspace_digest: str, goal: str, mode: str
     ) -> None:
-        """持久化一条初始状态为 ``CREATED`` 的运行记录。"""
+        """持久化一条初始状态为 ``CREATED`` 的运行记录。
+
+        重复 id 是调用方错误：运行记录是审计表面，静默覆盖会让一条已有运行的事件
+        流挂到另一条元数据上。包装成 `StoreError`，与内存实现抛同一种类型。
+        """
         now = _now()
-        await self._db.execute(
-            "INSERT INTO runs (id, workspace, workspace_digest, goal, mode, status, "
-            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (run_id, workspace, workspace_digest, goal, mode, RunStatus.CREATED.value, now, now),
-        )
-        await self._db.commit()
+        try:
+            await self._db.execute(
+                "INSERT INTO runs (id, workspace, workspace_digest, goal, mode, status, "
+                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    run_id,
+                    workspace,
+                    workspace_digest,
+                    goal,
+                    mode,
+                    RunStatus.CREATED.value,
+                    now,
+                    now,
+                ),
+            )
+            await self._db.commit()
+        except sqlite3.IntegrityError as exc:
+            raise StoreError(f"run {run_id!r} already exists") from exc
 
     async def update_run_status(self, run_id: str, status: RunStatus, stop_reason: str) -> None:
         """原子更新运行状态、停止原因和更新时间。"""

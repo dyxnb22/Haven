@@ -28,6 +28,15 @@ class ArtifactError(Exception):
     """内容寻址构件缺失其完整性保证时抛出的端口级错误。"""
 
 
+class StoreError(ArtifactError):
+    """持久化层无法完成事务时抛出的稳定错误。
+
+    定义在端口而不是某个 adapter 里：两个实现都必须能抛出它，调用方才不必为了识别
+    "这条记录已存在"而去 import sqlite。它曾经定义在 `sqlite_session` 中，于是内存
+    实现对同一种违规只能抛 `KeyError`，或者更糟——静默覆盖。
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class RunRecord:
     """持久化运行的索引信息，不包含完整事件和检查点。"""

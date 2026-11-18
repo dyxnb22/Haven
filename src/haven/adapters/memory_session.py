@@ -15,7 +15,12 @@ from haven.contracts.project_memory import (
 )
 from haven.domain.digest import sha256_bytes
 from haven.domain.enums import ApprovalDecision, EffectState, RunStatus
-from haven.ports.session import INPUT_HISTORY_LIMIT, ExecutionRecord, RunRecord
+from haven.ports.session import (
+    INPUT_HISTORY_LIMIT,
+    ExecutionRecord,
+    RunRecord,
+    StoreError,
+)
 
 
 def _now() -> str:
@@ -42,7 +47,13 @@ class MemorySessionStore:
     async def create_run(
         self, run_id: str, workspace: str, workspace_digest: str, goal: str, mode: str
     ) -> None:
-        """创建运行记录并初始化该运行的事件流。"""
+        """创建运行记录并初始化该运行的事件流。
+
+        重复 id 必须拒绝，与 SQLite 实现一致：运行记录是审计表面，静默覆盖会让一条
+        已有运行的事件流挂到另一条元数据上——一个说不通的状态。
+        """
+        if run_id in self.runs:
+            raise StoreError(f"run {run_id!r} already exists")
         now = _now()
         self.runs[run_id] = RunRecord(
             run_id=run_id,
@@ -58,8 +69,14 @@ class MemorySessionStore:
         self.events.setdefault(run_id, [])
 
     async def update_run_status(self, run_id: str, status: RunStatus, stop_reason: str) -> None:
-        """更新运行状态、停止原因和最后更新时间。"""
-        record = self.runs[run_id]
+        """更新运行状态、停止原因和最后更新时间。
+
+        未知 run_id 时安静返回，与 SQLite 的 `UPDATE ... WHERE id = ?`（影响 0 行）一致。
+        曾经这里抛 `KeyError`：一个原始异常穿过存储层，而生产用的那个实现只是空转。
+        """
+        record = self.runs.get(run_id)
+        if record is None:
+            return
         self.runs[run_id] = RunRecord(
             run_id=record.run_id,
             workspace=record.workspace,
@@ -196,8 +213,17 @@ class MemorySessionStore:
         }
 
     async def decide_approval(self, approval_id: str, decision: ApprovalDecision) -> None:
-        """写入审批决定，供后续一次性消费校验。"""
-        self.approvals[approval_id]["decision"] = decision.value
+        """写入审批决定，供后续一次性消费校验。
+
+        未知 approval_id 时安静返回，与 SQLite 的条件更新一致。曾经这里抛
+        `KeyError`：审批协调器用事件里得到的 id 来调用，一旦对不上，一个原始异常会
+        直接掀翻审批流程。安全性不受影响——`consume_approval` 才是凭据，它对未知
+        id 一律返回 False。
+        """
+        record = self.approvals.get(approval_id)
+        if record is None:
+            return
+        record["decision"] = decision.value
 
     async def consume_approval(self, approval_id: str, request_digest: str) -> bool:
         """仅在摘要匹配且决定为批准时消费审批，并保证只能成功一次。"""

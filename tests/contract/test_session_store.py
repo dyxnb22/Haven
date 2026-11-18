@@ -3,7 +3,8 @@
 import asyncio
 import json
 import sqlite3
-from collections.abc import AsyncIterator
+import tempfile
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import closing
 from pathlib import Path
 
@@ -818,3 +819,122 @@ async def test_sqlite_put_artifact_handles_exdev(
         assert read_back == data
     finally:
         await store.close()
+
+
+class TestBothStoresAgreeOnEdgeCases:
+    """两个实现对边界与失败路径必须给出一致的答案。
+
+    happy path 一直有参数化契约覆盖，但分歧藏在例外里——内存实现曾经在这些地方抛
+    `KeyError`，甚至静默覆盖已有记录，而生产用的 SQLite 实现只是空转。这里把整条
+    操作序列跑在两端并逐项比对，任何一方先改行为就会红。
+    """
+
+    @staticmethod
+    async def _probe(s: SessionStorePort) -> dict[str, object]:
+        out: dict[str, object] = {}
+        cases: list[tuple[str, Callable[[], Awaitable[object]]]] = [
+            ("update_missing_run", lambda: s.update_run_status("nope", RunStatus.SUCCEEDED, "x")),
+            (
+                "record_exec_unknown_run",
+                lambda: s.record_execution(
+                    ExecutionRecord(
+                        run_id="nope",
+                        call_id="c",
+                        ticket_digest="t",
+                        tool_name="repo.edit",
+                        effect_state=EffectState.STARTED,
+                        preimage_digest="p",
+                        postimage_digest="q",
+                        path="a.py",
+                    )
+                ),
+            ),
+            (
+                "update_exec_unknown",
+                lambda: s.update_execution_state("nope", "c", EffectState.CONFIRMED),
+            ),
+            ("record_approval_unknown_run", lambda: s.record_approval("a", "nope", "d")),
+            ("consume_unknown_approval", lambda: s.consume_approval("nope", "d")),
+            (
+                "decide_unknown_approval",
+                lambda: s.decide_approval("nope", ApprovalDecision.APPROVED),
+            ),
+            ("delete_missing_run", lambda: s.delete_run("nope")),
+            ("clear_missing_ws_history", lambda: s.clear_input_history("nope")),
+            ("clear_missing_ws_notes", lambda: s.clear_project_notes("nope")),
+            ("delete_missing_artifact", lambda: s.delete_artifact("0" * 64)),
+            ("empty_approval_id", lambda: s.record_approval("", "e1", "d")),
+        ]
+        for name, factory in cases:
+            try:
+                await factory()
+                out[name] = "ok"
+            except Exception as exc:  # noqa: BLE001 - 比较的是异常类型本身
+                out[name] = type(exc).__name__
+
+        await s.create_run("dup", "/ws", "d1", "first", "interactive")
+        try:
+            await s.create_run("dup", "/ws", "d1", "second", "interactive")
+            out["duplicate_create"] = "ok"
+        except Exception as exc:  # noqa: BLE001
+            out["duplicate_create"] = type(exc).__name__
+
+        await s.append_event("e1", StepStarted(run_id="e1", step=1))
+        await s.append_event("e1", StepStarted(run_id="e1", step=2))
+        await s.append_event("e2", StepStarted(run_id="e2", step=1))
+        out["seq_e1"] = [e.seq for e in await s.load_events("e1")]
+        out["seq_e2"] = [e.seq for e in await s.load_events("e2")]
+
+        for index in range(30):
+            await s.record_input("cap", f"msg-{index}")
+        history = await s.load_input_history("cap")
+        out["input_cap_len"] = len(history)
+        out["input_cap_first"] = history[0] if history else None
+
+        try:
+            for index in range(60):
+                await s.add_project_note("ncap", f"n{index}")
+            out["note_cap"] = len(await s.list_project_notes("ncap"))
+        except Exception as exc:  # noqa: BLE001
+            out["note_cap"] = f"{type(exc).__name__}:{len(await s.list_project_notes('ncap'))}"
+
+        first = await s.put_artifact(b"same")
+        second = await s.put_artifact(b"same")
+        out["artifact_same_digest"] = first == second
+        await s.delete_artifact(first)
+        out["artifact_after_delete_one"] = await s.get_artifact(first)
+        return out
+
+    async def test_the_two_implementations_agree(self, store: SessionStorePort) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            other = await SqliteSessionStore.open(
+                Path(directory) / "other.db", Path(directory) / "art"
+            )
+            try:
+                expected = await self._probe(other)
+            finally:
+                await other.close()
+        assert await self._probe(store) == expected
+
+    async def test_a_duplicate_run_id_is_refused_by_both(self, store: SessionStorePort) -> None:
+        """重复 id 必须拒绝：运行记录是审计表面，静默覆盖会让一条已有运行的事件流
+        挂到另一条元数据上。"""
+        await store.create_run("dup", "/ws", "d1", "first", "interactive")
+        with pytest.raises(StoreError):
+            await store.create_run("dup", "/ws", "d1", "second", "interactive")
+        assert (await store.get_run("dup")).goal == "first"
+
+    async def test_updating_an_unknown_run_is_a_no_op_not_a_crash(
+        self, store: SessionStorePort
+    ) -> None:
+        """未知 run_id 安静返回：SQLite 的 `UPDATE ... WHERE id = ?` 影响 0 行，
+        内存实现曾经在这里抛 `KeyError`。"""
+        await store.update_run_status("nope", RunStatus.SUCCEEDED, "x")
+        assert await store.get_run("nope") is None
+
+    async def test_deciding_an_unknown_approval_is_a_no_op_not_a_crash(
+        self, store: SessionStorePort
+    ) -> None:
+        """审批协调器拿事件里的 id 来调用；对不上时不该抛原始异常掀翻审批流程。"""
+        await store.decide_approval("nope", ApprovalDecision.APPROVED)
+        assert await store.consume_approval("nope", "d") is False
