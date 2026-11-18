@@ -1002,3 +1002,109 @@ class TestCancellation:
         assert finished[0].status == "effect_unknown"
         executions = await h.store.load_executions(finished[0].run_id)
         assert executions[0].effect_state is EffectState.EFFECT_UNKNOWN
+
+
+class TestNoToolCallEscapesTheLoop:
+    """流水线的不变量：工具调用绝不向代理循环抛异常。
+
+    `ToolPipeline.execute` 原先只捕获 `WorkspaceError`，于是一次普通的 I/O 错误
+    就能穿过 execute 逃出 `run()`，整次运行崩溃——而模块文档字符串承诺的恰恰是
+    "一条错误路径不会终止整个运行"。
+    """
+
+    async def test_an_unexpected_read_failure_becomes_a_structured_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = make_repo(tmp_path)
+        h = Harness(
+            repo,
+            [
+                [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
+                [text("The read failed; I will say so."), finish()],
+            ],
+        )
+
+        async def boom(*args: object, **kwargs: object) -> None:
+            raise OSError("Input/output error")
+
+        monkeypatch.setattr(h.workspace, "read_file", boom)
+        outcome = await h.service.run("Read the calculator")
+
+        assert outcome.status is RunStatus.SUCCEEDED, "一次读取失败不该终止整次运行"
+        tool_msg = next(m.content for m in h.model.requests_seen[-1].messages if m.role == "tool")
+        assert '"error_code": "internal"' in tool_msg
+        # 带上异常类型：轨迹里必须能看出这是什么，而不是一句泛泛的失败。
+        assert "OSError" in tool_msg
+
+    async def test_an_unexpected_facts_failure_becomes_a_structured_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """事实收集阶段同样受这条不变量管束。
+
+        `_facts_path_read` 直接调 `path_facts` 而没有自己的 try；一次 I/O 错误
+        在那里逃出去，同样会终止整次运行。读取工具的处理器不再调 `path_facts`，
+        因此这里的替换只会命中事实收集那一次。
+        """
+        repo = make_repo(tmp_path)
+        h = Harness(
+            repo,
+            [
+                [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
+                [text("The lookup failed; I will say so."), finish()],
+            ],
+        )
+
+        def boom(path: str) -> object:
+            raise OSError("facts collection blew up")
+
+        monkeypatch.setattr(h.workspace, "path_facts", boom)
+        outcome = await h.service.run("Read the calculator")
+
+        assert outcome.status is RunStatus.SUCCEEDED
+        tool_msg = next(m.content for m in h.model.requests_seen[-1].messages if m.role == "tool")
+        assert '"error_code": "internal"' in tool_msg
+        assert "OSError" in tool_msg
+
+    async def test_an_unexpected_failure_after_a_write_is_effect_unknown(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """写入途中炸开时，"无副作用"是不能假设的。
+
+        产生副作用的工具族在重新抛出前已把这次调用记成 EFFECT_UNKNOWN；流水线必须
+        照实上报，让运行停下来等人，而不是带着无法证明的磁盘状态继续往下写。
+        """
+        repo = make_repo(tmp_path)
+        h = Harness(
+            repo,
+            [
+                [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
+                [
+                    tool(
+                        "c2",
+                        "repo.edit",
+                        path="src/calc.py",
+                        old_string="return a - b  # BUG: should be +",
+                        new_string="return a + b",
+                    ),
+                    finish("tool_calls"),
+                ],
+                [text("Edited."), finish()],
+            ],
+        )
+        original_apply = h.workspace.apply_edit
+
+        async def apply_then_blow_up(*args: object, **kwargs: object) -> object:
+            await original_apply(*args, **kwargs)
+            # 写入已经落盘，之后的事情才炸开——这正是"副作用可能已发生"的形状。
+            raise RuntimeError("evidence registration blew up")
+
+        monkeypatch.setattr(h.workspace, "apply_edit", apply_then_blow_up)
+
+        outcome = await h.service.run("Fix add()")
+
+        assert outcome.status is RunStatus.EFFECT_UNKNOWN
+        assert outcome.stop_reason is StopReason.EFFECT_UNKNOWN
+        executions = await h.store.load_executions(outcome.run_id)
+        assert executions and all(
+            record.effect_state is EffectState.EFFECT_UNKNOWN for record in executions
+        )

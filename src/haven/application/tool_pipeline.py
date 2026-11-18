@@ -59,6 +59,7 @@ from haven.contracts.tools import (
 from haven.domain.digest import canonical_json
 from haven.domain.enums import (
     ApprovalMode,
+    EffectState,
     PermissionMode,
     PolicyDecision,
     RunStatus,
@@ -71,6 +72,7 @@ from haven.ports.executor import ExecutorPort
 from haven.ports.sandbox import SandboxLauncher
 from haven.ports.session import SessionStorePort
 from haven.ports.workspace import (
+    EffectUnknownError,
     PatchPreview,
     WorkspaceError,
     WorkspacePort,
@@ -111,6 +113,7 @@ class ToolPipeline:
         delegate: DelegateHandler | None = None,
     ) -> None:
         self._workspace = workspace
+        self._store = store
         self._emitter = emitter
         self._registry = registry
         self._recipes = recipes
@@ -216,6 +219,16 @@ class ToolPipeline:
         except WorkspaceError as exc:
             return await self._finish(
                 ctx, call, error_result(call, map_workspace_error(exc), str(exc)), started
+            )
+        except Exception as exc:
+            # 事实收集同样不能把异常扔给代理循环。此时票据还没铸，执行日志里也不
+            # 可能有这条调用，因此不存在"副作用是否已发生"的问题——一次读取失败
+            # 就是一次读取失败。带上异常类型，让轨迹里能看出这是什么。
+            return await self._finish(
+                ctx,
+                call,
+                error_result(call, ToolErrorCode.INTERNAL, f"{type(exc).__name__}: {exc}"),
+                started,
             )
 
         # 4. 确定性策略。
@@ -348,6 +361,35 @@ class ToolPipeline:
             return await self._finish(
                 ctx, call, error_result(call, map_workspace_error(exc), str(exc)), started
             )
+        except EffectUnknownError as exc:
+            # 副作用已经发生，但确定性代码无法证明最终的磁盘状态。它有意不继承
+            # WorkspaceError（见 `ports/workspace`），因此不会落进上面那一支；若有
+            # 哪条路径让它逃到这里，就必须以"效果未知"上报。降级成一次普通失败会让
+            # 恢复流程以为这次调用可以安全重放。
+            return await self._finish(
+                ctx,
+                call,
+                error_result(call, ToolErrorCode.INTERNAL, str(exc)),
+                started,
+                effect_unknown=True,
+            )
+        except Exception as exc:
+            # 只捕获 WorkspaceError 会让任何未预期异常穿过 execute 逃到代理循环：
+            # 一次 I/O 错误就能终止整次运行，正是上面那条不变量要防的事。结构化失败
+            # 让模型看到"这个调用失败了、为什么"，然后继续。
+            # `CancelledError` 是 BaseException，不会被这一支吞掉。
+            #
+            # 但"未预期"不等于"无副作用"：三个会产生副作用的工具族在重新抛出前都已把
+            # 这次调用记成 EFFECT_UNKNOWN。照实上报，运行才会停下来等人，而不是带着
+            # 一个无法证明的磁盘状态继续往下写。
+            undetermined = await self._side_effect_is_undetermined(ctx.run_id, call.call_id)
+            return await self._finish(
+                ctx,
+                call,
+                error_result(call, ToolErrorCode.INTERNAL, f"{type(exc).__name__}: {exc}"),
+                started,
+                effect_unknown=undetermined,
+            )
         return await self._finish(
             ctx, call, execution.result, started, execution.effect_unknown, execution.process
         )
@@ -358,6 +400,22 @@ class ToolPipeline:
         self, ctx: RunContext, call: ToolCallProposal, args: ToolArgs
     ) -> tuple[ToolFacts, ToolPreview]:
         return await self._facts_collector.collect(ctx, call, args)
+
+    async def _side_effect_is_undetermined(self, run_id: str, call_id: str) -> bool:
+        """执行日志是否已把这次调用记成"效果未知"。
+
+        产生副作用的工具族在重新抛出未预期异常前都会写这一笔，因此日志是"副作用
+        是否可能已落盘"的权威答案。查询失败时保守地返回 True：宁可多停一次，
+        也不要带着无法证明的磁盘状态继续运行。
+        """
+        try:
+            records = await self._store.load_executions(run_id)
+        except Exception:
+            return True
+        return any(
+            record.call_id == call_id and record.effect_state is EffectState.EFFECT_UNKNOWN
+            for record in records
+        )
 
     async def _ask_approval(
         self,
