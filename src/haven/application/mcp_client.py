@@ -205,9 +205,10 @@ class MCPClient:
             raise MCPError(f"server {self.config.name} is not running")
 
         self._request_id += 1
+        expected_id = self._request_id
         msg = {
             "jsonrpc": "2.0",
-            "id": self._request_id,
+            "id": expected_id,
             "method": method,
             "params": params,
         }
@@ -216,24 +217,45 @@ class MCPClient:
         self._process.stdin.write(line.encode("utf-8"))
         await self._process.stdin.drain()
 
-        # 等待响应行（有界超时，防止外部 MCP Server 阻塞整机代理）
-        try:
-            resp_line = await asyncio.wait_for(self._process.stdout.readline(), timeout=timeout)
-        except TimeoutError as exc:
-            raise MCPError(
-                f"server {self.config.name} timed out after {timeout}s waiting for {method}"
-            ) from exc
+        # 等待**属于本次请求**的响应行（有界超时，防止外部 MCP Server 阻塞整机代理）。
+        # 必须按 id 匹配，而不能"读到一行就算"：JSON-RPC 允许服务端在请求在途时主动
+        # 发通知（`notifications/progress` 等，没有 id），那种行没有 result，把它当
+        # 响应会让本次调用拿到空结果；更糟的是超时放弃的请求，其真实响应仍留在管道
+        # 里，下一次调用会读到它——从此每次调用都错位一格，且不报任何错误。
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise MCPError(
+                    f"server {self.config.name} timed out after {timeout}s waiting for {method}"
+                )
+            try:
+                resp_line = await asyncio.wait_for(self._process.stdout.readline(), remaining)
+            except TimeoutError as exc:
+                raise MCPError(
+                    f"server {self.config.name} timed out after {timeout}s waiting for {method}"
+                ) from exc
 
-        if not resp_line:
-            raise MCPError(f"server {self.config.name} closed stdout unexpectedly")
+            if not resp_line:
+                raise MCPError(f"server {self.config.name} closed stdout unexpectedly")
 
-        try:
-            data = json.loads(resp_line.decode("utf-8", errors="replace"))
+            try:
+                data = json.loads(resp_line.decode("utf-8", errors="replace"))
+            except json.JSONDecodeError as exc:
+                raise MCPError(f"invalid json-rpc from {self.config.name}: {exc}") from exc
             if not isinstance(data, dict):
                 raise MCPError(f"invalid json-rpc from {self.config.name}: expected object")
+
+            response_id = data.get("id")
+            if response_id is None:
+                # 服务端通知：与本请求无关，丢弃后继续等。
+                continue
+            if response_id != expected_id:
+                raise MCPError(
+                    f"server {self.config.name} answered request {expected_id} "
+                    f"with a response for {response_id!r}; the session is desynchronized"
+                )
             return data
-        except json.JSONDecodeError as exc:
-            raise MCPError(f"invalid json-rpc from {self.config.name}: {exc}") from exc
 
     async def _send_notification(self, method: str, params: dict[str, Any]) -> None:
         if not self.is_running or self._process is None or self._process.stdin is None:

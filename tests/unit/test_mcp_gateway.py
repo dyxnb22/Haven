@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tomllib
 from pathlib import Path
@@ -102,6 +103,20 @@ for line in sys.stdin:
 """
 
 
+#: 与上面的 mock 相同，但在每次 tools/call 的响应之前先发一条 JSON-RPC 通知
+#: （没有 id）。规范允许服务端在请求在途时主动发通知；客户端必须跳过它，否则会
+#: 把通知当成响应，并让真正的响应留在管道里——从此每次调用都错位一格。
+NOISY_MCP_SERVER_SCRIPT = MOCK_MCP_SERVER_SCRIPT.replace(
+    '    elif method == "tools/call":',
+    """    elif method == "tools/call":
+        note = {"jsonrpc": "2.0", "method": "notifications/progress",
+                "params": {"progressToken": "tok", "progress": 0.5}}
+        sys.stdout.write(json.dumps(note) + "\\n")
+        sys.stdout.flush()
+""",
+)
+
+
 def test_config_parsing_mcp_servers() -> None:
     toml_str = """
 [mcp.servers.github]
@@ -181,6 +196,38 @@ async def test_mcp_client_handshake_and_filtering() -> None:
     finally:
         await client.close()
         assert not client.is_running
+
+
+@pytest.mark.asyncio
+async def test_server_notifications_are_skipped_not_mistaken_for_the_response() -> None:
+    """服务端在请求在途时发的通知必须被跳过，而不是被当成响应。
+
+    通知没有 id、也没有 result。把它当响应会让本次调用拿到空结果，而真正的响应
+    留在管道里，下一次调用读到它——从此每次调用错位一格，且不报任何错误。
+    """
+    config = MCPServerConfig(
+        name="noisy_srv",
+        command=sys.executable,
+        args=("-c", NOISY_MCP_SERVER_SCRIPT),
+        allowed_tools=("lookup",),
+        read_only_tools=("lookup",),
+    )
+    client = MCPClient(config)
+    try:
+        await client.start()
+        await client.discover_tools()
+
+        # 第一次调用：通知先到，客户端必须越过它拿到真正的响应。
+        first = await client.call_tool("lookup", {"query": "first"})
+        assert not first["is_error"]
+        assert "called lookup" in json.dumps(first)
+
+        # 第二次调用：若第一次把真响应留在了管道里，这次就会读到它而错位。
+        second = await client.call_tool("lookup", {"query": "second"})
+        assert not second["is_error"]
+        assert "second" in json.dumps(second), "第二次调用读到了第一次的响应——会话已错位"
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio

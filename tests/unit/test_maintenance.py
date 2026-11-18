@@ -14,8 +14,9 @@ from haven.contracts.checkpoint import (
     UsageSnapshot,
 )
 from haven.domain.budget import Budget, BudgetUsage
-from haven.domain.enums import RunStatus
+from haven.domain.enums import EffectState, RunStatus
 from haven.domain.evidence import DiffEvidence, EditEvidence, EvidenceLedger
+from haven.ports.session import ExecutionRecord
 
 
 async def _seed_run(
@@ -165,3 +166,32 @@ async def test_pending_review_protects_run_and_recorded_diff_until_resolved() ->
     report = await collect_garbage(store, keep=0, apply=True)
     assert report.deleted == ("review",)
     assert await store.get_artifact(diff_digest) is None
+
+
+async def test_an_undetermined_side_effect_is_never_collected() -> None:
+    """`effect_unknown` 是终态，但它的执行记录是唯一的对账证据。
+
+    删掉运行会连带删掉这些记录，把"那次写入到底发生没有"永久变成谜。它必须和
+    待审阅一样被保护，直到有人用 `haven reconcile` 做出决定。
+    """
+    store = MemorySessionStore()
+    await _seed_run(store, "ambiguous", status=RunStatus.EFFECT_UNKNOWN)
+    await store.record_execution(
+        ExecutionRecord(
+            run_id="ambiguous",
+            call_id="call-1",
+            ticket_digest="ticket",
+            tool_name="repo.edit",
+            effect_state=EffectState.STARTED,
+            preimage_digest="before",
+            postimage_digest="after",
+            path="a.py",
+        )
+    )
+    report = await collect_garbage(store, keep=0, apply=True)
+    assert report.skipped_unreconciled == ("ambiguous",)
+    assert report.deleted == ()
+    # 记录仍在：恢复服务还能读出它并要求人类决定
+    executions = await store.load_executions("ambiguous")
+    assert executions and executions[0].effect_state is EffectState.STARTED
+    assert any("reconcile" in note for note in report.notes)

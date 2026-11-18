@@ -24,6 +24,7 @@ from haven.application.skills import (
     SkillCatalog,
     SkillError,
     SkillSelectionError,
+    _is_within,
     discover_skills,
     parse_skill,
     read_skill_file,
@@ -383,15 +384,47 @@ class TestSkillFileReader:
             read_skill_file(catalog, catalog.skills[0], "../other/secret.md")
 
     def test_a_path_through_a_symlinked_directory_is_refused(self, tmp_path: Path) -> None:
-        """目录组件是链接时，包含性检查是最后一道防线。"""
+        """目录组件是链接时，先报"这是个链接"，再谈包含性。
+
+        `target.is_symlink()` 只看最后一层，看不见中间的 `link`；逐组件检查之后，
+        作者听到的是"link 是个符号链接"，而不是一句泛泛的越界。
+        """
         outside = tmp_path / "outside"
         outside.mkdir()
         (outside / "secret.md").write_text("SECRET", encoding="utf-8")
         self._skill_dir(tmp_path, "demo")
         (tmp_path / "demo" / "link").symlink_to(outside, target_is_directory=True)
         catalog = self._catalog(tmp_path)
-        with pytest.raises(SkillError, match="escapes the skill directory"):
+        with pytest.raises(SkillError, match="refused: skill directory 'link' is a symlink"):
             read_skill_file(catalog, catalog.skills[0], "link/secret.md")
+
+    def test_a_skill_directory_that_became_a_symlink_is_refused(self, tmp_path: Path) -> None:
+        """catalog 是上一次发现的快照：目录此后可能已经换成了链接。
+
+        `discover_skills` 拒绝链接目录，但 `skill.read` 不能因此就相信快照——
+        它指向哪里，这一道边界就必须在哪里拦住。
+        """
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.md").write_text("SECRET", encoding="utf-8")
+        directory = self._skill_dir(tmp_path, "demo")
+        catalog = self._catalog(tmp_path)
+        (directory / SKILL_FILENAME).unlink()
+        directory.rmdir()
+        directory.symlink_to(outside, target_is_directory=True)
+        with pytest.raises(SkillError, match="refused: skill directory 'demo' is a symlink"):
+            read_skill_file(catalog, catalog.skills[0], "secret.md")
+
+    def test_the_boundary_is_a_directory_not_a_string_prefix(self) -> None:
+        """`<root>/foo` 与 `<root>/foobar` 是两个技能目录，不是包含关系。
+
+        字符串前缀会把它们判成同一个，于是 `foo` 里的技能可以读到 `foobar` 的
+        文件。用父目录链比较，这对兄弟就必须分开。
+        """
+        assert _is_within(Path("/s/foo"), Path("/s/foo/x.md"))
+        assert _is_within(Path("/s/foo"), Path("/s/foo"))
+        assert not _is_within(Path("/s/foo"), Path("/s/foobar/x.md"))
+        assert not _is_within(Path("/s/foo"), Path("/s"))
 
     def test_a_symlinked_auxiliary_file_is_refused(self, tmp_path: Path) -> None:
         """与 `discover_skills` 拒绝符号链接同理由：一个指向 ~/.ssh/id_rsa 的

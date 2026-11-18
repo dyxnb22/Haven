@@ -202,6 +202,31 @@ def parse_allowed_tools(raw: str) -> tuple[str, ...]:
     return tuple(sorted(names))
 
 
+def _first_symlinked_component(root: Path, *parts: str) -> str | None:
+    """从 `root` 起逐层往下走，返回第一个是符号链接的组件名；没有则返回 None。
+
+    必须逐层而不能只看终点：`Path.is_symlink()` 只回答"最后这一层是不是链接"，
+    看不见 `skills/evil/SKILL.md` 里那个指向 `~/.ssh` 的 `evil` 目录——而
+    `glob` 会跟着链接走进去，于是技能根之外的 SKILL.md 就被收进了提示词，
+    边界却以为自己拦住了什么。
+    """
+    current = root
+    for part in parts:
+        current = current / part
+        if current.is_symlink():
+            return part
+    return None
+
+
+def _is_within(base: Path, candidate: Path) -> bool:
+    """`candidate` 是 `base` 自身或它的后代吗。
+
+    用父目录链做组件级比较，而不是字符串前缀：`str.startswith` 会把
+    `/skills/foo` 和 `/skills/foobar` 判成包含关系，而那是两个不同的技能目录。
+    """
+    return candidate == base or base in candidate.parents
+
+
 def discover_skills(*, user_root: Path, project_root: Path) -> SkillCatalog:
     """从两个根目录发现技能：用户级优先，然后是项目级。
 
@@ -231,6 +256,11 @@ def discover_skills(*, user_root: Path, project_root: Path) -> SkillCatalog:
                 # 与 `FsWorkspace.path_facts` 拒绝符号链接同理由：一个指向
                 # ~/.ssh/id_rsa 的 SKILL.md 会让 Haven 把工作区之外的敏感文件
                 # 读进提示词，而这条边界本应是"只读技能目录里的普通文件"。
+                #
+                # 只查最后一层就够，因为 `glob` 的目录组件不跟随符号链接：一个
+                # 链接技能目录压根不会出现在 candidates 里（它会安静地消失，而不是
+                # 被加载）。真正需要逐组件走查的是 `read_skill_file`——那里用户给的
+                # 是任意相对路径，中间每一层都可能是出口。
                 refused.append(SkillRefusal(source, "refused: skill file is a symlink"))
                 continue
             try:
@@ -273,7 +303,9 @@ def read_skill_file(catalog: SkillCatalog, skill: Skill, relative: str) -> tuple
     - 只接受技能自己目录内的相对路径——绝对路径、`..`、以及指向另一个技能目录
       的路径全部拒绝，所以一个技能读不到另一个技能的文件；
     - 拒绝符号链接，与 `discover_skills` 同理由：一个指向 `~/.ssh/id_rsa` 的
-      `reference.md` 会把工作区之外的秘密读进提示词；
+      `reference.md` 会把工作区之外的秘密读进提示词。检查覆盖技能目录自身和
+      路径上的每一层中间组件——`resolve()` 和 `read_text` 都会跟着链接走，
+      而 `target.is_symlink()` 只看得见最后一层；
     - 按 `MAX_SKILL_FILE_CHARS` 截断，因此一个巨大的参考文件不会挤爆上下文。
 
     失败即关闭：任何不符合之处都抛 `SkillError`，由工具通道转成结构化的
@@ -289,13 +321,25 @@ def read_skill_file(catalog: SkillCatalog, skill: Skill, relative: str) -> tuple
     root = catalog.root_for(skill.scope)
     if root is None:
         raise SkillError(f"no {skill.scope} skill root is configured")
-    target = root / skill.name / relative
+    base = root / skill.name
+    # 技能目录自身是链接，意味着这个"技能"根本不在技能根下面：它指向哪里，
+    # `skill.read` 就能读哪里。`discover_skills` 和 `list_skill_files` 都拒绝这种
+    # 情况，这里是第三道——catalog 是上一次发现的快照，目录此后可能已经变了。
+    if base.is_symlink():
+        raise SkillError(f"refused: skill directory {base.name!r} is a symlink")
+    target = base / relative
     # 先查符号链接再做包含性检查：`resolve()` 会跟随链接，因此反过来会让一个
     # 指向外部的链接报成"越界"，把真正的问题盖掉——而"这是个链接"才是作者
-    # 需要听到的那句话。
-    if target.is_symlink():
-        raise SkillError("refused: skill file is a symlink")
-    if not str(target.resolve()).startswith(str((root / skill.name).resolve())):
+    # 需要听到的那句话。逐组件，因为 `reference/links/x.md` 里那个中间的链接
+    # 目录同样是一道出口，`target.is_symlink()` 看不见它。
+    linked = _first_symlinked_component(base, *parts)
+    if linked is not None:
+        if linked == parts[-1]:
+            raise SkillError("refused: skill file is a symlink")
+        raise SkillError(f"refused: skill directory {linked!r} is a symlink")
+    # 边界用父目录链比较而不是字符串前缀：`str.startswith` 会把
+    # `<root>/foo` 和 `<root>/foobar` 判成包含关系，而那是两个不同的技能目录。
+    if not _is_within(base.resolve(), target.resolve()):
         raise SkillError("skill file path escapes the skill directory")
     try:
         text = target.read_text(encoding="utf-8")

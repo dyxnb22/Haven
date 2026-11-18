@@ -135,6 +135,16 @@ async def test_fetch_imported_resource_flow() -> None:
         client.start.assert_awaited_once()
         client.close.assert_awaited_once()
 
+    # 握手失败也必须 close：start() 自己 spawn 子进程，把它放在 try 之外会让
+    # 服务端立刻退出或 initialize 超时的那一类失败带着孤儿进程逃出去。
+    with patch("haven.application.mcp_resources.MCPClient") as mock_cls:
+        client = mock_cls.return_value
+        client.start = AsyncMock(side_effect=MCPError("handshake failed"))
+        client.close = AsyncMock()
+        with pytest.raises(MCPError, match="handshake failed"):
+            await fetch_imported_resource(cfg, "docs://v1/guide")
+        client.close.assert_awaited_once()
+
     # 测试空内容异常
     with patch("haven.application.mcp_resources.MCPClient") as mock_cls:
         client = mock_cls.return_value

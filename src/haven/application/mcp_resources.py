@@ -95,8 +95,12 @@ async def fetch_imported_resource(
 ) -> ImportedResource:
     """连接外部 MCP Server 读取资源内容并封装为 ImportedResource。"""
     client = MCPClient(server_config)
-    await client.start()
+    # `start()` 自己 spawn 子进程，然后才做 initialize/initialized 握手。把它放在
+    # try 之外，意味着任何一种握手失败（服务端立刻退出、initialize 超时、畸形
+    # JSON-RPC）都会带着一个活的子进程和它的 stderr 读取任务逃出去——CLI 打印
+    # 一行错误后退出，那个 MCP server 就作为孤儿继续跑。
     try:
+        await client.start()
         res = await client.read_resource(uri)
         contents = res.get("contents", [])
         if not contents or not isinstance(contents, list):

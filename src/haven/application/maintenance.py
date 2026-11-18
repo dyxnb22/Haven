@@ -27,6 +27,8 @@ class GcReport:
     deleted: tuple[str, ...] = ()
     #: 被明确跳过、完全不触碰的活动运行 ID。
     skipped_active: tuple[str, ...] = ()
+    #: 被跳过、因为删除会销毁无法重建的对账证据的运行 ID。
+    skipped_unreconciled: tuple[str, ...] = ()
     #: 被选中删除的无引用构件数量。
     artifacts_deleted: int = 0
     #: 本次是 dry run、没有删除任何记录或构件时为 True。
@@ -63,10 +65,18 @@ async def collect_garbage(
     kept: list[str] = []
     deleted: list[str] = []
     skipped_active: list[str] = []
+    skipped_unreconciled: list[str] = []
     terminal_seen = 0
     for run in runs:
         if run.status in ACTIVE_STATUSES:
             skipped_active.append(run.run_id)
+            continue
+        # `effect_unknown` 是终态，但它的 executions 记录是判断"那次写入到底发生
+        # 没有"的唯一证据。删掉运行就连带删掉这些记录，于人于 `haven reconcile`
+        # 都是把一次无法断定的副作用永久变成谜。它与"待审阅"是同一种保护：
+        # 需要人类先做决定，然后才能被回收。
+        if run.status is RunStatus.EFFECT_UNKNOWN:
+            skipped_unreconciled.append(run.run_id)
             continue
         checkpoint = await store.load_checkpoint(run.run_id)
         if (
@@ -105,7 +115,7 @@ async def collect_garbage(
     # 清理构件：只保留仍被存活 checkpoint 引用的内容。
     # 无论是否实际删除，都基于删除后的存活集合计算，因此 dry-run 报告
     # 显示的是真实数量。
-    survivors = kept + skipped_active
+    survivors = kept + skipped_active + skipped_unreconciled
     referenced: set[str] = set()
     for run_id in survivors:
         checkpoint = await store.load_checkpoint(run_id)
@@ -130,12 +140,19 @@ async def collect_garbage(
     notes: list[str] = []
     if skipped_active:
         notes.append(f"{len(skipped_active)} active run(s) were left untouched")
+    if skipped_unreconciled:
+        notes.append(
+            f"{len(skipped_unreconciled)} run(s) with an undetermined side effect were "
+            "left untouched; run `haven reconcile` to decide them before they can be "
+            "collected"
+        )
     if active:
         notes.append("artifact sweep deferred while runs are active")
     return GcReport(
         kept=tuple(kept),
         deleted=tuple(deleted),
         skipped_active=tuple(skipped_active),
+        skipped_unreconciled=tuple(skipped_unreconciled),
         artifacts_deleted=len(orphaned),
         dry_run=not apply,
         notes=tuple(notes),
