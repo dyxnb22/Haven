@@ -7,9 +7,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import codecs
+import hashlib
 import os
 import shutil
+from collections.abc import Callable
 from pathlib import Path
+from typing import BinaryIO
 
 from haven.adapters.workspace_editor import MAX_CREATE_BYTES, MAX_EDIT_FILE_BYTES, WorkspaceEditor
 from haven.adapters.workspace_search import search_workspace
@@ -45,6 +50,16 @@ MAX_SEARCH_TOTAL_BYTES = 64 * 1024
 MAX_SEARCH_LINE_CHARS = 240
 RIPGREP_TIMEOUT_SECONDS = 20.0
 
+#: `read_file` 流式扫描时的块大小。摘要和总行数都需要扫全篇，但这不构成把整个
+#: 文件搬进内存的理由：工具结果本来就只有 MAX_READ_BYTES，而一个 2GB 的文件过去
+#: 会让 `read_bytes()` 直接分配 2GB。
+READ_CHUNK_BYTES = 1 << 20
+
+#: `str.splitlines()` 认定的换行边界。流式扫描必须逐字判断而不是调用 `splitlines()`
+#: （后者要求手上已有全文），因此这套集合要与它逐字节一致——行号是编辑前像和差异
+#: 的一部分，悄悄漂移会让审计记录对不上文件。
+_LINE_BOUNDARY_CHARS = frozenset("\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
+
 #: 工具永远不能触碰的路径组件（代理不能重写自身配置、Git 历史或审计表面）。
 PROTECTED_COMPONENTS = frozenset({".git", ".haven", ".haven.toml"})
 
@@ -79,6 +94,66 @@ IGNORED_DIRS = frozenset(
         "vendor",
     }
 )
+
+
+def _split_complete_lines(buffer: str) -> tuple[list[str], str]:
+    """切出 buffer 中已确定完整的行，返回 (行, 未定的尾部)。
+
+    尾部必须留下，因为它有两种可能：一个还没写完的行，或者一个 `\\r`——后面紧跟
+    `\\n` 时它们是同一个边界，提前断开就会多数一行。块边界上这两件事都会发生。
+    """
+    lines: list[str] = []
+    start = 0
+    index = 0
+    size = len(buffer)
+    while index < size:
+        char = buffer[index]
+        if char not in _LINE_BOUNDARY_CHARS:
+            index += 1
+            continue
+        if char == "\r" and index + 1 >= size:
+            break
+        step = 2 if char == "\r" and buffer[index + 1] == "\n" else 1
+        lines.append(buffer[start : index + step])
+        index += step
+        start = index
+    return lines, buffer[start:]
+
+
+def _scan_file(handle: BinaryIO, on_line: Callable[[int, str], None]) -> str:
+    """流式扫描一个已打开的二进制文件：逐行回调，返回全篇 SHA-256 十六进制。
+
+    与 `read_bytes()` 后 `decode` + `splitlines()` 等价，但内存只随块和单行增长。
+    UTF-8 校验跨块进行（增量解码器），因此非 UTF-8 文件在任何位置都会被发现，
+    与旧实现一致。
+    """
+    hasher = hashlib.sha256()
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    pending = ""
+    number = 0
+
+    def emit(lines: list[str]) -> None:
+        nonlocal number
+        for line in lines:
+            number += 1
+            on_line(number, line)
+
+    while chunk := handle.read(READ_CHUNK_BYTES):
+        hasher.update(chunk)
+        text = decoder.decode(chunk)
+        if text:
+            pending += text
+            lines, pending = _split_complete_lines(pending)
+            emit(lines)
+    # 收尾：刷新解码器（不完整的多字节序列在这里抛错），再处理最后不带头换行的半行。
+    tail = decoder.decode(b"", True)
+    if tail:
+        pending += tail
+        lines, pending = _split_complete_lines(pending)
+        emit(lines)
+    if pending:
+        emit([pending])
+    return hasher.hexdigest()
 
 
 class FsWorkspace:
@@ -217,43 +292,61 @@ class FsWorkspace:
         )
 
     async def read_file(self, path: str, start_line: int, max_lines: int) -> ReadResult:
-        """读取 UTF-8 普通文件的有界行窗口，并返回完整文件摘要。"""
+        """读取 UTF-8 普通文件的有界行窗口，并返回完整文件摘要。
+
+        全篇都要扫（摘要和总行数需要它），但扫描在独立线程里分块进行：一个巨大的
+        文件既不该把进程撑爆，也不该把事件循环按住数秒——`repo.read` 是大文件唯一
+        还能拿到真实摘要的入口（`path_facts` 超过 MAX_EDIT_FILE_BYTES 就不算摘要了），
+        这个入口必须保持可用。
+        """
         target, normalized = self._require_inside(path)
         if not target.is_file() or target.is_symlink():
             raise WorkspaceError("not_found", f"not a regular file: {normalized!r}")
 
-        data = target.read_bytes()
         try:
-            text = data.decode("utf-8")
+            return await asyncio.to_thread(
+                self._read_window, target, normalized, start_line, max_lines
+            )
         except UnicodeDecodeError as exc:
             raise WorkspaceError(
                 "invalid_arguments", f"not a UTF-8 text file: {normalized!r}"
             ) from exc
 
-        digest = sha256_bytes(data)
-        lines = text.splitlines(keepends=True)
-        total = len(lines)
-        window = lines[start_line - 1 : start_line - 1 + max_lines]
-
-        content = ""
-        emitted = 0
+    def _read_window(
+        self, target: Path, normalized: str, start_line: int, max_lines: int
+    ) -> ReadResult:
+        total = 0
+        window: list[str] = []
+        window_first = start_line - 1
+        window_last = window_first + max_lines
         byte_budget = MAX_READ_BYTES
         byte_truncated = False
-        for line in window:
+        collecting = True
+
+        def on_line(number: int, line: str) -> None:
+            nonlocal total, byte_budget, byte_truncated, collecting
+            total = number
+            if not collecting or not (window_first < number <= window_last):
+                return
             encoded = len(line.encode("utf-8"))
             if encoded > byte_budget:
+                # 与旧实现一致：第一行放不下就停止装配，后面的行不再进入内容。
                 byte_truncated = True
-                break
-            content += line
+                collecting = False
+                return
+            window.append(line)
             byte_budget -= encoded
-            emitted += 1
 
+        with open(target, "rb") as handle:
+            digest = _scan_file(handle, on_line)
+
+        emitted = len(window)
         actual_start = min(start_line, total + 1) if total else 1
         end_line = actual_start - 1 + emitted
         truncated = byte_truncated or end_line < total
         return ReadResult(
             path=normalized,
-            content=content,
+            content="".join(window),
             start_line=actual_start,
             end_line=end_line,
             total_lines=total,

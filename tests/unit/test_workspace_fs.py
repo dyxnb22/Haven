@@ -1,13 +1,22 @@
 """文件系统工作区适配器的行为测试。"""
 
+import io
+import threading
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from haven.adapters.workspace_fs import MAX_EDIT_FILE_BYTES, FsWorkspace
+from haven.adapters import workspace_fs
+from haven.adapters.workspace_fs import (
+    MAX_EDIT_FILE_BYTES,
+    MAX_READ_BYTES,
+    FsWorkspace,
+    _scan_file,
+)
 from haven.domain.digest import sha256_bytes, sha256_text
-from haven.ports.workspace import WorkspaceError
+from haven.ports.workspace import OriginalContent, WorkspaceError
 
 
 class TestCaptureSnapshot:
@@ -50,9 +59,9 @@ class TestCaptureSnapshot:
     def test_register_run_original_seeds_the_diff_only_if_absent(
         self, workspace: FsWorkspace, repo: Path
     ) -> None:
-        workspace.register_run_original("src/calc.py", "ORIGINAL")
-        workspace.register_run_original("src/calc.py", "SECOND")
-        assert workspace.original_contents()["src/calc.py"] == "ORIGINAL"
+        workspace.register_run_original("src/calc.py", OriginalContent.captured("ORIGINAL"))
+        workspace.register_run_original("src/calc.py", OriginalContent.captured("SECOND"))
+        assert workspace.original_contents()["src/calc.py"].text == "ORIGINAL"
 
 
 @pytest.fixture()
@@ -325,3 +334,116 @@ class TestRunDiff:
 
         run_diff = await workspace.run_diff()
         assert "DO-NOT-EXFILTRATE" not in run_diff.diff
+
+
+class TestStreamingLineSplit:
+    """流式切行必须与 `str.splitlines(keepends=True)` 逐字节一致。
+
+    行号是编辑前像和差异的一部分；悄悄漂移会让审计记录对不上文件。这里用 adversarial
+    输入把等价性钉住，尤其是块边界——一个块的末尾可能是不完整的行，也可能是一个
+    还不知道后面跟不跟 `\n` 的 `\r`。
+    """
+
+    TEXT = (
+        "plain\n"
+        "crlf\r\n"
+        "lone cr\r"
+        "form feed\f"
+        "vertical tab\v"
+        "file sep\x1c"
+        "group sep\x1d"
+        "record sep\x1e"
+        "next line\x85"
+        "line sep\u2028"
+        "para sep\u2029"
+        "no trailing boundary"
+    )
+
+    @pytest.mark.parametrize("chunk", [1, 2, 3, 5, 7, 13, 64, 4096])
+    def test_matches_splitlines_at_every_chunk_size(self, chunk: int) -> None:
+        expected = self.TEXT.splitlines(keepends=True)
+        for size in range(1, chunk + 1):
+            handle = io.BytesIO(self.TEXT.encode("utf-8"))
+            got: list[str] = []
+            with patch("haven.adapters.workspace_fs.READ_CHUNK_BYTES", size):
+                _scan_file(handle, lambda number, line, sink=got: sink.append(line))
+            assert got == expected, f"chunk size {size} diverged"
+
+    def test_an_empty_file_has_no_lines(self) -> None:
+        got: list[str] = []
+        _scan_file(io.BytesIO(b""), lambda number, line: got.append(line))
+        assert got == []
+
+    def test_a_file_ending_in_crlf_is_not_double_counted(self) -> None:
+        """`\r\n` 是一个边界，不是两个。"""
+        got: list[str] = []
+        _scan_file(io.BytesIO(b"a\r\nb\r\n"), lambda number, line: got.append(line))
+        assert got == ["a\r\n", "b\r\n"]
+
+    def test_a_cr_split_across_the_chunk_boundary_stays_one_boundary(self) -> None:
+        """块尾的 `\r` 不能提前断开：下一个块开头是 `\n` 时它们是同一个边界。"""
+        got: list[str] = []
+        with patch("haven.adapters.workspace_fs.READ_CHUNK_BYTES", 1):
+            _scan_file(io.BytesIO(b"a\r\nb"), lambda number, line: got.append(line))
+        assert got == ["a\r\n", "b"]
+
+    def test_a_multibyte_character_split_across_chunks_still_decodes(self) -> None:
+        got: list[str] = []
+        with patch("haven.adapters.workspace_fs.READ_CHUNK_BYTES", 1):
+            _scan_file(io.BytesIO("你好\n世界\n".encode()), lambda n, line: got.append(line))
+        assert got == ["你好\n", "世界\n"]
+
+    def test_a_truncated_multibyte_sequence_is_rejected(self) -> None:
+        with pytest.raises(UnicodeDecodeError):
+            _scan_file(io.BytesIO(b"ok\n\xe4\xbd"), lambda number, line: None)
+
+    def test_the_digest_matches_a_whole_file_hash(self) -> None:
+        data = self.TEXT.encode("utf-8")
+        digest = _scan_file(io.BytesIO(data), lambda number, line: None)
+        assert digest == sha256_bytes(data)
+
+
+class TestReadIsBounded:
+    """`repo.read` 是大文件唯一还能拿到真实摘要的入口，因此它必须有界而不只是能用。"""
+
+    async def test_a_large_file_reads_without_loading_it_all(
+        self, workspace: FsWorkspace, repo: Path
+    ) -> None:
+        """全篇都要扫（摘要和总行数需要它），但内存只随块和单行增长。"""
+        target = repo / "src" / "huge.py"
+        target.write_text("x = 1\n" * 200_000, encoding="utf-8")
+        result = await workspace.read_file("src/huge.py", 1, 10)
+        assert result.total_lines == 200_000
+        assert result.content == "x = 1\n" * 10
+        assert result.truncated
+        assert result.digest == sha256_bytes(target.read_bytes())
+
+    async def test_a_huge_single_line_is_not_loaded_whole(
+        self, workspace: FsWorkspace, repo: Path
+    ) -> None:
+        """一行 20MB：内容仍然受 MAX_READ_BYTES 约束，不会被整个搬进内存。"""
+        target = repo / "src" / "min.js"
+        target.write_text("a" * (20 * 1024 * 1024) + "\n", encoding="utf-8")
+        result = await workspace.read_file("src/min.js", 1, 5)
+        assert result.total_lines == 1
+        assert len(result.content.encode("utf-8")) <= MAX_READ_BYTES
+        assert result.truncated
+
+    async def test_the_scan_runs_off_the_event_loop_thread(
+        self, workspace: FsWorkspace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """扫描在工作线程里进行：一个巨大的文件不该把事件循环按住数秒。
+
+        用线程标识而不是计时来断言——同样的活，同一线程就是没卸载。
+        """
+        seen: list[int] = []
+        real_scan = workspace_fs._scan_file
+
+        def spy(handle: io.BufferedIOBase, on_line: object) -> str:
+            seen.append(threading.get_ident())
+            return real_scan(handle, on_line)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(workspace_fs, "_scan_file", spy)
+        await workspace.read_file("src/calc.py", 1, 10)
+        assert seen, "扫描应该发生过"
+        assert seen[0] != threading.get_ident()
