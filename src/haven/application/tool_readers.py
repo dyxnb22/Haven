@@ -47,6 +47,12 @@ from haven.domain.evidence import DiffEvidence
 from haven.ports.session import SessionStorePort
 from haven.ports.workspace import OriginalContent, WorkspaceError, WorkspacePort
 
+#: `repo.outline` 只解析文件的前若干行。超出的部分不进大纲，因此结果必须带上
+#: 截断标志——否则模型会把"没解析到"读成"不存在"。
+OUTLINE_MAX_LINES = 5000
+#: 子 Agent 有作用域的 `repo.diff` 只读每个文件的前若干行来构造"现在这一侧"。
+SCOPED_DIFF_MAX_LINES = 2000
+
 
 class ReadToolExecutor:
     """执行没有外部副作用的读取、计划和 diff 工具。"""
@@ -225,11 +231,14 @@ class ReadToolExecutor:
                 error_result(call, ToolErrorCode.DENIED, f"path is not a file: {args.path}")
             )
         try:
-            read = await self._workspace.read_file(facts.normalized, 1, 5000)
+            read = await self._workspace.read_file(facts.normalized, 1, OUTLINE_MAX_LINES)
         except WorkspaceError as exc:
             return ToolExecution(error_result(call, ToolErrorCode.DENIED, str(exc)))
         outline = outline_source(read.content, filename=facts.normalized)
-        return ToolExecution(ok_result(call, outline))
+        # 大纲只解析了前 OUTLINE_MAX_LINES 行。丢掉 read.truncated 会让模型以为
+        # 这份目录覆盖了整个文件——于是"这个模块没有别的符号"变成一句由读取上限
+        # 制造出来的假话。`to_model_text` 会把 truncated 提到结果 JSON 顶层。
+        return ToolExecution(ok_result(call, outline, truncated=read.truncated))
 
     async def execute_symbol(
         self,
@@ -329,12 +338,16 @@ class ReadToolExecutor:
             ]
             chunks: list[str] = []
             originals = self._workspace.original_contents()
+            scoped_truncated = False
             for path in paths:
                 original = originals.get(path, OriginalContent.missing())
                 current = ""
                 facts = self._workspace.path_facts(path)
                 if facts.exists:
-                    current = (await self._workspace.read_file(path, 1, 2000)).content
+                    read = await self._workspace.read_file(path, 1, SCOPED_DIFF_MAX_LINES)
+                    current = read.content
+                    # 只读了前若干行，差异的"现在这一侧"因此不完整。
+                    scoped_truncated = scoped_truncated or read.truncated
                 if original.unavailable:
                     # 运行前的内容没保留下来。不能把空串冒充成它——那会让这份
                     # 有作用域的 diff 谎称文件是从空改成的，和全量 diff 说谎。
@@ -352,13 +365,19 @@ class ReadToolExecutor:
                         tofile=f"b/{path}",
                     )
                 )
+            joined = "".join(chunks)
+            diff_text = clip(joined, MODEL_PAYLOAD_CHARS)
+            # 拼接结果也可能超出载荷上限。两处截断都要报到结果上：模型看到一份
+            # 停在半途的 diff 却被告知"完整"，等于把一份残缺的审计当成全貌。
+            scoped_truncated = scoped_truncated or len(joined) > MODEL_PAYLOAD_CHARS
             return ToolExecution(
                 ok_result(
                     call,
                     {
                         "files": paths,
-                        "diff": clip("".join(chunks), MODEL_PAYLOAD_CHARS),
+                        "diff": diff_text,
                     },
+                    truncated=scoped_truncated,
                 )
             )
         envelope = await self._emitter.emit(

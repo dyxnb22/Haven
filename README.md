@@ -316,9 +316,9 @@ with `--check` to verify the generated table.
 
 | Metric | Value |
 |---|---|
-| Automated tests | 1479 |
+| Automated tests | 1482 |
 | Line coverage (`src/`) | 91% |
-| Source / test size | ~30.6k / ~25.6k lines |
+| Source / test size | ~30.7k / ~25.7k lines |
 | Typed modules (`mypy --strict`) | 152 |
 | Architecture decision records | 50 |
 | Offline eval | 45/45 passed, 0 security violations |

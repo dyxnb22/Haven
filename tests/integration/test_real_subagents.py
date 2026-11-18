@@ -102,3 +102,67 @@ async def test_child_budget_stop_is_reported_as_incomplete(tmp_path: Path) -> No
     assert child.status == "stopped"
     result = next(e for e in h.sink.events_of("tool.completed") if e.call_id == "delegate")
     assert result.status == "error"
+
+
+async def test_scoped_diff_reports_truncation_of_the_current_side(tmp_path: Path) -> None:
+    """子 Agent 的有作用域 diff 只读每个文件的前若干行来构造"现在这一侧"。
+
+    丢掉 read.truncated 会让模型看到一份停在半途的差异，却被告知它是完整的——
+    一份残缺的审计被当成了全貌。这条分支此前一行测试都没有。
+    """
+    from haven.application.tool_readers import SCOPED_DIFF_MAX_LINES
+
+    repo = make_repo(tmp_path)
+    target = repo / "src" / "calc.py"
+    filler = "\n".join(f"# filler {i}" for i in range(SCOPED_DIFF_MAX_LINES + 20))
+    target.write_text(f"def add(a, b):\n    return a - b\n{filler}\n", encoding="utf-8")
+
+    h = Harness(
+        repo,
+        [
+            [tool("r1", "repo.read", path="src/calc.py"), finish("tool_calls")],
+            [
+                tool(
+                    "e1",
+                    "repo.edit",
+                    path="src/calc.py",
+                    old_string="return a - b",
+                    new_string="return a + b",
+                ),
+                finish("tool_calls"),
+            ],
+            [
+                tool(
+                    "d1",
+                    "agent.delegate",
+                    role="reviewer",
+                    task="Review the diff",
+                    file_scope=["src/calc.py"],
+                ),
+                finish("tool_calls"),
+            ],
+            # 子 Agent 调 repo.diff：文件 2022 行，超过 SCOPED_DIFF_MAX_LINES，
+            # "现在这一侧"因此只读到前若干行。
+            [tool("g1", "repo.diff"), finish("tool_calls")],
+            [text("The diff is partial but flagged as such."), finish()],
+            # 父级自己也要留下 diff 与 check 证据，否则 Evidence Gate 会拦住这次运行。
+            [tool("g2", "repo.diff"), finish("tool_calls")],
+            [tool("k1", "repo.check", recipe_id="verify-calc"), finish("tool_calls")],
+            [text("Review complete."), finish()],
+        ],
+    )
+    outcome = await h.service.run("Fix add() and have a reviewer check the diff")
+    assert outcome.status is RunStatus.SUCCEEDED
+
+    # 有作用域的那份结果载荷只有 files 与 diff（父级那份还带 insertions/deletions），
+    # 据此把它从同名工具的多条结果里认出来。
+    scoped = [
+        m.content
+        for req in h.model.requests_seen
+        for m in req.messages
+        if m.role == "tool" and '"repo.diff"' in m.content and '"insertions"' not in m.content
+    ]
+    assert scoped, "子 Agent 应该收到一份有作用域的 repo.diff 结果"
+    assert '"truncated": true' in scoped[0], "文件超出作用域 diff 的行数上限，必须带截断标志"
+    # 截断是"不完整"的声明，不是把内容藏起来：改动本身仍然呈现。
+    assert "return a + b" in scoped[0]

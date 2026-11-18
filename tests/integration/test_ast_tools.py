@@ -105,3 +105,48 @@ async def test_repo_outline_outside_workspace_denied(tmp_path: Path) -> None:
     messages = h.model.requests_seen[-1].messages
     tool_msg = next(m for m in messages if m.role == "tool")
     assert "denied" in tool_msg.content or "outside_workspace" in tool_msg.content
+
+
+async def test_repo_outline_reports_truncation_for_a_very_long_file(tmp_path: Path) -> None:
+    """大纲只解析前 OUTLINE_MAX_LINES 行，因此必须告诉模型"这是 partial"。
+
+    否则"没解析到"会被读成"不存在"：模型据这份残缺目录断言这个模块没有别的
+    符号，而那句话其实是读取上限制造出来的。
+    """
+    from haven.application.tool_readers import OUTLINE_MAX_LINES
+
+    repo = make_repo(tmp_path)
+    filler = "\n".join(f"x_{i} = {i}" for i in range(OUTLINE_MAX_LINES + 50))
+    (repo / "src" / "huge.py").write_text(
+        f"{filler}\n\ndef late_symbol():\n    pass\n", encoding="utf-8"
+    )
+    h = Harness(
+        repo,
+        [
+            [tool("c1", "repo.outline", path="src/huge.py"), finish("tool_calls")],
+            [text("done"), finish()],
+        ],
+    )
+    outcome = await h.service.run("outline a very long file")
+    assert outcome.status is RunStatus.SUCCEEDED
+    tool_msg = next(m for m in h.model.requests_seen[-1].messages if m.role == "tool")
+    assert '"truncated": true' in tool_msg.content
+    # 被截断的部分确实没进大纲，所以这个断言证明"残缺"与"已告知"同时成立。
+    assert "late_symbol" not in tool_msg.content
+
+
+async def test_repo_outline_of_a_short_file_is_not_flagged(tmp_path: Path) -> None:
+    """短文件不该被无端标成截断——标志本身就是证据，假阳性会让模型忽略它。"""
+    repo = make_repo(tmp_path)
+    (repo / "src" / "tiny.py").write_text("def f():\n    pass\n", encoding="utf-8")
+    h = Harness(
+        repo,
+        [
+            [tool("c1", "repo.outline", path="src/tiny.py"), finish("tool_calls")],
+            [text("done"), finish()],
+        ],
+    )
+    outcome = await h.service.run("outline a short file")
+    assert outcome.status is RunStatus.SUCCEEDED
+    tool_msg = next(m for m in h.model.requests_seen[-1].messages if m.role == "tool")
+    assert '"truncated"' not in tool_msg.content
