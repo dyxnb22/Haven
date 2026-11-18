@@ -55,7 +55,21 @@ def normalize_plan(ctx: RunContext, steps: tuple[PlanStep, ...]) -> tuple[PlanSt
             raise ValueError("completed steps with acceptance criteria require evidence")
         for reference in step.evidence:
             if reference.startswith("read:"):
-                valid = reference[5:] in ctx.files_read
+                path = reference[5:]
+                recorded = ctx.files_read.get(path)
+                # `files_read` 记的是"读到时"的摘要；若此后该文件被改过，ledger 里
+                # 最后一次编辑的 postimage 才是现在的摘要。两者不同，说明这次读取早于
+                # 那次改动——它证明的是改动之前的状态，而步骤声称的恰恰是改动之后验收
+                # 通过。`diff` 与 `check:` 一向要求证据晚于最后一次编辑，`read:` 没有
+                # 理由例外：进程写入同样进 ledger，因此这条边界也覆盖外部改动。
+                latest_edit = max(
+                    (edit for edit in ctx.ledger.edits if edit.path == path),
+                    key=lambda edit: edit.seq,
+                    default=None,
+                )
+                valid = recorded is not None and (
+                    latest_edit is None or recorded == latest_edit.postimage_digest
+                )
             elif reference == "diff":
                 valid = any(diff.seq > last_edit for diff in ctx.ledger.diffs)
             elif reference.startswith("check:"):
