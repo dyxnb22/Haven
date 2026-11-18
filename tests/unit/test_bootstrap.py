@@ -64,15 +64,20 @@ async def test_close_is_safe_for_a_model_without_aclose(tmp_path: Path) -> None:
         def generate_stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
             raise NotImplementedError
 
+    model = Bare()
+    # 前提可验证：这个端口确实没有 aclose。一旦 ModelPort 将来提供默认实现，
+    # 没有这条断言，测试会在毫不知情的情况下变成空转。
+    assert not hasattr(model, "aclose")
+
     services = await build_services(
         tmp_path,
         mode=PermissionMode.READ_ONLY,
         approvals=AutoApprover("reject_all"),
         sinks=[],
-        model=Bare(),
+        model=model,
         store_path=tmp_path / "haven.db",
     )
-    await services.close()
+    await services.close()  # 能返回即是断言
 
 
 MINIMAL_SKILL = "---\nname: demo\ndescription: 先写失败测试\n---\n\n技能正文。\n"
