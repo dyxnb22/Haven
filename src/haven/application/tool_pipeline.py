@@ -111,10 +111,7 @@ class ToolPipeline:
         delegate: DelegateHandler | None = None,
     ) -> None:
         self._workspace = workspace
-        self._executor = executor
-        self._store = store
         self._emitter = emitter
-        self._approvals = approvals
         self._registry = registry
         self._recipes = recipes
         self._mode = mode

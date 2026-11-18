@@ -206,7 +206,6 @@ class RunService:
         )
         self._git_branch = git_branch
         self._git_commit = git_commit
-        self._project_guidance = project_guidance
         if guidance_snapshot is not None and guidance_snapshot.text != project_guidance:
             raise ValueError("guidance snapshot must match the loaded project guidance")
         self._guidance_snapshot = guidance_snapshot or GuidanceSnapshot(text=project_guidance)
@@ -309,7 +308,6 @@ class RunService:
         try:
             snapshot = await loader()
             self._require_guidance_idle()
-            self._project_guidance = snapshot.text
             self._guidance_snapshot = snapshot
             return snapshot
         finally:

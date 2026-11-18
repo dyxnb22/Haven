@@ -52,7 +52,7 @@ async def _create_test_server(tmp_path: Path) -> tuple[MCPServer, Any]:
         model=model,
         store_path=tmp_path / "haven.db",
     )
-    server = MCPServer(services.runtime, tmp_path)
+    server = MCPServer(services.runtime)
     return server, services
 
 

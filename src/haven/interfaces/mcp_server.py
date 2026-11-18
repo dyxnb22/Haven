@@ -34,9 +34,8 @@ SERVER_VERSION = "0.1.0"
 class MCPServer:
     """处理标准 MCP JSON-RPC 请求并协调底层 HavenRuntime。"""
 
-    def __init__(self, runtime: HavenRuntime, workspace: Path) -> None:
+    def __init__(self, runtime: HavenRuntime) -> None:
         self._runtime = runtime
-        self._workspace = workspace.resolve()
 
     async def handle_request(self, req: dict[str, Any]) -> dict[str, Any] | None:
         """分发并处理单个 JSON-RPC 2.0 请求。"""
@@ -409,7 +408,7 @@ async def run_mcp_server(
         )
         writer = asyncio.StreamWriter(write_transport, write_protocol, reader, loop)
 
-        server = MCPServer(services.runtime, workspace)
+        server = MCPServer(services.runtime)
         await server.serve_stdio(reader, writer)
     finally:
         await services.close()

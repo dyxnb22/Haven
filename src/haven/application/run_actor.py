@@ -132,7 +132,6 @@ class RunActor:
         self._emitter = emitter
         self._approvals = approvals
         self._recipes = recipes
-        self._mode = mode
         self._profile = profile
         self._profile_for = resolve_profile
         self._context_chars = context_chars
@@ -150,7 +149,6 @@ class RunActor:
         self._checkpoints = checkpoints
         self._finalizer = finalizer
         self._skills = skills
-        self._selected_skills = selected_skills
         self._launcher = launcher
         self._project_guidance = project_guidance
         self._mcp_servers = mcp_servers
