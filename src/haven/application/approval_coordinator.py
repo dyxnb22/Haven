@@ -115,13 +115,16 @@ class ApprovalCoordinator:
             auto_reason = (
                 f"approval mode 'full': auto-approving {call.tool_name} (risk={risk.value})"
             )
-        elif self._approval_mode is ApprovalMode.SMART:
-            if risk in (RiskLevel.NONE, RiskLevel.LOW, RiskLevel.MEDIUM):
-                auto_approved = True
-                auto_reason = (
-                    f"approval mode 'smart': auto-approving low/medium-risk {call.tool_name} "
-                    f"(risk={risk.value})"
-                )
+        elif self._approval_mode is ApprovalMode.SMART and risk in (
+            RiskLevel.NONE,
+            RiskLevel.LOW,
+            RiskLevel.MEDIUM,
+        ):
+            auto_approved = True
+            auto_reason = (
+                f"approval mode 'smart': auto-approving low/medium-risk {call.tool_name} "
+                f"(risk={risk.value})"
+            )
 
         if auto_approved:
             approval_id = new_approval_id()
