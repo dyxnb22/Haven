@@ -130,7 +130,6 @@ async def _search_ripgrep(
         )
 
     matches: list[SearchMatch] = []
-    seen_files: set[str] = set()
     total_bytes = 0
     truncated = output_truncated or proc.returncode == 2
     for line in raw.decode("utf-8", errors="replace").splitlines():
@@ -138,17 +137,19 @@ async def _search_ripgrep(
         if parsed is None:
             continue
         rel, line_number, text = parsed
-        seen_files.add(rel)
         clipped = text.strip()[:MAX_SEARCH_LINE_CHARS]
         total_bytes += len(clipped.encode("utf-8"))
         matches.append(SearchMatch(path=rel, line_number=line_number, line=clipped))
         if len(matches) >= max_results or total_bytes >= MAX_SEARCH_TOTAL_BYTES:
             truncated = True
             break
-    files_scanned = _ripgrep_files_searched(stderr)
+    files_scanned = _ripgrep_files_searched(raw, stderr)
+    # 拿不到计数时不拿"有匹配的文件数"冒充：那个数只说明覆盖范围的下界。搜索被
+    # 提前掐断时 ripgrep 根本没机会输出 --stats，而掐断正是触到上限的常态
+    # （max_results 默认 50）。
     return SearchResult(
         matches=tuple(matches),
-        files_scanned=files_scanned if files_scanned is not None else len(seen_files),
+        files_scanned=files_scanned,
         truncated=truncated,
     )
 
@@ -205,9 +206,17 @@ async def _terminate(proc: asyncio.subprocess.Process) -> None:
     await proc.wait()
 
 
-def _ripgrep_files_searched(stderr: bytes) -> int | None:
-    match = _FILES_SEARCHED.search(stderr)
-    return int(match.group(1)) if match else None
+def _ripgrep_files_searched(*streams: bytes) -> int | None:
+    """从 ripgrep 的输出里取出"N files searched"；找不到则返回 None。
+
+    必须同时看 stdout 和 stderr：`--stats` 的落点随版本变过——15.x 写在 stdout，
+    更早的版本写在 stderr。只认其中一个，计数就会静默地永远拿不到。
+    """
+    for stream in streams:
+        match = _FILES_SEARCHED.search(stream)
+        if match:
+            return int(match.group(1))
+    return None
 
 
 def _parse_ripgrep_line(root: Path, line: str) -> tuple[str, int, str] | None:

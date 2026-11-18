@@ -110,3 +110,44 @@ class TestRipgrepHardening:
         workspace._ripgrep = "/nonexistent/rg"
         result = await workspace.search("BUG", ".", 50)
         assert {m.path for m in result.matches} == {"src/calc.py", "src/util.py"}
+
+
+class TestFilesScannedHonesty:
+    """`files_scanned` 的契约是"检查过的文件数，包括没有匹配的文件"。
+
+    ripgrep 的计数来自它退出时打印的 `--stats`；搜索一旦触到结果上限就被提前掐断，
+    那一行永远等不到。此时旧实现拿"有匹配的文件数"冒充扫描总数——而触顶正是常态
+    （max_results 默认 50）。
+    """
+
+    @requires_rg
+    async def test_a_truncated_ripgrep_search_reports_unknown_not_a_lower_bound(
+        self, repo: Path
+    ) -> None:
+        workspace = FsWorkspace(repo, use_ripgrep=True)
+        result = await workspace.search("BUG", ".", 2)
+        assert result.truncated
+        assert len(result.matches) == 2
+        # 不是"有匹配的文件数"：那个数只是覆盖范围的下界。
+        assert result.files_scanned is None
+
+    @requires_rg
+    async def test_a_complete_ripgrep_search_reports_the_real_count(self, repo: Path) -> None:
+        workspace = FsWorkspace(repo, use_ripgrep=True)
+        result = await workspace.search("BUG", ".", 50)
+        assert not result.truncated
+        # 仓库里 3 个可搜索文本文件，其中 2 个有匹配——计数必须包含没有匹配的那个。
+        assert result.files_scanned == 3
+        assert result.files_scanned != len({m.path for m in result.matches})
+
+    async def test_the_walk_backend_reports_the_files_it_actually_examined(
+        self, repo: Path
+    ) -> None:
+        workspace = FsWorkspace(repo, use_ripgrep=False)
+        result = await workspace.search("BUG", ".", 50)
+        assert result.files_scanned == 3
+        # 截断时也报告真实检视数，而不是 None：它确实知道自己读到哪儿。
+        truncated = await workspace.search("BUG", ".", 2)
+        assert truncated.truncated
+        assert truncated.files_scanned is not None
+        assert truncated.files_scanned >= 1

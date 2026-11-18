@@ -73,8 +73,12 @@ class SearchResult:
 
     #: 按确定性遍历顺序排列的匹配行。
     matches: tuple[SearchMatch, ...]
-    #: 检查过的文件数，包括没有匹配的文件。
-    files_scanned: int
+    #: 检查过的文件数，包括没有匹配的文件；None 表示扫描器没能报告这个数。
+    #:
+    #: ripgrep 的计数来自它退出时打印的 `--stats`，而搜索一旦触到结果/字节上限
+    #: 就会被提前掐断，那一行永远等不到。此时只能知道"至少有这么多文件有匹配"，
+    #: 把它当成扫描总数报出去，会让模型以为覆盖范围就只有这么大。
+    files_scanned: int | None
     #: 因结果/字节上限或搜索截止时间无法返回全部匹配时为 True。
     truncated: bool
 
