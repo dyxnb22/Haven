@@ -140,10 +140,16 @@ class TestModelRouter:
         assert deep.closed is True
 
     async def test_aclose_tolerates_models_without_aclose(self) -> None:
+        """底层模型没有 aclose 时，关闭必须安静完成，而不是抛 AttributeError。"""
         fast = FakeModel("fast")
         deep = FakeModel("deep")
+        # 先锁住前提：FakeModel 基类确实没有 aclose（只有下面的 ClosableFake 加了）。
+        # 没有这两条，一旦基类哪天获得 aclose，这个测试会在毫不知情的情况下变成空转。
+        assert not hasattr(fast, "aclose")
+        assert not hasattr(deep, "aclose")
         router = ModelRouter(fast_model=fast, deep_model=deep)
-        await router.aclose()  # 不报错
+
+        await router.aclose()  # 能返回即是断言；上面的前提保证它测的是 intended 路径
 
     async def test_aclose_calls_deep_even_if_fast_raises(self) -> None:
         class FaultyFast(FakeModel):

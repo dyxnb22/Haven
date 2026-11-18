@@ -240,6 +240,10 @@ async def reconcile_worktree_to_main(
 
 async def cleanup_ephemeral_worktree(worktree: EphemeralWorktree) -> None:
     """清理并移除临时工作树，确保零残留。"""
+    # 这里必须吞掉任何异常：`git worktree remove` 失败的原因很多——git 不在 PATH、
+    # 目录已被外部删除、worktree 锁尚未释放——而每一种都应该退回到下面的手动
+    # rmtree，而不是变成调用方的错误。收窄异常类型会让"git 缺失"这类最常见的情况
+    # 重新冒出去。
     try:
         cmd = ["git", "worktree", "remove", "--force", str(worktree.worktree_path)]
         proc = await asyncio.create_subprocess_exec(
@@ -255,6 +259,8 @@ async def cleanup_ephemeral_worktree(worktree: EphemeralWorktree) -> None:
     if worktree.worktree_path.exists():
         await asyncio.to_thread(shutil.rmtree, worktree.worktree_path, ignore_errors=True)
 
+    # prune 只是让 git 忘记这条已消失的记录。文件已经删掉了，失败时没有更多可做的
+    # 事，也不值得让清理函数因此抛错——调用方通常在 finally 里调它。
     try:
         proc_prune = await asyncio.create_subprocess_exec(
             "git",
