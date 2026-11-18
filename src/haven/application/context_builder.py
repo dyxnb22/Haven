@@ -337,8 +337,13 @@ class ContextBuilder:
         *,
         handoff: HandoffSnapshot | None = None,
         ledger: EvidenceLedger | None = None,
+        tools: tuple[ToolSchema, ...] | None = None,
     ) -> tuple[ModelRequest, tuple[ContextSegment, ...]]:
-        """选择上下文并记录来源；超限时确定性丢弃最旧的工具输出。"""
+        """选择上下文并记录来源；超限时确定性丢弃最旧的工具输出。
+
+        `tools` 覆盖本轮请求暴露的工具表，默认使用构造时给定的那一份。预算耗尽
+        后的收尾调用传空表：模型已经不能再动手，让它看见工具只会诱发新一轮提议。
+        """
         selected: list[_Selected] = [
             _Selected(
                 message=ModelMessage(role="system", content=self.system_prompt()),
@@ -590,7 +595,7 @@ class ContextBuilder:
             )
         request = ModelRequest(
             messages=tuple(item.message for item in fitted),
-            tools=self._tools,
+            tools=self._tools if tools is None else tools,
             max_output_tokens=self._max_output_tokens,
             temperature=0.0,
             reasoning_effort=self._reasoning_effort,

@@ -483,6 +483,75 @@ class RunActor:
         ctx.refresh_wall_time(time.monotonic())
         return await self._finalizer.finish(ctx, status, stop_reason, final_text, gate_reason)
 
+    #: 耗尽后仍然给一次收尾调用的停止原因。共同点是"代理原本还在工作"，
+    #: 所以它手上通常有值得说出来的发现。资源类耗尽（墙上时间、token、成本）
+    #: 不在其中：那些正是"别再花"的信号，再调一次模型等于违背它。
+    _SUMMARYABLE_STOPS = frozenset(
+        {StopReason.STEP_BUDGET_EXHAUSTED, StopReason.TOOL_BUDGET_EXHAUSTED}
+    )
+
+    async def _finish_on_budget(
+        self, ctx: RunContext, stop: StopReason, final_text: str
+    ) -> RunOutcome:
+        """预算耗尽时收口；仍在工作的代理先获得一次剥离工具的总结机会。
+
+        直接停会把"步数用完了"当成全部交付物：模型可能已经定位到缺陷、读过关键
+        文件，但一个字都没来得及说。这里在停止之前给一次不收工具、不计步骤的
+        调用，让它把已得到的说出来。停止原因不变——成功的定义没有变松，只是一个
+        stopped 运行现在能带上内容。
+
+        这次调用的 token 照常计费并出现在报告里：它确实花了钱，瞒报比花钱更糟。
+        """
+        if final_text.strip() or stop not in self._SUMMARYABLE_STOPS:
+            return await self.finish(ctx, RunStatus.STOPPED, stop, final_text)
+        # 墙上时间也已经见底就不再花：那正是"别再花"的信号。步数/工具预算耗尽
+        # 只说明"不能再动手"，与"没有时间了"不是同一个约束。
+        if ctx.usage.wall_time_seconds >= ctx.budget.max_wall_time_seconds:
+            return await self.finish(ctx, RunStatus.STOPPED, stop, final_text)
+        await self._emitter.emit(
+            ctx.run_id,
+            Notice(
+                run_id=ctx.run_id,
+                level="warning",
+                message=(
+                    f"budget exhausted ({stop.value}); requesting a final summary "
+                    "without tools before stopping"
+                ),
+            ),
+        )
+        summary = await self._closing_summary(ctx, final_text)
+        if isinstance(summary, RunOutcome):
+            # 收尾调用自己撞上了更硬的约束（例如墙上时间），那个终态更精确，直接采用。
+            return summary
+        return await self.finish(ctx, RunStatus.STOPPED, stop, summary)
+
+    async def _closing_summary(self, ctx: RunContext, final_text: str) -> str | RunOutcome:
+        """做一次不带工具的收尾调用，返回模型的文字；自身终判时返回该终态。"""
+        try:
+            choice = self._choose_model(ctx, ctx.usage.steps)
+            outcome = await self._call_model_step(
+                ctx,
+                ctx.usage.steps,
+                choice.model,
+                self._builder,
+                "",
+                final_text,
+                tools=(),
+            )
+        except Exception as exc:  # 收尾失败不能把一次正常的停止变成崩溃
+            await self._emitter.emit(
+                ctx.run_id,
+                Notice(
+                    run_id=ctx.run_id,
+                    level="warning",
+                    message=f"closing summary unavailable: {exc}",
+                ),
+            )
+            return ""
+        if isinstance(outcome, RunOutcome):
+            return outcome
+        return outcome[1].text.strip()
+
     async def close(self) -> None:
         """安全释放流水线资源与本 Actor 专属的临时目录。"""
         if self._closed:
@@ -513,7 +582,7 @@ class RunActor:
             while True:
                 ctx.refresh_wall_time(time.monotonic())
                 if stop := check_budget(ctx.budget, ctx.usage):
-                    return await self.finish(ctx, RunStatus.STOPPED, stop, answer.final_text)
+                    return await self._finish_on_budget(ctx, stop, answer.final_text)
 
                 ctx.usage = ctx.usage.charge_step()
                 step = ctx.usage.steps
@@ -661,12 +730,22 @@ class RunActor:
         builder: ContextBuilder,
         envelope_digest: str,
         answer_final_text: str,
+        tools: tuple[ToolSchema, ...] | None = None,
     ) -> tuple[ModelRequest, ModelResult, str] | RunOutcome:
-        """构建上下文、记录遥测并向模型发起流式请求，对 context_overflow 进行有界恢复。"""
+        """构建上下文、记录遥测并向模型发起流式请求，对 context_overflow 进行有界恢复。
+
+        `tools` 覆盖本轮暴露的工具表；预算耗尽后的收尾调用传空表，让模型没有可提议
+        的东西，只能说结论。
+        """
         overflow_retries = 0
         while True:
             request, segments = builder.build(
-                ctx.transcript, ctx.usage, ctx.plan, handoff=ctx.handoff, ledger=ctx.ledger
+                ctx.transcript,
+                ctx.usage,
+                ctx.plan,
+                handoff=ctx.handoff,
+                ledger=ctx.ledger,
+                tools=tools,
             )
             envelope_digest = await self._telemetry.record_envelope(
                 ctx, step, request, envelope_digest

@@ -746,6 +746,53 @@ class TestBudgetsAndStops:
         assert token_outcome.stop_reason is StopReason.TOKEN_BUDGET_EXHAUSTED
         assert token_outcome.usage_estimated is True
 
+    async def test_step_exhaustion_still_lets_the_model_say_what_it_found(
+        self, tmp_path: Path
+    ) -> None:
+        """步数用完后，已经读过的内容不该随运行一起被丢掉。
+
+        直接停会把"步数用完了"当作全部交付物。收尾调用不给工具，所以模型只能
+        把已得到的说出来——成功的定义没有变松，只是一个 stopped 运行能带上内容。
+        """
+        turns: list[list[ModelEvent]] = [
+            [tool("c1", "repo.list", path="."), finish("tool_calls")],
+            [text("I found the defect but ran out of steps before fixing it."), finish()],
+        ]
+        h = Harness(make_repo(tmp_path), turns, budget=Budget(max_steps=1))
+        outcome = await h.service.run("Explore forever")
+        assert outcome.status is RunStatus.STOPPED
+        assert outcome.stop_reason is StopReason.STEP_BUDGET_EXHAUSTED
+        assert "found the defect" in outcome.final_text
+        # 收尾调用不计步骤：预算说不能再动手，就没有再动手。
+        assert outcome.steps == 1
+        # 收尾请求不带工具，所以模型没有可提议的东西。
+        assert h.model.requests_seen[-1].tools == ()
+
+    async def test_resource_exhaustion_does_not_spend_one_more_call(self, tmp_path: Path) -> None:
+        """token/成本耗尽是"别再花"的信号，不能再调一次模型去写总结。"""
+        turns: list[list[ModelEvent]] = [
+            [text("would otherwise succeed"), usage(100, 20, estimated=True), finish()],
+            [text("a summary that must never be requested"), finish()],
+        ]
+        h = Harness(make_repo(tmp_path), turns, budget=Budget(max_input_tokens=50))
+        outcome = await h.service.run("Use too many tokens")
+        assert outcome.status is RunStatus.STOPPED
+        assert outcome.stop_reason is StopReason.TOKEN_BUDGET_EXHAUSTED
+        assert "must never be requested" not in outcome.final_text
+
+    async def test_a_run_that_already_spoke_keeps_its_own_words(self, tmp_path: Path) -> None:
+        """模型已经说了话，就不该再用一次调用覆盖它。"""
+        turns: list[list[ModelEvent]] = [
+            [tool("c1", "repo.list", path="."), finish("tool_calls")],
+            [text("my own conclusion"), finish()],
+        ]
+        h = Harness(make_repo(tmp_path), turns, budget=Budget(max_steps=1), repeat_last=True)
+        outcome = await h.service.run("Explore forever")
+        assert outcome.stop_reason is StopReason.STEP_BUDGET_EXHAUSTED
+        assert "my own conclusion" in outcome.final_text
+        calls_before = len(h.model.requests_seen)
+        assert calls_before >= 1
+
     async def test_stuck_loop_detected(self, tmp_path: Path) -> None:
         turns: list[list[ModelEvent]] = [
             [tool("c1", "repo.search", pattern="nothing_here", path="."), finish("tool_calls")],

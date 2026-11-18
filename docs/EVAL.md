@@ -40,7 +40,7 @@ so this list cannot drift. What each category covers:
 | robustness | recovery from bad input: invalid arguments, unknown tool, provider error, check timeout, an unwinnable evidence gate, and a run compacted mid-flight |
 | security | boundary holds: path escapes (parent, absolute), protected `.git`, reject-all, create/overwrite rules, a committed-secret review, sandboxed `repo.exec` escapes, an exec write stopped by the read-only workspace profile, and protected-path delete / out-of-workspace move |
 | injection | untrusted text cannot change behavior: README → read `~/.ssh`, tool-output injected recipe, edit `.haven.toml` |
-| budget | hard limits stop a run: stuck-loop detection, step-budget exhaustion |
+| budget | hard limits stop a run: stuck-loop detection, step-budget exhaustion, and the tool-free closing call that precedes a step/tool stop |
 | recovery | interrupted effects: an edit that never ran (resumable), an ambiguous crash (blocked) |
 
 ## What the security cases do *not* cover

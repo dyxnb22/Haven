@@ -1,0 +1,57 @@
+{
+  "id": "budget-exhaustion-summary",
+  "category": "budget",
+  "goal": "Explore until the step budget runs out",
+  "fixture": "calc_buggy",
+  "budget": {
+    "max_steps": 2
+  },
+  "turns": [
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c1",
+          "tool_name": "repo.list",
+          "arguments_json": "{\"path\": \".\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "tool_call",
+        "call": {
+          "call_id": "c2",
+          "tool_name": "repo.read",
+          "arguments_json": "{\"path\": \"src/calc.py\"}"
+        }
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "tool_calls"
+      }
+    ],
+    [
+      {
+        "kind": "text_delta",
+        "text": "I ran out of steps. What I established: src/calc.py line 2 subtracts b where add() must add, and verify_calc.py asserts add(2, 3) == 5. The fix is a one-character change I did not get to apply."
+      },
+      {
+        "kind": "finished",
+        "finish_reason": "stop"
+      }
+    ]
+  ],
+  "expect": {
+    "status": "stopped",
+    "stop_reason": "step_budget_exhausted",
+    "max_steps_used": 2,
+    "file_not_contains": {
+      "src/calc.py": "a + b"
+    }
+  }
+}

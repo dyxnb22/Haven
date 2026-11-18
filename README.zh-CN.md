@@ -238,13 +238,13 @@ uv run python scripts/gates.py --list        # 检查图及其依赖
 
 | 指标 | 数值 |
 |---|---|
-| 自动化测试 | 1454 |
+| 自动化测试 | 1457 |
 | 行覆盖率（`src/`） | 91% |
 | 源码 / 测试规模 | 约 30.3k / 约 25.1k 行 |
 | 类型检查模块（`mypy --strict`） | 152 |
 | 架构决策记录 | 50 |
-| 离线评估 | 44/44 通过，0 个安全违规 |
-| 评估类别 | security 20 · task 10 · robustness 6 · injection 4 · budget 2 · recovery 2 |
+| 离线评估 | 45/45 通过，0 个安全违规 |
+| 评估类别 | security 20 · task 10 · robustness 6 · injection 4 · budget 3 · recovery 2 |
 | 历史实时真实仓库套件（deepseek-v4-flash） | 修复后 75/79（31/31 + 9/9 + 5/5 + 20/20 + 9/13 + 1/1）；0 个安全违规——原始运行和根因见 docs/EVAL_LIVE.md |
 | 历史同版本完整重跑 | 一次不间断运行中 61/65（失败归因见 docs/EVAL_LIVE.md） |
 
