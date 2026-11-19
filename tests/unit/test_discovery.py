@@ -201,3 +201,45 @@ class TestShape:
         files = {"pyproject.toml": "[tool.pytest.ini_options]\n", "go.mod": "module x"}
         listing = ["tests/test_a.py"]
         assert discover_recipes(files, listing) == discover_recipes(files, list(listing))
+
+
+class TestDetectionIsConservative:
+    """三条此前无人把守的严格性/健壮性规则。
+
+    变异测试实测：把 `^test:` 放宽成任意位置、把 tests 目录的正则放宽、或删掉
+    畸形 JSON 的防护，1582 条测试依然全绿。
+    """
+
+    def test_a_malformed_package_json_is_skipped_not_fatal(self) -> None:
+        """用户正在编辑 package.json 是常态，崩掉比不给建议糟得多。"""
+        candidates = discover_recipes({"package.json": "{ not json at all"})
+        assert all(candidate.id != "npm-test" for candidate in candidates)
+
+    def test_a_package_json_without_a_test_script_yields_nothing(self) -> None:
+        candidates = discover_recipes({"package.json": '{"scripts": {"build": "tsc"}}'})
+        assert candidates == []
+
+    def test_a_makefile_needs_the_target_at_line_start(self) -> None:
+        """配方正文里 echo 出来的 `test:` 不是 Make 目标。
+
+        放宽成任意位置会让一个只是在打印字符串的 Makefile 也得到一条
+        `make test` 建议——而那条命令会失败。
+        """
+        echoed = "build:\n\techo 'test: not a target'\n"
+        assert all(c.id != "make-test" for c in discover_recipes({"Makefile": echoed}))
+        real = "build:\n\techo hi\n\ntest:\n\tpytest\n"
+        assert any(c.id == "make-test" for c in discover_recipes({"Makefile": real}))
+
+    def test_the_tests_dir_signal_must_be_a_direct_test_file(self) -> None:
+        """`tests/test_x.py` 是信号，`tests/sub/test_x.py` 不是。
+
+        放宽正则会让深层嵌套的文件也触发建议，从而把范围限定到一个并非项目
+        测试入口的目录上。
+        """
+        direct = discover_recipes({}, ["tests/test_calc.py"])
+        nested = discover_recipes({}, ["tests/sub/test_calc.py"])
+        assert any(c.id == "pytest" for c in direct)
+        assert not any(c.id == "pytest" for c in nested)
+
+    def test_a_test_directory_without_test_files_is_not_a_signal(self) -> None:
+        assert not any(c.id == "pytest" for c in discover_recipes({}, ["tests/", "src/"]))

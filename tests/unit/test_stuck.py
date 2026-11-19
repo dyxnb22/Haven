@@ -55,3 +55,28 @@ def test_invalid_threshold_raises() -> None:
         StuckLoopDetector(threshold=0)
     with pytest.raises(ValueError, match="threshold must be at least 1"):
         StuckLoopDetector(threshold=-1)
+
+
+def test_the_fingerprint_binds_the_tool_and_its_arguments() -> None:
+    """指纹必须绑定全部三个输入，否则检测器会误判。
+
+    此前它实际上只按 result 区分：把 `tool` 或 `args` 从摘要里删掉，1581 条测试
+    依然全绿（变异测试实测）。那样一来，两个不同的调用只要返回相同文本就会被
+    当成同一次观测——`repo.read a.py` 连着 `repo.read b.py` 读到同样的内容，
+    运行会被判成卡死而提前停止。
+    """
+    base = call_fingerprint("repo.read", '{"path":"a"}', "same text")
+    assert call_fingerprint("repo.edit", '{"path":"a"}', "same text") != base, (
+        "fingerprint does not bind the tool"
+    )
+    assert call_fingerprint("repo.read", '{"path":"b"}', "same text") != base, (
+        "fingerprint does not bind the arguments"
+    )
+    assert call_fingerprint("repo.read", '{"path":"a"}', "other text") != base
+
+    # 因此两次不同调用不会被误判成循环。
+    detector = StuckLoopDetector(threshold=3)
+    assert [
+        detector.observe(fp)
+        for fp in (base, call_fingerprint("repo.read", '{"path":"b"}', "same text"))
+    ] == [False, False]

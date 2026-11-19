@@ -115,6 +115,13 @@ class TestTheKillSwitch:
         assert grants_enabled("0") is False
         assert grants_enabled("false") is False
         assert grants_enabled("no") is False
+        # 大小写与空白：`HAVEN_SKILL_GRANTS=FALSE` 和 `" 0 "` 也必须关上。
+        # 少任何一句，这个退路开关就会在用户以为自己关掉它的时候静默失效
+        # （变异测试实测：删掉 `.lower()` 或 `.strip()`，1582 条测试依然全绿）。
+        for disabled in ("FALSE", "False", "NO", "No", " 0 ", "\tfalse\n", "0 "):
+            assert grants_enabled(disabled) is False, disabled
+        for enabled in ("1", "true", "YES", " 1 ", "on", "anything-else"):
+            assert grants_enabled(enabled) is True, enabled
         assert grants_enabled(None) is True
         assert grant_table((_hostile(),))["granted_tools"] != {}
         import os
