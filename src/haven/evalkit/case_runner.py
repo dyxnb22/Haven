@@ -92,7 +92,14 @@ async def run_case(
             result.passed = False
             result.failures.append(f"changes outside the task's scope: {out_of_scope}")
 
-        if case.hidden_check and case.expect.status == "succeeded":
+        if case.hidden_check and case.hidden_check not in case.recipes:
+            # 拼错或漏声明的隐藏评分器 id：立刻失败，绝不静默跳过。
+            result.passed = False
+            result.failures.append(
+                f"hidden_check {case.hidden_check!r} is not a declared recipe; "
+                "the hidden grader never ran"
+            )
+        elif case.hidden_check and case.expect.status == "succeeded":
             outcome = await run_hidden_check(case, repo)
             if outcome is not None and outcome.exit_code != 0:
                 result.passed = False
@@ -120,7 +127,12 @@ async def run_case(
 
 
 async def run_hidden_check(case: EvalCase, repo: Path) -> CheckOutcome | None:
-    """在案例副本上执行隐藏检查配方；未声明配方时返回 ``None``。"""
+    """在案例副本上执行隐藏检查配方；未声明配方时返回 ``None``。
+
+    调用方必须先确认 `case.hidden_check in case.recipes`：一个拼错的 id 若在这里静默
+    返回 None，隐藏评分器就永远不会执行，而案例照样通过——那正是同一个文件在技能名上
+    坚决不允许的做法（"一个未知名字会让案例立刻失败而不是静默跳过"）。
+    """
     definition = case.recipes.get(case.hidden_check)
     if definition is None:
         return None
@@ -348,10 +360,19 @@ async def run_recovery_scenario(case: EvalCase, repo: Path, result: CaseResult) 
     report = await RecoveryService(store, workspace).inspect(run_id)
     result.status = "resumable" if report.can_resume else "blocked"
     result.stop_reason = ",".join(finding.classification for finding in report.findings)
-    if case.expect.status == "resumable" and not report.can_resume:
+    # `ExpectSpec.status` 是自由字符串，而这里只认两个字面量——任何别的值（一个拼写、
+    # 一次词汇表改名）都会让整个案例**什么都不断言就通过**。agent 案例没有这个问题
+    # （它们走通用的 `status != expect.status` 比较）。所以这里显式枚举合法值，
+    # 并把"对不上"当成失败，而不是静默放行。
+    if case.expect.status not in ("resumable", "blocked"):
+        result.passed = False
+        result.failures.append(
+            f"expect.status must be 'resumable' or 'blocked'; got {case.expect.status!r}"
+        )
+    elif case.expect.status == "resumable" and not report.can_resume:
         result.passed = False
         result.failures.append(f"expected resumable; blocked by {report.blockers}")
-    if case.expect.status == "blocked":
+    elif case.expect.status == "blocked":
         if report.can_resume:
             result.passed = False
             result.failures.append("expected recovery to be blocked, but it was resumable")
@@ -359,3 +380,11 @@ async def run_recovery_scenario(case: EvalCase, repo: Path, result: CaseResult) 
         if executions[0].effect_state is not EffectState.STARTED:
             result.passed = False
             result.failures.append("ambiguous effect was auto-reconciled; it must stay pending")
+
+    # `expect.stop_reason` 此前只被赋值、从未比较——于是案例文件里声明的那个字符串是
+    # 装饰品，分类逻辑翻转（unknown <-> not_run）时 `can_resume` 不变，案例照样通过。
+    if case.expect.stop_reason and case.expect.stop_reason != result.stop_reason:
+        result.passed = False
+        result.failures.append(
+            f"expected stop_reason {case.expect.stop_reason!r}; got {result.stop_reason!r}"
+        )

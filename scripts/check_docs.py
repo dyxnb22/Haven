@@ -23,9 +23,13 @@ from haven import __version__  # noqa: E402
 from haven.interfaces.cli import app  # noqa: E402
 from haven.interfaces.tui.app import HELP_TEXT  # noqa: E402
 
+#: 被检查的文档集合。`README.zh-CN.md` 必须显式列出：它在仓库根目录，两个 glob 都
+#: 匹配不到它，而它带着约 40 个本地链接——译版落地页上的死链此前完全没人看。
+#: 成功消息声称覆盖"116 Markdown files"，漏掉它就不是真的。
 DOC_PATHS = sorted(
     {
         ROOT / "README.md",
+        ROOT / "README.zh-CN.md",
         ROOT / "Haven_TUI_Coding_Agent_项目计划.md",
         *ROOT.glob("docs/**/*.md"),
         *ROOT.glob("course/**/*.md"),

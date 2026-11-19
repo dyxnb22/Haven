@@ -150,9 +150,17 @@ def measure(
     }
 
 
-def _replace_resume_claim(text: str, claim: str) -> str:
-    """替换简历句；找不到时原样返回，由调用方判定为过期。"""
-    return _RESUME_CLAIM.sub(lambda _m: claim, text, count=1)
+def _replace_resume_claim(text: str, claim: str) -> tuple[str, bool]:
+    """替换简历句，返回（新文本，是否真的替换上了）。
+
+    找不到时**必须**让调用方知道：`re.sub` 在无匹配时原样返回文本，于是
+    `updated != current` 不成立，`--check` 便会认为这份文档没问题。那句话是整份文档里
+    最不该出错的一句（它曾从 885 个测试悄悄腐烂到 1456 个而无人把守），一旦有人改写了
+    措辞或删掉它，门禁就会**永久、静默地**对自己失效——此后每一次真实的数字回归都会被
+    放行。所以这里显式返回一个布尔，由调用方判定为过期。
+    """
+    replaced, count = _RESUME_CLAIM.subn(lambda _m: claim, text, count=1)
+    return replaced, count > 0
 
 
 def _src_files() -> list[Path]:
@@ -382,18 +390,22 @@ def main() -> int:
     # 简历条目：同一套守卫，但它是一句内联散文而不是区块。
     resume_path = ROOT / _RESUME_REL
     resume_current = resume_path.read_text(encoding="utf-8")
-    resume_updated = _replace_resume_claim(
+    resume_updated, resume_matched = _replace_resume_claim(
         resume_current,
         render_resume_claim(
             measure(coverage_data=args.coverage_data, offline_report=args.offline_report)
         ),
     )
     if args.check:
-        if resume_updated != resume_current:
+        # 数字对不上，或者那句话压根没找到——两种情况都算过期。
+        if resume_updated != resume_current or not resume_matched:
             stale.append(_RESUME_REL)
     elif resume_updated != resume_current:
         resume_path.write_text(resume_updated, encoding="utf-8")
         print(f"updated {_RESUME_REL}")
+    elif not resume_matched:
+        # 写路径同样要响：替换没发生却说" updated"比不响更糟。
+        print(f"warning: no resume claim found in {_RESUME_REL}; nothing was updated")
 
     if args.check and stale:
         print("stale metrics in: " + ", ".join(stale))

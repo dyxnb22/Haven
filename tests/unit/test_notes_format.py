@@ -71,3 +71,23 @@ def test_the_template_is_a_valid_note() -> None:
     if not template.is_file():
         pytest.fail("docs/notes/TEMPLATE.md must exist so a note has a starting point")
     assert missing_sections(template.read_text(encoding="utf-8")) == []
+
+
+def test_a_missing_notes_directory_fails_instead_of_passing() -> None:
+    """目录不存在必须是"检查没能运行"，不是"一切正常"。
+
+    一次目录搬迁或一次坏合并会让所有笔记落到被检查的树之外，而
+    `0 note(s) well-formed` + 退出码 0 会让这件事无声无息地通过。`evalkit/runner.py`
+    对同样的情形就是抛错的那个。
+    """
+    import scripts.check_notes as notes
+
+    original = notes.NOTES_DIR
+    notes.NOTES_DIR = original.parent / "does-not-exist-xyz"
+    try:
+        assert notes.notes_dir_missing() is True
+        assert notes.main() == 1
+    finally:
+        notes.NOTES_DIR = original
+    # 恢复之后必须仍然正常
+    assert notes.notes_dir_missing() is False

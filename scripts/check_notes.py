@@ -49,6 +49,16 @@ def note_paths() -> list[Path]:
     )
 
 
+def notes_dir_missing() -> bool:
+    """笔记目录不存在时为 True。
+
+    门禁对"输入不存在"必须失败，而不是当成"一切正常"：一次目录搬迁或一次坏合并会让
+    所有笔记落到被检查的树之外，而 `0 note(s) well-formed` + 退出码 0 会让这件事
+    无声无息地通过。`evalkit/runner.py` 对同样的情形就是抛错的那个。
+    """
+    return not NOTES_DIR.is_dir()
+
+
 def collect_problems() -> list[str]:
     """以适合人类阅读的行返回发现的所有笔记问题。"""
     problems: list[str] = []
@@ -64,6 +74,9 @@ def collect_problems() -> list[str]:
 
 def main() -> int:
     """运行决策笔记格式门禁并返回进程退出码。"""
+    if notes_dir_missing():
+        print(f"error: no decision notes directory at {NOTES_DIR}; cannot check anything")
+        return 1
     problems = collect_problems()
     if problems:
         print(f"decision notes: {len(problems)} problem(s)")

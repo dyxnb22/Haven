@@ -42,10 +42,12 @@ class TestResumeClaimRewrite:
         )
         assert rotted != text, "构造漂移失败，测试本身失去了意义"
         assert metrics._RESUME_CLAIM.search(rotted) is not None, "漂移后应当仍可匹配"
-        restored = metrics._replace_resume_claim(rotted, metrics.render_resume_claim(_SYNTHETIC))
+        restored, _matched = metrics._replace_resume_claim(
+            rotted, metrics.render_resume_claim(_SYNTHETIC)
+        )
         assert restored != rotted, "过期数字没有被改写"
         # 同一输入重复改写必须幂等，否则每次 refresh 都会产生新 diff。
-        again = metrics._replace_resume_claim(restored, metrics.render_resume_claim(_SYNTHETIC))
+        again, _ = metrics._replace_resume_claim(restored, metrics.render_resume_claim(_SYNTHETIC))
         assert again == restored
 
     def test_a_missing_claim_is_left_alone_so_check_can_flag_it(self) -> None:
@@ -53,7 +55,28 @@ class TestResumeClaimRewrite:
         text = _resume_text()
         without = metrics._RESUME_CLAIM.sub(lambda _m: "（此句已丢失）", text, count=1)
         assert without != text
-        assert metrics._replace_resume_claim(without, "任何生成值") == without
+        replaced, matched = metrics._replace_resume_claim(without, "任何生成值")
+        assert replaced == without
+        assert matched is False
+
+    def test_check_reports_a_missing_claim_instead_of_passing(self) -> None:
+        """契约的另一半：`--check` 必须把"那句话不见了"判成过期。
+
+        此前只测了 helper 原样返回，于是 `updated != current` 不成立、门禁静默自失效——
+        那句是整份文档里最不该出错的一句，它一旦因改写措辞而匹配不上，此后每一次真实的
+        数字回归都会被放行，且没有任何信号。
+        """
+        text = _resume_text()
+        without = metrics._RESUME_CLAIM.sub(lambda _m: "（此句已丢失）", text, count=1)
+        _, matched = metrics._replace_resume_claim(without, "任何生成值")
+        assert matched is False, "替换没发生必须显式告知调用方，否则 check 会以为没问题"
+
+    def test_check_reports_a_stale_number(self) -> None:
+        """数字对不上时 `matched` 仍为 True，过期由"文本变了"这一路报出。"""
+        text = _resume_text()
+        updated, matched = metrics._replace_resume_claim(text, "最终验证 **9999 项测试…")
+        assert matched is True
+        assert updated != text
 
     def test_rendering_puts_every_measured_number_in(self) -> None:
         """渲染结果必须包含全部五个数字，漏一个就等于简历在说谎。"""

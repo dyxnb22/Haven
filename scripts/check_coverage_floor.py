@@ -83,6 +83,29 @@ def violations(coverage: Mapping[str, float]) -> list[tuple[str, float, int]]:
     return found
 
 
+def gated_paths_on_disk() -> set[str]:
+    """磁盘上所有受门禁约束的源文件。
+
+    门禁原先只看覆盖率报告里出现了哪些文件，而报告只包含**被执行过**的模块：一个
+    新增的、还没有任何代码路径 import 的源文件根本不在报告里，于是 `floor_for` 永远不会
+    被咨询，门禁打印"每个被把关的文件都达标"并退出 0——恰好是本模块 docstring 承诺要
+    阻止的那件事（"新的核心文件也不能在几乎未测试的状态下进入"）。已实测：放一个没人
+    import 的 `src/haven/domain/_probe.py` 进去，报告里 152 个文件不含它，门禁全绿。
+    """
+    # 必须相对 ROOT：`GATED_PREFIXES` 用的是 `src/haven/...` 这种形式，而 glob 出来的是
+    # 绝对路径。用绝对路径去比，每一个文件都会落空，这个集合会恒为空。
+    return {
+        path.relative_to(ROOT).as_posix()
+        for path in sorted(ROOT.glob("src/**/*.py"))
+        if floor_for(path.relative_to(ROOT).as_posix()) is not None
+    }
+
+
+def unreported(coverage: Mapping[str, float]) -> list[str]:
+    """磁盘上受门禁、却没能出现在覆盖率报告里的文件。"""
+    return sorted(gated_paths_on_disk() - {p.replace("\\", "/") for p in coverage})
+
+
 def _coverage_data_file() -> Path:
     """本次测量的覆盖率数据文件：默认 `.coverage`，或 `COVERAGE_FILE` 指定的路径。
 
@@ -129,7 +152,15 @@ def _measured() -> dict[str, float]:
 
 def main() -> int:
     """读取覆盖率数据、检查逐文件下限并返回进程退出码。"""
-    failures = violations(_measured())
+    measured = _measured()
+    missing = unreported(measured)
+    if missing:
+        # 缺席不等于达标：一个从没被执行过的模块是 0% 覆盖，不是"没问题"。
+        print(f"coverage floor: {len(missing)} gated file(s) never executed (0% covered)")
+        for path in missing:
+            print(f"  {path}: not in the coverage report at all")
+        return 1
+    failures = violations(measured)
     if not failures:
         print(
             "coverage floor: every gated file meets its risk tier "

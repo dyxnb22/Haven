@@ -61,3 +61,22 @@ def test_the_real_adrs_all_backlink() -> None:
     from scripts.check_adr_links import collect_problems
 
     assert collect_problems() == []
+
+
+def test_a_sentence_naming_two_adrs_creates_two_obligations() -> None:
+    """`[^.\\n]{0,40}?` 不能跨过第二个 `ADR NNNN`，于是一句里点名两个时只有第一个
+    产生义务——正是这个门禁当初要防的那种漂移。"""
+    import scripts.check_adr_links as links
+
+    assert links.strong_references("Supersedes ADR 0003 and ADR 0004.") == {3, 4}
+    # 1-3 位的编号同样要认：短编号此前会让门禁整个失效
+    assert links.strong_references("Amends ADR 9.") == {9}
+    # 分号与另一个关系动词都是边界：`extends`/`preserves` 的目标不是被推翻的对象
+    assert links.strong_references("Status: Accepted (amends ADR 0009, extends ADR 0012/0013)") == {
+        9
+    }
+    assert links.strong_references(
+        "amends ADR 0002 and ADR 0021; preserves ADR 0009, ADR 0025, and ADR 0032"
+    ) == {2, 21}
+    # 被动语态仍然不产生义务
+    assert links.strong_references("Corrected by ADR 0026.") == set()
