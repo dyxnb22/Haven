@@ -258,7 +258,11 @@ def verify_provider(
             UsageReport,
         )
 
-        config = load_config(Path.cwd())
+        try:
+            config = load_config(Path.cwd())
+        except ConfigError as exc:
+            typer.echo(f"error: {exc}")
+            raise typer.Exit(EXIT_USAGE) from None
         try:
             model = build_provider(config)
         except BootstrapError as exc:

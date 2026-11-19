@@ -7,7 +7,7 @@ from pathlib import Path
 
 import typer
 
-from haven.config import load_config
+from haven.config import ConfigError, load_config
 from haven.interfaces.cli_support.common import EXIT_OK, EXIT_STOPPED, EXIT_USAGE
 
 
@@ -48,7 +48,11 @@ def eval_command(
         from haven.bootstrap import build_provider
         from haven.evalkit.runner import run_suite
 
-        config = load_config(Path.cwd())
+        try:
+            config = load_config(Path.cwd())
+        except ConfigError as exc:
+            typer.echo(f"error: {exc}")
+            raise typer.Exit(EXIT_USAGE) from None
         if config.provider.api_key() is None:
             typer.echo(f"error: no API key in ${config.provider.api_key_env}")
             return EXIT_USAGE

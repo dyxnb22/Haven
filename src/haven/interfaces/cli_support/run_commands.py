@@ -114,7 +114,13 @@ def run(
     验证但不修改）或 `all`（完全无人值守的自动修复）。配合 --jsonl 适合 CI。
     """
     if plan and (write or worktree or review):
-        typer.echo("error: --plan cannot be combined with --write or --worktree")
+        # 提示要点名真正冲突的那个：条件里含 review，只说 write/worktree 会把人指错方向。
+        conflicting = [
+            name
+            for name, on in (("--write", write), ("--worktree", worktree), ("--review", review))
+            if on
+        ]
+        typer.echo(f"error: --plan cannot be combined with {' or '.join(conflicting)}")
         raise typer.Exit(EXIT_USAGE)
     _run_headless(
         goal=goal,

@@ -163,7 +163,15 @@ def export(
                 return EXIT_USAGE
             content = render_jsonl(envelopes) if fmt == "jsonl" else render_markdown(run, envelopes)
             if output is not None:
-                output.write_text(content, encoding="utf-8")
+                # 与 `haven handoff --export`、`haven output --save` 一致：用 "x" 拒绝
+                # 覆盖。静默 truncate 会让 `haven export RUN -o notes.md` 毁掉 notes.md
+                # 里原有的内容，而另外两条导出路径都是明确拒绝的。
+                try:
+                    with output.open("x", encoding="utf-8") as handle:
+                        handle.write(content)
+                except FileExistsError:
+                    typer.echo(f"error: {output} already exists; refusing to overwrite it")
+                    return EXIT_USAGE
                 typer.echo(f"wrote {output}")
             else:
                 typer.echo(content)

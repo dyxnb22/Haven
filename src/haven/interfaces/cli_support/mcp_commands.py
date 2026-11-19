@@ -8,7 +8,7 @@ from pathlib import Path
 
 import typer
 
-from haven.config import load_config
+from haven.config import ConfigError, load_config
 from haven.contracts.mcp import MCPToolSchema
 from haven.interfaces.cli_support.common import EXIT_OK, EXIT_USAGE
 
@@ -29,7 +29,13 @@ def mcp(
 ) -> None:
     """管理与检查受控 MCP 服务器：查看已配置服务、检查可用工具与自动计算/固定 Schema 指纹。"""
     ws = workspace.resolve()
-    config = load_config(ws)
+    try:
+        config = load_config(ws)
+    except ConfigError as exc:
+        # 配置损坏是用法错误（cli.py 的契约：2 = 用法错误），不是程序崩溃。不接住它会以
+        # traceback + 退出码 1 结束，而同根因的 `haven config explain` 早已规规矩矩给 2。
+        typer.echo(f"error: {exc}")
+        raise typer.Exit(EXIT_USAGE) from None
     servers = {s.name: s for s in config.mcp_servers}
 
     if action == "list":

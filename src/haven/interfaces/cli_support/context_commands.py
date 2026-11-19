@@ -13,7 +13,7 @@ from haven.application.mcp_resources import (
     remove_imported_resource,
     save_imported_resource,
 )
-from haven.config import load_config
+from haven.config import ConfigError, load_config
 from haven.interfaces.cli_support.common import EXIT_OK, EXIT_USAGE
 
 
@@ -54,7 +54,11 @@ def context(
             typer.echo("  haven context add my_server haven://runs/123/evidence")
             raise typer.Exit(EXIT_USAGE)
 
-        config = load_config(ws)
+        try:
+            config = load_config(ws)
+        except ConfigError as exc:
+            typer.echo(f"error: {exc}")
+            raise typer.Exit(EXIT_USAGE) from None
         servers = {s.name: s for s in config.mcp_servers}
         srv = servers.get(server_name)
         if not srv:

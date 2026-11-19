@@ -101,7 +101,13 @@ def reconcile(
         try:
             recovery = RecoveryService(store, make_workspace(Path.cwd()))
             resolved = cast(Literal["confirmed", "not_run", "abandon"], resolution)
-            await recovery.reconcile(run_id, call_id, resolved)
+            try:
+                await recovery.reconcile(run_id, call_id, resolved)
+            except ValueError as exc:
+                # 不存在的 run/call 是用法错误。不接住会以 traceback + 退出码 1 结束，
+                # 而同文件里 `--as` 的校验给的是规规矩矩的 2。
+                typer.echo(f"error: {exc}")
+                raise typer.Exit(EXIT_USAGE) from None
             typer.echo(f"execution {call_id} marked {resolution}")
         finally:
             await store.close()

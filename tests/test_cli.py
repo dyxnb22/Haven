@@ -526,3 +526,107 @@ def test_mcp_unknown_action(tmp_path: Path) -> None:
     result = runner.invoke(app, ["mcp", "unknown_action", "--workspace", str(tmp_path)])
     assert result.exit_code == 2
     assert "unknown action" in result.stdout
+
+
+# -- 稳定的退出码契约：配置损坏必须是用法错误（2），不是崩溃（1） -------------
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["mcp", "list"],
+        ["mcp", "tools", "some-server"],
+        # 只有 `context add` 会读配置；`list` 不碰它，别把没关系的命令拽进来
+        ["context", "add", "srv", "haven://x"],
+    ],
+)
+def test_a_broken_config_is_a_usage_error_not_a_crash(tmp_path: Path, argv: list[str]) -> None:
+    """`cli.py` 的 docstring 承诺了稳定的退出码（2 = 用法错误）。
+
+    这四个命令此前不接 `ConfigError`，于是一个手写错的 `.haven.toml` 会让它们以
+    traceback + 退出码 1 结束；而同根因的 `haven config explain` 早已给 2。
+    """
+    (tmp_path / ".haven.toml").write_text('[provider]\nbase_url = "http://evil"\n')
+    result = runner.invoke(app, [*argv, "--workspace", str(tmp_path)])
+    assert result.exit_code == 2, f"{argv} -> {result.exit_code}: {result.stdout}"
+    assert "may only contain" in result.stdout
+
+
+def test_a_broken_config_in_verify_provider_is_a_usage_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`verify_provider` 用 `Path.cwd()` 且没有 --workspace，所以必须真的切目录。"""
+    (tmp_path / ".haven.toml").write_text('[provider]\nbase_url = "http://evil"\n')
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["verify-provider", "--yes"])
+    assert result.exit_code == 2
+    assert "may only contain" in result.stdout
+
+
+# -- --plan 的提示要点名真正冲突的那个 ---------------------------------------
+
+
+def test_plan_with_review_names_the_real_conflict() -> None:
+    """条件里含 --review，提示却只说 --write/--worktree，会把人指错方向。"""
+    result = runner.invoke(app, ["run", "x", "--plan", "--review"])
+    assert result.exit_code == 2
+    assert "--review" in result.stdout
+    assert "--write" not in result.stdout
+
+
+# -- export -o 不静默覆盖 ----------------------------------------------------
+
+
+def test_export_refuses_to_clobber_an_existing_file(tmp_path: Path) -> None:
+    """`haven export RUN -o notes.md` 曾静默 truncate 掉 notes.md。
+
+    另外两条导出路径（`haven handoff --export`、`haven output --save`）都用 mode "x"
+    明确拒绝覆盖，只有这条不一致。
+    """
+    import asyncio
+
+    from haven.bootstrap import open_store
+    from haven.contracts.events import RunCreated
+    from haven.domain.enums import PermissionMode
+
+    run_id = "run-export-clobber-test"
+
+    async def seed() -> None:
+        store = await open_store()
+        try:
+            await store.create_run(run_id, "/tmp/ws", "d" * 64, "inspect the parser", "interactive")
+            await store.append_event(
+                run_id,
+                RunCreated(
+                    run_id=run_id,
+                    goal="inspect the parser",
+                    mode=PermissionMode.READ_ONLY,
+                    agent_mode="agent",
+                    workspace="/tmp/ws",
+                    workspace_digest="d" * 64,
+                    git_branch="main",
+                    model_name="scripted",
+                    max_steps=10,
+                ),
+            )
+        finally:
+            await store.close()
+
+    asyncio.run(seed())
+
+    target = tmp_path / "notes.md"
+    target.write_text("precious unrelated content\n", encoding="utf-8")
+    result = runner.invoke(app, ["export", run_id, "-o", str(target)])
+    assert result.exit_code == 2
+    assert "already exists" in result.stdout
+    # 原有内容必须原样还在
+    assert target.read_text(encoding="utf-8") == "precious unrelated content\n"
+
+
+# -- reconcile 的退出码 ------------------------------------------------------
+
+
+def test_reconcile_an_unknown_run_is_a_usage_error() -> None:
+    """不存在的 run/call 曾以 traceback + 退出码 1 结束，而同文件里 `--as` 的校验给 2。"""
+    result = runner.invoke(app, ["reconcile", "run-nope", "call-nope", "--as", "not_run"])
+    assert result.exit_code == 2
