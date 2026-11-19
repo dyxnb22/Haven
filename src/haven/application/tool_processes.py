@@ -239,7 +239,17 @@ class ProcessToolExecutor:
     ) -> ToolExecution:
         """执行已注册检查配方，拒绝保护路径被改写的结果并记录检查证据。"""
         assert isinstance(args, RepoCheckArgs)
-        recipe = self._recipes[args.recipe_id]
+        # 未注册的 recipe_id 走结构化拒绝而不是裸 KeyError：策略门禁理论上
+        # 已经拦下这种情况，但执行层不该把"门禁刚好成立"当作自己的安全边界。
+        recipe = self._recipes.get(args.recipe_id)
+        if recipe is None:
+            return ToolExecution(
+                error_result(
+                    call,
+                    ToolErrorCode.DENIED,
+                    f"recipe {args.recipe_id!r} is not registered in this run",
+                )
+            )
         before = await self._snapshot_before_process(ctx)
         await self._store.record_execution(
             ExecutionRecord(

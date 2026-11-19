@@ -361,11 +361,26 @@ class ToolFactsCollector:
         assert isinstance(args, RecipeProposeArgs)
         within = True
         touches_protected = False
-        for item in args.argv:
-            if item.startswith("..") or "/../" in item or "\\..\\" in item:
-                within = False
-            if not item.startswith("/"):
-                facts = self._workspace.path_facts(item)
+        # `argv[0]` 是程序，不是工作区内的文件操作数——`/usr/bin/python` 这样的
+        # 绝对路径完全正当（`classify_argv` 同样只把 argv[0] 当程序名看）。要查的是
+        # argv[1:] 起的操作数。
+        for item in args.argv[1:]:
+            for token in item.split("="):
+                if token.startswith("..") or "/../" in token or "\\..\\" in token:
+                    within = False
+                # 与 `_facts_check` 同一套规则：绝对路径和 `~` 既不可能是工作区内
+                # 的路径，也就不该通过 `within_workspace`。少了这一句，
+                # `recipe.propose(argv=["cat", "<abs>/.git/config"])` 会收集到
+                # `within_workspace=True, touches_protected_path=False`，策略于是
+                # 只给 ASK——而同一条命令走 `repo.exec` 是硬拒绝。模型可以先用
+                # `repo.exec(argv=["pwd"])` 学到绝对根路径再走到这里。
+                if token.startswith(("/", "~")):
+                    within = False
+            clean_item = item.split("::", 1)[0]
+            if not item.startswith("-"):
+                facts = self._workspace.path_facts(clean_item)
+                if not facts.within_workspace:
+                    within = False
                 if facts.is_protected:
                     touches_protected = True
         return (

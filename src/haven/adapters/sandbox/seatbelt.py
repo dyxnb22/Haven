@@ -14,12 +14,19 @@ SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 
 #: 无论文件系统策略如何都允许。这里不追求 IPC 隔离；拒绝这些内容会破坏
 #: 普通解释器，却无法堵住此沙箱要解决的文件系统或网络漏洞。
+#:
+#: `(allow signal (target children))` 是必需的，不是宽松化：只允许向自己的子进程
+#: 发信号。没有它，`(target self)` 使沙箱内任何带超时的子进程管理都会失败——
+#: `subprocess.run(timeout=…)` 在杀子进程时抛 `PermissionError` 而不是
+#: `TimeoutExpired`，`pytest-timeout`、`timeout(1)` 等同样中招（已用真实的
+#: /usr/bin/sandbox-exec 实证）。限制过严与限制过松同样是缺陷。
 _PREAMBLE = """\
 (version 1)
 (deny default)
 (allow process-exec)
 (allow process-fork)
 (allow signal (target self))
+(allow signal (target children))
 (allow sysctl-read)
 (allow mach-lookup)
 (allow ipc-posix-shm)

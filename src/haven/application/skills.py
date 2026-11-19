@@ -252,16 +252,23 @@ def discover_skills(*, user_root: Path, project_root: Path) -> SkillCatalog:
         for path in candidates[:MAX_SCANNED_PER_ROOT]:
             name = path.parent.name
             source = f"{prefix}/{name}/{SKILL_FILENAME}"
-            if path.is_symlink():
-                # 与 `FsWorkspace.path_facts` 拒绝符号链接同理由：一个指向
-                # ~/.ssh/id_rsa 的 SKILL.md 会让 Haven 把工作区之外的敏感文件
-                # 读进提示词，而这条边界本应是"只读技能目录里的普通文件"。
-                #
-                # 只查最后一层就够，因为 `glob` 的目录组件不跟随符号链接：一个
-                # 链接技能目录压根不会出现在 candidates 里（它会安静地消失，而不是
-                # 被加载）。真正需要逐组件走查的是 `read_skill_file`——那里用户给的
-                # 是任意相对路径，中间每一层都可能是出口。
-                refused.append(SkillRefusal(source, "refused: skill file is a symlink"))
+            # 与 `FsWorkspace.path_facts` 拒绝符号链接同理由：一个指向
+            # ~/.ssh/id_rsa 的 SKILL.md 会让 Haven 把工作区之外的敏感文件
+            # 读进提示词，而这条边界本应是"只读技能目录里的普通文件"。
+            #
+            # 必须逐组件走查，不能只看最后一层：`Path.is_symlink()` 只回答
+            # "SKILL.md 是不是链接"，看不见 `skills/evil/SKILL.md` 里那个指向
+            # 外部的 `evil` 目录——而 `glob("*/SKILL.md")` 确实会跟着它走进去
+            # （已实证）。只查最后一层时，一个在 `git status` 里完全不可见的
+            # 链接就能把技能根之外的正文、连同它 frontmatter 里的
+            # `allowed-tools` 常驻授权，一起送进这次运行。
+            linked = _first_symlinked_component(root, name, SKILL_FILENAME)
+            if linked is not None:
+                if linked == SKILL_FILENAME:
+                    reason = "refused: skill file is a symlink"
+                else:
+                    reason = f"refused: skill directory {linked!r} is a symlink"
+                refused.append(SkillRefusal(source, reason))
                 continue
             try:
                 skill = parse_skill(

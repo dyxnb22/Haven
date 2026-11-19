@@ -105,6 +105,36 @@ class MutationToolExecutor:
                         occurrence=args.occurrence,
                         replace_all=args.replace_all,
                     )
+            # 落盘之后的记账同样在这道守卫之内。`emitter.emit` 会 await 每一个
+            # sink 并写事件日志，`update_execution_state` 也是一次存储写入——
+            # 它们都会抛。放在守卫之外，一次 sink 故障就会让"文件已写、执行记录
+            # 仍是 STARTED、证据账本没有这一条"的状态带着 effect_unknown=False
+            # 流回代理循环，而运行会继续往下写。
+            ctx.files_read[outcome.path] = outcome.postimage_digest
+            verb = "created" if isinstance(args, RepoCreateArgs) else "edited"
+            envelope = await self._emitter.emit(
+                ctx.run_id,
+                EvidenceRecorded(
+                    run_id=ctx.run_id,
+                    evidence_kind="edit",
+                    summary=f"{verb} {outcome.path}: postimage {outcome.postimage_digest[:12]}",
+                ),
+            )
+            ctx.ledger = ctx.ledger.with_edit(
+                EditEvidence(
+                    seq=envelope.seq,
+                    path=outcome.path,
+                    preimage_digest=outcome.preimage_digest,
+                    postimage_digest=outcome.postimage_digest,
+                )
+            )
+            # 只有磁盘后像、审计事件和内存证据账本都完成后才确认执行。若在这些
+            # 边界之间取消或失败，STARTED 会由上面的 BaseException 分支收口为
+            # EFFECT_UNKNOWN，而不会留下"执行已确认、恢复证据却缺失"的矛盾状态
+            # （ADR 0030）。
+            await self._store.update_execution_state(
+                ctx.run_id, call.call_id, EffectState.CONFIRMED, outcome.postimage_digest
+            )
         except WorkspaceError as exc:
             await self._store.update_execution_state(ctx.run_id, call.call_id, EffectState.FAILED)
             return ToolExecution(error_result(call, map_workspace_error(exc), str(exc)))
@@ -121,30 +151,6 @@ class MutationToolExecutor:
             )
             raise
 
-        ctx.files_read[outcome.path] = outcome.postimage_digest
-        verb = "created" if isinstance(args, RepoCreateArgs) else "edited"
-        envelope = await self._emitter.emit(
-            ctx.run_id,
-            EvidenceRecorded(
-                run_id=ctx.run_id,
-                evidence_kind="edit",
-                summary=f"{verb} {outcome.path}: postimage {outcome.postimage_digest[:12]}",
-            ),
-        )
-        ctx.ledger = ctx.ledger.with_edit(
-            EditEvidence(
-                seq=envelope.seq,
-                path=outcome.path,
-                preimage_digest=outcome.preimage_digest,
-                postimage_digest=outcome.postimage_digest,
-            )
-        )
-        # 只有磁盘后像、审计事件和内存证据账本都完成后才确认执行。若在这些
-        # 边界之间取消，STARTED 会由 RunService 收口为 EFFECT_UNKNOWN，而不会
-        # 留下“执行已确认、恢复证据却缺失”的矛盾状态（ADR 0030）。
-        await self._store.update_execution_state(
-            ctx.run_id, call.call_id, EffectState.CONFIRMED, outcome.postimage_digest
-        )
         return ToolExecution(
             ok_result(
                 call,
@@ -329,6 +335,44 @@ class MutationToolExecutor:
                 outcomes = await self._workspace.apply_patch(preview, skip_syntax_check=True)
             else:
                 outcomes = await self._workspace.apply_patch(preview)
+            # 落盘之后的记账同样在这道守卫之内，理由与 `execute_write` 相同：
+            # `emit` 会 await 每一个 sink，`update_execution_state` 也是一次存储
+            # 写入，它们都会抛。放在守卫之外，一次 sink 故障就会让"文件已写、
+            # 每个效果的记录仍是 STARTED"的状态带着 effect_unknown=False 流回
+            # 代理循环。
+            envelope = await self._emitter.emit(
+                ctx.run_id,
+                EvidenceRecorded(
+                    run_id=ctx.run_id,
+                    evidence_kind="edit",
+                    summary=(
+                        f"patch: {len(outcomes)} file(s), "
+                        f"+{preview.insertions} -{preview.deletions}"
+                    ),
+                ),
+            )
+            for outcome in outcomes:
+                ctx.ledger = ctx.ledger.with_edit(
+                    EditEvidence(
+                        seq=envelope.seq,
+                        path=outcome.path,
+                        preimage_digest=outcome.preimage_digest,
+                        postimage_digest=outcome.postimage_digest,
+                    )
+                )
+                if outcome.postimage_digest:
+                    ctx.files_read[outcome.path] = outcome.postimage_digest
+                else:
+                    ctx.files_read.pop(outcome.path, None)
+
+            by_path = {outcome.path: outcome for outcome in outcomes}
+            for index, effect in enumerate(preview.effects):
+                await self._store.update_execution_state(
+                    ctx.run_id,
+                    f"{call.call_id}#{index}",
+                    EffectState.CONFIRMED,
+                    by_path[effect.path].postimage_digest,
+                )
         except WorkspaceError as exc:
             await mark_all(EffectState.FAILED)
             return ToolExecution(error_result(call, map_workspace_error(exc), str(exc)))
@@ -340,39 +384,6 @@ class MutationToolExecutor:
         except BaseException:
             await mark_all(EffectState.EFFECT_UNKNOWN)
             raise
-
-        envelope = await self._emitter.emit(
-            ctx.run_id,
-            EvidenceRecorded(
-                run_id=ctx.run_id,
-                evidence_kind="edit",
-                summary=(
-                    f"patch: {len(outcomes)} file(s), +{preview.insertions} -{preview.deletions}"
-                ),
-            ),
-        )
-        for outcome in outcomes:
-            ctx.ledger = ctx.ledger.with_edit(
-                EditEvidence(
-                    seq=envelope.seq,
-                    path=outcome.path,
-                    preimage_digest=outcome.preimage_digest,
-                    postimage_digest=outcome.postimage_digest,
-                )
-            )
-            if outcome.postimage_digest:
-                ctx.files_read[outcome.path] = outcome.postimage_digest
-            else:
-                ctx.files_read.pop(outcome.path, None)
-
-        by_path = {outcome.path: outcome for outcome in outcomes}
-        for index, effect in enumerate(preview.effects):
-            await self._store.update_execution_state(
-                ctx.run_id,
-                f"{call.call_id}#{index}",
-                EffectState.CONFIRMED,
-                by_path[effect.path].postimage_digest,
-            )
 
         return ToolExecution(
             ok_result(

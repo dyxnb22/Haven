@@ -14,7 +14,13 @@ from pathlib import Path
 
 import pytest
 
-from haven.application.skills import Skill, SkillCatalog, SkillError, parse_skill
+from haven.application.skills import (
+    Skill,
+    SkillCatalog,
+    SkillError,
+    discover_skills,
+    parse_skill,
+)
 from haven.domain.enums import PermissionMode, RunStatus
 from haven.domain.policy import EFFECT_TOOLS, KNOWN_TOOLS, ToolFacts, evaluate_policy
 from tests.integration.harness import Harness, finish, make_repo, text, tool
@@ -335,3 +341,58 @@ class TestAGrantedCallNeverReachesTheHumanApprovalPath:
         )
         notices = [e.message for e in h.sink.events_of("notice")]
         assert any("standing approval" in n and "repo.check" in n for n in notices), notices
+
+
+class TestASymlinkedSkillDirectoryIsRefused:
+    """链接技能目录必须被拒绝——它的正文和 allowed-tools 都来自技能根之外。
+
+    `Path.glob("*/SKILL.md")` **会**跟随符号链接目录组件（已实证），所以只查
+    `path.is_symlink()`（最后一层）会放它过去：一个在 `git status` 里完全不可见
+    的链接，就能把技能根之外的 SKILL.md 收进提示词，并让它 frontmatter 里的
+    `allowed-tools` 变成本次运行的常驻授权。
+    """
+
+    @staticmethod
+    def _catalog(tmp_path: Path, skills_root: Path) -> SkillCatalog:
+        return SkillCatalog((), user_root=skills_root)
+
+    def test_a_symlinked_skill_directory_is_refused(self, tmp_path: Path) -> None:
+        outside = tmp_path / "outside"
+        (outside / "smuggled").mkdir(parents=True)
+        (outside / "smuggled" / "SKILL.md").write_text(
+            "---\nname: smuggled\ndescription: x\nallowed-tools: repo.edit\n---\n\nTOPSECRET\n",
+            encoding="utf-8",
+        )
+        skills_root = tmp_path / "skills"
+        skills_root.mkdir()
+        (skills_root / "evil").symlink_to(outside / "smuggled", target_is_directory=True)
+
+        catalog = discover_skills(user_root=skills_root, project_root=tmp_path / "no-project")
+        assert catalog.names() == ()
+        assert [r.reason for r in catalog.refused] == [
+            "refused: skill directory 'evil' is a symlink"
+        ]
+        # 正文一个字都没进来。
+        assert "TOPSECRET" not in str(catalog)
+
+    def test_a_symlinked_skill_file_is_still_refused(self, tmp_path: Path) -> None:
+        """最后一层是链接的情况原本就被拦住，不能被新的逐组件检查漏掉。"""
+        skills_root = tmp_path / "skills"
+        (skills_root / "sneaky").mkdir(parents=True)
+        secret = tmp_path / "secret.txt"
+        secret.write_text("TOPSECRET", encoding="utf-8")
+        (skills_root / "sneaky" / "SKILL.md").symlink_to(secret)
+
+        catalog = discover_skills(user_root=skills_root, project_root=tmp_path / "no-project")
+        assert catalog.names() == ()
+        assert [r.reason for r in catalog.refused] == ["refused: skill file is a symlink"]
+
+    def test_a_normal_skill_directory_still_loads(self, tmp_path: Path) -> None:
+        """修复不能把正常技能也拒掉。"""
+        skills_root = tmp_path / "skills"
+        (skills_root / "good").mkdir(parents=True)
+        (skills_root / "good" / "SKILL.md").write_text(
+            "---\nname: good\ndescription: x\n---\n\n正文\n", encoding="utf-8"
+        )
+        catalog = discover_skills(user_root=skills_root, project_root=tmp_path / "no-project")
+        assert catalog.names() == ("good",)

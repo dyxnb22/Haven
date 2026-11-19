@@ -170,6 +170,26 @@ class TestReadConfinement:
         assert exit_code == 0, output
         assert output.strip().isdigit()
 
+    async def test_a_sandboxed_program_can_time_out_its_own_child(self, tmp_path: Path) -> None:
+        """沙箱内的子进程管理必须能发信号给自己的子进程。
+
+        `(allow signal (target self))` 只允许自伤自杀：`subprocess.run(timeout=…)`
+        在杀子进程时抛 `PermissionError` 而不是 `TimeoutExpired`，`pytest-timeout`、
+        `timeout(1)` 等全部中招。收窄到 `(target children)` 后行为恢复正常。
+        """
+        exit_code, output = await run(
+            tmp_path,
+            "import subprocess\n"
+            "try:\n"
+            "    subprocess.run(['sleep', '5'], timeout=1)\n"
+            "except subprocess.TimeoutExpired:\n"
+            "    print('TIMED-OUT-CORRECTLY')\n",
+        )
+        assert exit_code == 0, output
+        assert "TIMED-OUT-CORRECTLY" in output, (
+            "沙箱内的超时没有生效——子进程杀不掉，命令会挂到外部超时"
+        )
+
 
 class TestNetworkConfinement:
     async def test_tcp_connect_is_blocked(self, tmp_path: Path) -> None:

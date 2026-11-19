@@ -407,13 +407,19 @@ class ToolPipeline:
         产生副作用的工具族在重新抛出未预期异常前都会写这一笔，因此日志是"副作用
         是否可能已落盘"的权威答案。查询失败时保守地返回 True：宁可多停一次，
         也不要带着无法证明的磁盘状态继续运行。
+
+        `repo.apply_patch` 把每个文件的效果记在 `f"{call_id}#{index}"` 下，所以
+        这里必须同时认裸 id 和带 `#` 后缀的 id——只认裸 id 会让补丁的每一个
+        EFFECT_UNKNOWN 记录都查不出来，于是补丁出意外时运行照旧继续，而磁盘状态
+        其实已经无法证明。
         """
         try:
             records = await self._store.load_executions(run_id)
         except Exception:
             return True
         return any(
-            record.call_id == call_id and record.effect_state is EffectState.EFFECT_UNKNOWN
+            (record.call_id == call_id or record.call_id.startswith(f"{call_id}#"))
+            and record.effect_state is EffectState.EFFECT_UNKNOWN
             for record in records
         )
 

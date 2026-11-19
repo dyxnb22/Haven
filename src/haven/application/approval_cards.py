@@ -160,7 +160,16 @@ class ApprovalCardRenderer:
     def _card_check(self, args: ToolArgs, preview: ToolPreview) -> tuple[str, str]:
         if not isinstance(args, RepoCheckArgs):
             return "", ""
-        recipe = self._recipes[args.recipe_id]
+        # 未注册的 recipe_id 必须走结构化拒绝，而不是抛 KeyError。
+        # `ask()` 在流水线的第 5 阶段被调用，位于第 7 阶段那个兜底
+        # `except Exception` 之前——一个裸字典索引会直接掀翻整次运行，
+        # 模型连一个 ToolResult 都收不到，更谈不上自我纠正。
+        recipe = self._recipes.get(args.recipe_id)
+        if recipe is None:
+            return (
+                f"run check recipe {args.recipe_id!r}",
+                f"recipe {args.recipe_id!r} is not registered in this run",
+            )
         args_desc = f" with args {list(args.args)!r}" if args.args else ""
         summary = (
             f"run check recipe {args.recipe_id!r}{args_desc} "

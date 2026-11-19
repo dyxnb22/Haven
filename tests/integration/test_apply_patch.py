@@ -8,10 +8,21 @@ from pathlib import Path
 
 import pytest
 
+from haven.adapters.memory_session import MemorySessionStore
+from haven.adapters.workspace_fs import FsWorkspace
 from haven.application.approvals import ApprovalResponder
+from haven.application.emitter import EventEmitter
+from haven.application.state import RunContext
+from haven.application.tool_facts import ToolFactsCollector
+from haven.application.tool_mutations import MutationToolExecutor
+from haven.application.tool_pipeline import ToolPipeline
 from haven.contracts.events import ApprovalRequested, ToolCompleted
+from haven.contracts.model import ToolCallProposal
+from haven.contracts.tools import RepoApplyPatchArgs, RepoEditArgs
 from haven.domain.approval import ApprovalRequest
+from haven.domain.budget import Budget
 from haven.domain.enums import ApprovalDecision, EffectState, PermissionMode, RunStatus, StopReason
+from haven.domain.ids import RunId
 from haven.ports.workspace import PatchRollbackError
 from tests.integration.harness import Harness, finish, make_repo, text, tool
 
@@ -438,3 +449,125 @@ class TestPatchPreservesLineEndings:
         assert completed and completed[0].error_code == "internal"
         assert (repo / "src" / "calc.py").read_bytes() == first_bytes, "回滚把换行风格改掉了"
         assert (repo / "src" / "util.py").read_bytes() == second_bytes
+
+
+class TestAnUnexpectedPatchFailureIsEffectUnknown:
+    """补丁在落盘之后炸开时，运行必须停下来，而不是继续写。
+
+    `execute_patch` 把每个文件的效果记在 `f"{call_id}#{index}"` 下，而流水线
+    的 `_side_effect_is_undetermined` 此前只拿裸 `call_id` 去比对——于是补丁的
+    每一个 EFFECT_UNKNOWN 记录都查不出来，工具结果带着 `effect_unknown=False`
+    流回代理循环，而磁盘状态其实已经无法证明。单文件编辑工具一直是对的，所以
+    这个缺口只在补丁上出现。
+    """
+
+    @staticmethod
+    async def _run(root: Path) -> tuple[object, list[tuple[str, str]]]:
+        (root / "a.txt").write_text("one\n", encoding="utf-8")
+        workspace = FsWorkspace(root)
+        store = MemorySessionStore()
+        emitter = EventEmitter(store, ())
+        ctx = RunContext(
+            run_id=RunId("r"), goal="g", mode=PermissionMode.INTERACTIVE, budget=Budget()
+        )
+        ctx.files_read["a.txt"] = workspace.path_facts("a.txt").digest or ""
+        mutations = MutationToolExecutor(workspace=workspace, store=store, emitter=emitter)
+        pipeline = ToolPipeline(
+            workspace=workspace,
+            executor=None,
+            store=store,
+            emitter=emitter,
+            approvals=None,
+            registry=None,
+            recipes={},
+            mode=PermissionMode.INTERACTIVE,
+        )
+        real_apply = workspace.apply_patch
+
+        async def apply_then_explode(preview, **kwargs):  # type: ignore[no-untyped-def]
+            await real_apply(preview, **kwargs)
+            raise OSError("disk fell over after the write")
+
+        workspace.apply_patch = apply_then_explode  # type: ignore[method-assign]
+        call = ToolCallProposal(call_id="c1", tool_name="repo.apply_patch", arguments_json="{}")
+        args = RepoApplyPatchArgs(
+            operations=(
+                {"kind": "edit", "path": "a.txt", "old_string": "one", "new_string": "two"},
+            )
+        )
+        _, preview = await ToolFactsCollector(workspace, {}, None).collect(ctx, call, args)
+        with pytest.raises(OSError, match="disk fell over"):
+            await mutations.execute_patch(ctx, call, args, "ticket", preview)
+        records = [
+            (record.call_id, record.effect_state.value)
+            for record in await store.load_executions(ctx.run_id)
+        ]
+        return await pipeline._side_effect_is_undetermined(ctx.run_id, call.call_id), records
+
+    async def test_the_undetermined_flag_reaches_the_pipeline(self, tmp_path: Path) -> None:
+        undetermined, records = await self._run(tmp_path)
+        assert records == [("c1#0", "effect_unknown")], records
+        assert undetermined is True, (
+            "补丁的 EFFECT_UNKNOWN 记录必须能被流水线认出来，否则运行会继续往下写"
+        )
+
+
+class TestAFailureAfterTheWriteIsEffectUnknown:
+    """落盘之后的记账失败，也必须把执行记录收口成 EFFECT_UNKNOWN。
+
+    `execute_write` 的 `try/except BaseException` 原本只包住写入本身；
+    `emitter.emit`（会 await 每一个 sink）、`ctx.ledger` 的更新和
+    `update_execution_state(CONFIRMED)` 都在守卫之外。一次 sink 故障就会让
+    "文件已写、记录仍是 STARTED、证据账本没有这一条"的状态流回代理循环，
+    而运行会继续往下写。
+    """
+
+    @staticmethod
+    async def _run(root: Path) -> tuple[list[tuple[str, str]], bool]:
+        (root / "a.txt").write_text("one\n", encoding="utf-8")
+        workspace = FsWorkspace(root)
+        store = MemorySessionStore()
+        emitter = EventEmitter(store, ())
+        ctx = RunContext(
+            run_id=RunId("r"), goal="g", mode=PermissionMode.INTERACTIVE, budget=Budget()
+        )
+        ctx.files_read["a.txt"] = workspace.path_facts("a.txt").digest or ""
+        mutations = MutationToolExecutor(workspace=workspace, store=store, emitter=emitter)
+        pipeline = ToolPipeline(
+            workspace=workspace,
+            executor=None,
+            store=store,
+            emitter=emitter,
+            approvals=None,
+            registry=None,
+            recipes={},
+            mode=PermissionMode.INTERACTIVE,
+        )
+
+        # 让证据事件发出失败——这正是守卫之外第一个 await。
+        async def explode(*args: object, **kwargs: object) -> None:
+            raise OSError("sink is down")
+
+        emitter.emit = explode  # type: ignore[method-assign]
+        call = ToolCallProposal(call_id="c1", tool_name="repo.edit", arguments_json="{}")
+        args = RepoEditArgs(path="a.txt", old_string="one", new_string="two")
+        _, preview = await ToolFactsCollector(workspace, {}, None).collect(ctx, call, args)
+        with pytest.raises(OSError, match="sink is down"):
+            await mutations.execute_write(ctx, call, args, "ticket", preview)
+        records = [
+            (record.call_id, record.effect_state.value)
+            for record in await store.load_executions(ctx.run_id)
+        ]
+        return records, await pipeline._side_effect_is_undetermined(ctx.run_id, call.call_id)
+
+    async def test_the_record_is_marked_undetermined(self, tmp_path: Path) -> None:
+        records, undetermined = await self._run(tmp_path)
+        assert records == [("c1", "effect_unknown")], records
+        assert undetermined is True, (
+            "写入已落盘而记账失败，必须让流水线看到 effect_unknown 并停下运行"
+        )
+
+    async def test_the_file_is_still_on_disk(self, tmp_path: Path) -> None:
+        """这个测试不假装写入没发生——它正是为了那个已发生的写入。"""
+        await self._run(tmp_path)
+        assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "two\n"
