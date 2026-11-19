@@ -11,8 +11,10 @@ from haven.application.mcp_client import MCPClientManager
 from haven.application.skills import SkillCatalog
 from haven.application.state import RunContext
 from haven.application.tool_execution_types import (
+    MODEL_PAYLOAD_CHARS,
     DelegateHandler,
     clip,
+    clip_payload,
     error_result,
     ok_result,
     summarize_payload,
@@ -102,16 +104,28 @@ class ToolExecutor:
         res = await self._mcp_manager.call_tool(call.tool_name, raw_args)
         if res.get("is_error"):
             err_msg = str(res.get("error", "MCP tool execution failed"))
+            # 错误对象直接来自外部 server 的 JSON-RPC 响应，大小不受我们控制；
+            # `ToolResult.message` 的契约是"始终保持有界"。
+            err_msg = clip(err_msg, MODEL_PAYLOAD_CHARS)
             err_code = ToolErrorCode.DENIED if res.get("drift") else ToolErrorCode.INTERNAL
             return ToolExecution(error_result(call, err_code, err_msg))
 
+        # 与其余工具一致地给模型可见部分设上界。此前这里原样返回 server 的输出：
+        # 一个回了 5 MB 文本的 MCP server 会把这 5 MB 直接塞进上下文，而 `repo.read`
+        # 之类早就有 MODEL_PAYLOAD_CHARS 这道闸。`raw` 也要管——它是同一份正文的第二
+        # 份拷贝（完整的 JSON-RPC 结果），只截 `content` 省不下什么。
+        content = res.get("content", "")
+        if not isinstance(content, str):
+            content = str(content)
+        raw_payload, raw_truncated = clip_payload(res.get("raw", {}), MODEL_PAYLOAD_CHARS)
         return ToolExecution(
             ok_result(
                 call,
                 {
-                    "content": res.get("content", ""),
-                    "raw": res.get("raw", {}),
+                    "content": clip(content, MODEL_PAYLOAD_CHARS),
+                    "raw": raw_payload,
                 },
+                truncated=len(content) > MODEL_PAYLOAD_CHARS or raw_truncated,
             )
         )
 

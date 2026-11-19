@@ -48,6 +48,29 @@ def fold_text(
     )
 
 
+def _fold_deep(value: object, threshold_chars: int) -> tuple[object, bool]:
+    """递归折叠嵌套在 dict / list 里的过长字符串，返回（新值，是否折叠过）。"""
+    if isinstance(value, str):
+        return fold_text(value, threshold_chars=threshold_chars)
+    if isinstance(value, dict):
+        folded: dict[str, object] = {}
+        changed = False
+        for key, item in value.items():
+            new_item, did_fold = _fold_deep(item, threshold_chars)
+            folded[str(key)] = new_item
+            changed = changed or did_fold
+        return folded, changed
+    if isinstance(value, list):
+        items: list[object] = []
+        changed = False
+        for item in value:
+            new_item, did_fold = _fold_deep(item, threshold_chars)
+            items.append(new_item)
+            changed = changed or did_fold
+        return items, changed
+    return value, False
+
+
 def _mask_tool_message(msg: ModelMessage, threshold_chars: int = 600) -> tuple[ModelMessage, int]:
     """折叠单条工具消息中超过阈值的观测内容，返回（新消息，节省字符数）。"""
     if msg.role != "tool":
@@ -78,6 +101,16 @@ def _mask_tool_message(msg: ModelMessage, threshold_chars: int = 600) -> tuple[M
             if did_fold:
                 result[key] = folded
                 changed = True
+    # `raw` 必须一起折。`mcp.*` 的结果把同一份正文放了两遍：`content` 是拼好的文本，
+    # `raw` 是完整的 JSON-RPC 结果，里面还躺着一份一样大的。此前这里只折上面那几个键，
+    # 于是对 MCP 结果几乎省不下字符——`raw` 原封不动地把折掉的又扛了回来，而它和
+    # `content` 一样会进入模型上下文。
+    raw = result.get("raw")
+    if isinstance(raw, (dict, list, str)):
+        folded_raw, did_fold = _fold_deep(raw, threshold_chars)
+        if did_fold:
+            result["raw"] = folded_raw
+            changed = True
 
     if not changed:
         return msg, 0
@@ -204,7 +237,10 @@ def build_run_digest(dropped: list[ModelMessage]) -> str:
             _append_unique(edits, marker)
             continue
         if tool == "repo.apply_patch":
-            paths = result.get("paths")
+            # 键名必须与 `MutationToolExecutor.execute_patch` 实际返回的 payload 一致
+            # （`files`，不是 `paths`）。对不上时这次补丁就从运行记录里静默消失，而摘要
+            # 被标记为可信，模型会据此回答"我已经改过什么"。
+            paths = result.get("files")
             if isinstance(paths, list):
                 for p in paths:
                     if isinstance(p, str):
@@ -215,8 +251,11 @@ def build_run_digest(dropped: list[ModelMessage]) -> str:
             _append_unique(edits, f"{path} (deleted)")
             continue
         if tool == "repo.move":
-            src = result.get("source_path")
-            dst = result.get("destination_path")
+            # 同理：`execute_move` 返回的是 `src` / `dest`。此前这里找
+            # `source_path` / `destination_path`，于是每一次移动都掉进下面的
+            # "other tool calls"——编辑效果被静默丢弃。
+            src = result.get("src")
+            dst = result.get("dest")
             if isinstance(src, str) and isinstance(dst, str):
                 _append_unique(edits, f"{src} -> {dst}")
                 continue

@@ -156,6 +156,39 @@ async def test_fetch_imported_resource_flow() -> None:
             await fetch_imported_resource(cfg, "docs://empty")
 
 
+def test_a_corrupt_file_blocks_the_save_instead_of_erasing_every_resource(
+    tmp_path: Path,
+) -> None:
+    """一个坏字节不能静默销毁其余全部资源。
+
+    `load_imported_resources` 读不到时返回空元组，而 `save_imported_resource` 曾把
+    那当成"什么都没有"——于是新导入的一条会覆盖掉其余全部，且没有任何提示。
+    """
+    for index in range(3):
+        save_imported_resource(
+            tmp_path,
+            ImportedResource.create(server_name="s", uri=f"u{index}", text=f"text {index}"),
+        )
+    (tmp_path / ".haven" / "imported_resources.json").write_text('{"broken": ', encoding="utf-8")
+
+    with pytest.raises(MCPError, match="corrupt"):
+        save_imported_resource(
+            tmp_path, ImportedResource.create(server_name="s", uri="u-new", text="new")
+        )
+    # 坏文件原样保留，没有被覆盖成只含新资源的一条。
+    assert (tmp_path / ".haven" / "imported_resources.json").read_text(encoding="utf-8") == (
+        '{"broken": '
+    )
+
+
+def test_an_empty_file_is_not_mistaken_for_a_corrupt_one(tmp_path: Path) -> None:
+    """空文件（`[]`）是合法状态：没有任何资源可导入。"""
+    (tmp_path / ".haven").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".haven" / "imported_resources.json").write_text("[]", encoding="utf-8")
+    save_imported_resource(tmp_path, ImportedResource.create(server_name="s", uri="u", text="t"))
+    assert [r.uri for r in load_imported_resources(tmp_path)] == ["u"]
+
+
 def test_cli_context_commands(tmp_path: Path) -> None:
     # 1. list 空
     res = runner.invoke(app, ["context", "list", "--workspace", str(tmp_path)])

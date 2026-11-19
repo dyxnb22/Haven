@@ -72,6 +72,43 @@ def test_scaffold_skill_rejects_already_existing_directory(tmp_path: Path) -> No
         scaffold_skill(root=tmp_path, name="dup-skill")
 
 
+@pytest.mark.parametrize(
+    ("label", "description"),
+    [
+        ("newline", "line one\nline two"),
+        ("carriage-return", "line one\rline two"),
+        ("vertical-tab", "line one\x0bline two"),
+        ("form-feed", "line one\x0cline two"),
+        ("unicode-line-separator", "line one\u2028line two"),
+        ("file-separator", "line one\x1cline two"),
+        ("empty", ""),
+        ("whitespace-only", "   "),
+        ("lone-newline", "\n"),
+    ],
+)
+def test_scaffold_skill_refuses_a_description_it_could_not_write_as_one_line(
+    tmp_path: Path, label: str, description: str
+) -> None:
+    """脚手架绝不能写出一个它自己的 `parse_skill` 必然拒绝的文件。
+
+    frontmatter 是按行解析的（`parse_skill` 里 `rest[:end].splitlines()`），而
+    `str.splitlines()` 认定的行边界远不止 `\n`。任何一个出现在 description 里，它就
+    会变成第二条 frontmatter 行——用户刚看到 "created skill"，转头就在
+    `haven skills validate` 里看到同一个文件被拒，而两边给出的原因都对不上。
+    """
+    with pytest.raises(SkillError, match="single non-empty line"):
+        scaffold_skill(root=tmp_path, name="scaffold-target", description=description)
+    # 拒绝必须先于写盘：不留一个半成品目录在那儿。
+    assert not (tmp_path / "scaffold-target").exists()
+
+
+def test_scaffold_skill_refuses_a_tool_name_it_would_not_accept(tmp_path: Path) -> None:
+    """脚手架的产物必须能通过它自己的解析器——这是"失败即关闭"的同一条要求。"""
+    with pytest.raises(SkillError, match="unregistered tool"):
+        scaffold_skill(root=tmp_path, name="bad", allowed_tools=["repo.nope"])
+    assert not (tmp_path / "bad").exists()
+
+
 def test_list_skill_files_discovers_companion_files(tmp_path: Path) -> None:
     skill_dir = tmp_path / "analyzer"
     skill_dir.mkdir(parents=True)

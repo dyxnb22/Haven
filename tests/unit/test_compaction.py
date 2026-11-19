@@ -4,9 +4,15 @@
 逐字节一致，也不会移动可缓存前缀（ADR 0008）。
 """
 
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
 from haven.application.compaction import (
     build_run_digest,
     enforce_hard_limit,
+    mask_bulky_observations,
     message_chars,
     summarize_dropped,
 )
@@ -28,6 +34,130 @@ def read_result(path: str, digest: str, content: str = "irrelevant") -> str:
     )
 
 
+def mcp_result(text: str) -> str:
+    """一个 MCP 工具结果：`content` 是拼好的文本，`raw` 是完整的 JSON-RPC 结果——
+    同一份正文在 payload 里出现了两遍。"""
+    return json.dumps(
+        {
+            "status": "ok",
+            "result": {
+                "content": text,
+                "raw": {"content": [{"type": "text", "text": text}]},
+            },
+        }
+    )
+
+
+class TestMaskingFoldsEveryCopyOfABulkyObservation:
+    """微压缩必须折掉每一份大观测，否则等于没折。"""
+
+    def test_an_mcp_result_is_folded_in_both_content_and_raw(self) -> None:
+        """`mcp.*` 把同一份正文放了两遍：`content` 与 `raw` 里那一份一样大。
+
+        此前 `_mask_tool_message` 只折 `content`/`stdout`/`output`/`diff`，于是对 MCP
+        结果几乎省不下字符——`raw` 原封不动地把折掉的又扛了回来，而它和 `content`
+        一样会进入模型上下文。
+        """
+        text = "y" * 5000
+        messages = [
+            ModelMessage(role="user", content="do it"),
+            assistant_tool_call("c1", "mcp.srv.op"),
+            tool_message("mcp.srv.op", mcp_result(text)),
+        ]
+        masked, saved = mask_bulky_observations(messages, keep_recent_units=0)
+        folded = masked[2].content
+        assert text not in folded, "两遍正文都必须被折叠，只折一遍等于没折"
+        assert "folded" in folded
+        # 省下的字符要接近全部，而不是一半。
+        assert saved > 0.9 * len(text)
+
+    def test_a_plain_result_is_still_folded(self) -> None:
+        messages = [
+            assistant_tool_call("c1"),
+            tool_message("repo.read", read_result("a.py", "d", content="c" * 5000)),
+        ]
+        masked, saved = mask_bulky_observations(messages, keep_recent_units=0)
+        assert "folded" in masked[1].content
+        assert saved > 0
+
+
+class TestDigestKeysMatchWhatTheExecutorsActuallyReturn:
+    """摘要从工具结果的 payload 里读键名；键名对不上，那次编辑就静默消失。
+
+    摘要被标记为可信（见 `TestTrustIsHonest`），模型会据此回答"我已经改过什么"。
+    因此这里的守卫不用手写的 payload 字面量——那会和产品一起漂移——而是跑真实的
+    `MutationToolExecutor`，把它**真正**返回的 `ToolResult` 喂给 `build_run_digest`。
+    此前 `repo.move` 与 `repo.apply_patch` 各有一处这样的错位。
+    """
+
+    @staticmethod
+    async def _digest_after_real_execution(
+        root: Path, tool_name: str, args: object, *, read_first: tuple[str, ...] = ()
+    ) -> str:
+        from haven.adapters.memory_session import MemorySessionStore
+        from haven.adapters.workspace_fs import FsWorkspace
+        from haven.application.emitter import EventEmitter
+        from haven.application.state import RunContext
+        from haven.application.tool_facts import ToolFactsCollector
+        from haven.application.tool_mutations import MutationToolExecutor
+        from haven.domain.budget import Budget
+        from haven.domain.enums import PermissionMode
+        from haven.domain.ids import RunId, ToolCallId
+
+        workspace = FsWorkspace(root)
+        store = MemorySessionStore()
+        emitter = EventEmitter(store, ())
+        ctx = RunContext(
+            run_id=RunId("r"), goal="g", mode=PermissionMode.INTERACTIVE, budget=Budget()
+        )
+        for name in read_first:
+            ctx.files_read[name] = workspace.path_facts(name).digest or ""
+        call = ToolCallProposal(call_id=ToolCallId("c1"), tool_name=tool_name, arguments_json="{}")
+        _, preview = await ToolFactsCollector(workspace, {}, None).collect(ctx, call, args)  # type: ignore[arg-type]
+        mutations = MutationToolExecutor(workspace=workspace, store=store, emitter=emitter)
+        execution = await mutations.handlers[tool_name](ctx, call, args, "ticket", preview)  # type: ignore[arg-type]
+        assert execution.result.status.value == "ok", execution.result.message
+        message = ModelMessage(
+            role="tool",
+            content=(
+                f'<tool_output tool="{tool_name}">\n'
+                f"{execution.result.to_model_text()}\n</tool_output>"
+            ),
+            tool_call_id="c1",
+        )
+        return build_run_digest([message])
+
+    async def test_a_real_move_is_listed_as_an_edit(self, tmp_path: Path) -> None:
+        from haven.contracts.tools import RepoMoveArgs
+
+        (tmp_path / "old.py").write_text("x = 1\n", encoding="utf-8")
+        digest = await self._digest_after_real_execution(
+            tmp_path, "repo.move", RepoMoveArgs(src="old.py", dest="new.py")
+        )
+        assert "old.py -> new.py" in digest
+        assert "other tool calls" not in digest
+
+    async def test_a_real_patch_lists_every_file_it_touched(self, tmp_path: Path) -> None:
+        from haven.contracts.tools import RepoApplyPatchArgs
+
+        (tmp_path / "a.py").write_text("one\n", encoding="utf-8")
+        (tmp_path / "b.py").write_text("two\n", encoding="utf-8")
+        digest = await self._digest_after_real_execution(
+            tmp_path,
+            "repo.apply_patch",
+            RepoApplyPatchArgs(
+                operations=(
+                    {"kind": "edit", "path": "a.py", "old_string": "one", "new_string": "1"},
+                    {"kind": "edit", "path": "b.py", "old_string": "two", "new_string": "2"},
+                )
+            ),
+            read_first=("a.py", "b.py"),
+        )
+        assert "a.py" in digest
+        assert "b.py" in digest
+        assert "other tool calls" not in digest
+
+
 class TestFactsSurvive:
     def test_reads_are_listed_with_their_paths(self) -> None:
         digest = build_run_digest([tool_message("repo.read", read_result("src/calc.py", "a1b2"))])
@@ -43,16 +173,23 @@ class TestFactsSurvive:
         assert "src/calc.py" in digest
 
     def test_extended_mutation_and_outline_tools_are_captured(self) -> None:
+        """键名必须与执行器**真正**返回的 payload 一致。
+
+        这个测试曾经用手写的 `source_path`/`destination_path` 和 `paths` 站岗，而
+        `MutationToolExecutor` 返回的是 `src`/`dest` 和 `files`——于是它守护的是一个
+        永不出现的形状，产品里每一次 `repo.move` 和 `repo.apply_patch` 都从运行记录里
+        静默消失，测试却一直是绿的。真实形状的守卫见
+        `TestDigestKeysMatchWhatTheExecutorsActuallyReturn`。
+        """
         messages = [
             tool_message(
                 "repo.apply_patch",
-                '{"status": "ok", "result": {"paths": ["src/a.py", "src/b.py"]}}',
+                '{"status": "ok", "result": {"files": ["src/a.py", "src/b.py"]}}',
             ),
             tool_message("repo.delete", '{"status": "ok", "result": {"path": "src/old.py"}}'),
             tool_message(
                 "repo.move",
-                '{"status": "ok", "result": {"source_path": "src/x.py", '
-                '"destination_path": "src/y.py"}}',
+                '{"status": "ok", "result": {"src": "src/x.py", "dest": "src/y.py"}}',
             ),
             tool_message(
                 "repo.outline", '{"status": "ok", "result": {"file": "src/outline_target.py"}}'

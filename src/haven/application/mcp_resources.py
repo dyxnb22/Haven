@@ -20,41 +20,71 @@ def _get_resources_path(workspace: Path) -> Path:
     return workspace.resolve() / ".haven" / IMPORTED_RESOURCES_FILENAME
 
 
+def _parse_resources(text: str) -> tuple[ImportedResource, ...] | None:
+    """解析 `imported_resources.json`；损坏或不是列表时返回 None。
+
+    与 `load_imported_resources` 的"读不到就当没有"分开：调用方需要分辨"真的没有"
+    和"有但读不出来"——后者绝不能当成"没有"去覆盖，那会用一条新资源销毁其余全部。
+    """
+    try:
+        data = json.loads(text)
+    except Exception:
+        return None
+    if not isinstance(data, list):
+        return None
+    resources: list[ImportedResource] = []
+    for item in data:
+        if isinstance(item, dict) and "server_name" in item and "uri" in item:
+            resources.append(
+                ImportedResource(
+                    server_name=str(item.get("server_name", "")),
+                    uri=str(item.get("uri", "")),
+                    fetched_at=str(item.get("fetched_at", "")),
+                    content_digest=str(item.get("content_digest", "")),
+                    mime_type=str(item.get("mime_type", "text/plain")),
+                    text=str(item.get("text", "")),
+                    truncated=bool(item.get("truncated", False)),
+                )
+            )
+    return tuple(resources)
+
+
 def load_imported_resources(workspace: Path) -> tuple[ImportedResource, ...]:
     """读取工作区 `.haven/imported_resources.json` 中配置的全部外部资源。"""
     path = _get_resources_path(workspace)
     if not path.is_file():
         return ()
-
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, list):
-            return ()
-        resources: list[ImportedResource] = []
-        for item in data:
-            if isinstance(item, dict) and "server_name" in item and "uri" in item:
-                resources.append(
-                    ImportedResource(
-                        server_name=str(item.get("server_name", "")),
-                        uri=str(item.get("uri", "")),
-                        fetched_at=str(item.get("fetched_at", "")),
-                        content_digest=str(item.get("content_digest", "")),
-                        mime_type=str(item.get("mime_type", "text/plain")),
-                        text=str(item.get("text", "")),
-                        truncated=bool(item.get("truncated", False)),
-                    )
-                )
-        return tuple(resources)
-    except Exception:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
         return ()
+    return _parse_resources(text) or ()
 
 
 def save_imported_resource(workspace: Path, resource: ImportedResource) -> None:
-    """原子化保存或更新一个导入的资源至 `.haven/imported_resources.json`。"""
+    """原子化保存或更新一个导入的资源至 `.haven/imported_resources.json`。
+
+    文件损坏时拒绝写入，而不是把"读不出来"当成"什么都没有"：后者会用这一条新
+    资源覆盖掉其余全部，且没有任何提示。修好或删掉那个文件再试。
+    """
     path = _get_resources_path(workspace)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    existing = list(load_imported_resources(workspace))
+    existing: tuple[ImportedResource, ...] = ()
+    if path.is_file():
+        try:
+            parsed = _parse_resources(path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            raise MCPError(f"could not read {path}: {exc}") from exc
+        # 必须用 `is None` 而不是真值判断：`[]` 解析成功且结果为空元组，与"解析
+        # 失败"是两件事——前者是合法的"还没有任何资源"，后者才是损坏。
+        if parsed is None:
+            raise MCPError(
+                f"{path} is corrupt or not a list of resources; fix or remove it before "
+                "importing another one, otherwise every existing resource would be lost"
+            )
+        existing = parsed
+
     updated: list[ImportedResource] = []
     found = False
     for res in existing:

@@ -92,8 +92,14 @@ class TaskManager:
         terminal: bool = False,
     ) -> BackgroundTask:
         """在沙箱包装下启动后台任务，并启动异步日志缓冲监听协程。"""
+        # 失败即关闭：没有沙箱包装就拒绝启动，而不是光着跑。调用方
+        # (`execute_task_start`) 自己也预检了 launcher，但这里是真正创建进程的那一层，
+        # 边界该由它把守——否则任何一个新调用方漏传一样，命令就整个脱离了沙箱，
+        # 而这件事在日志里看不出任何异常。
+        if launcher is None or sandbox_spec is None:
+            raise ValueError("refusing to start a task without a sandbox launcher and spec")
         task_id = self.next_task_id()
-        wrapped_argv = launcher.wrap(argv, sandbox_spec) if (launcher and sandbox_spec) else argv
+        wrapped_argv = launcher.wrap(argv, sandbox_spec)
 
         if terminal and os.name != "posix":
             raise ValueError("PTY requires a POSIX host")

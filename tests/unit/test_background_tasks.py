@@ -25,7 +25,13 @@ from haven.domain.budget import Budget
 from haven.domain.enums import PermissionMode, PolicyDecision, ToolErrorCode, ToolStatus
 from haven.domain.ids import RunId
 from haven.domain.policy import ToolFacts, evaluate_policy
+from haven.ports.sandbox import SandboxSpec
 from tests.integration.fakes import RecordingLauncher
+
+
+def _sandbox(root: Path) -> SandboxSpec:
+    """一个最小可用的沙箱规格；`RecordingLauncher` 记录它但并不真正限制。"""
+    return SandboxSpec(workspace_root=root, scratch_dir=root / "scratch", writable=False)
 
 
 @pytest.mark.asyncio
@@ -41,7 +47,13 @@ async def test_task_manager_lifecycle(tmp_path: Path) -> None:
             "sys.stderr.write('hello stderr\\n'); time.sleep(0.3); print('done')"
         ),
     )
-    task = await mgr.start(argv=cmd, cwd=tmp_path, description="test task")
+    task = await mgr.start(
+        argv=cmd,
+        cwd=tmp_path,
+        description="test task",
+        sandbox_spec=_sandbox(tmp_path),
+        launcher=RecordingLauncher(),
+    )
     assert task.task_id == "task_1"
     assert task.is_running
 
@@ -67,7 +79,13 @@ async def test_task_manager_lifecycle(tmp_path: Path) -> None:
 async def test_task_manager_stop(tmp_path: Path) -> None:
     mgr = TaskManager()
     cmd = (sys.executable, "-c", "import time; time.sleep(30)")
-    task = await mgr.start(argv=cmd, cwd=tmp_path, description="sleeper")
+    task = await mgr.start(
+        argv=cmd,
+        cwd=tmp_path,
+        description="sleeper",
+        sandbox_spec=_sandbox(tmp_path),
+        launcher=RecordingLauncher(),
+    )
     assert task.is_running
 
     res = await mgr.stop(task.task_id)
@@ -79,8 +97,9 @@ async def test_task_manager_stop(tmp_path: Path) -> None:
 async def test_task_manager_close_all(tmp_path: Path) -> None:
     mgr = TaskManager()
     cmd = (sys.executable, "-c", "import time; time.sleep(30)")
-    t1 = await mgr.start(argv=cmd, cwd=tmp_path)
-    t2 = await mgr.start(argv=cmd, cwd=tmp_path)
+    launcher = RecordingLauncher()
+    t1 = await mgr.start(argv=cmd, cwd=tmp_path, sandbox_spec=_sandbox(tmp_path), launcher=launcher)
+    t2 = await mgr.start(argv=cmd, cwd=tmp_path, sandbox_spec=_sandbox(tmp_path), launcher=launcher)
     assert t1.is_running
     assert t2.is_running
 
@@ -88,6 +107,32 @@ async def test_task_manager_close_all(tmp_path: Path) -> None:
     await asyncio.sleep(0.1)
     assert not t1.is_running
     assert not t2.is_running
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", ["launcher", "spec"])
+async def test_a_task_without_a_sandbox_is_refused_not_run_bare(
+    tmp_path: Path, missing: str
+) -> None:
+    """缺沙箱必须拒绝启动，而不是光着把命令跑起来。
+
+    `TaskManager.start` 曾经写成 `launcher.wrap(...) if (launcher and spec) else argv`：
+    漏传任何一样，命令就整个脱离沙箱，而日志里看不出异常。调用方自己也预检，但真正
+    创建进程的是这一层，边界该由它把守。
+    """
+    mgr = TaskManager()
+    kwargs: dict[str, object] = {
+        "argv": (sys.executable, "-c", "import time; time.sleep(30)"),
+        "cwd": tmp_path,
+    }
+    if missing == "launcher":
+        kwargs["sandbox_spec"] = _sandbox(tmp_path)
+    else:
+        kwargs["launcher"] = RecordingLauncher()
+    with pytest.raises(ValueError, match="without a sandbox"):
+        await mgr.start(**kwargs)  # type: ignore[arg-type]
+    # 拒绝必须是先于进程创建的：一个都没起来。
+    assert mgr.status("task_1")["status"] == "not_found"
 
 
 def test_task_policy_evaluation() -> None:

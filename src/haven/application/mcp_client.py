@@ -28,6 +28,17 @@ class MCPSchemaDriftError(MCPError):
 
 DEFAULT_MCP_TIMEOUT: float = 30.0
 
+#: stdio 流的单行上限。asyncio 默认 64 KiB，对 MCP 来说太小：一次带回内容的
+#: `tools/call`、一份大的 `inputSchema`、或一次 `resources/read`（其文本预算本身
+#: 就是 64 KiB，再加 JSON 转义与 content 数组的包装，更容易越过）都会撞上它。
+#: 抬到 8 MiB 让正常负载走 `readline()` 的正常路径，只有真的异常大的行才落到
+#: 下面那条"报错并继续"的兜底分支。流量控制会在 2 倍上限处暂停传输，所以内存
+#: 占用仍然是有界的。
+STREAM_LINE_LIMIT: int = 8 * 1024 * 1024
+
+#: 保留的 stderr 诊断行数上限。只用于把故障讲清楚，不该无限增长。
+MAX_STDERR_LINES: int = 50
+
 
 class MCPClient:
     """单个外部 MCP Server 的 stdio JSON-RPC 客户端。"""
@@ -57,15 +68,34 @@ class MCPClient:
         while True:
             try:
                 line = await self._process.stderr.readline()
-                if not line:
-                    break
-                text = line.decode("utf-8", errors="replace").strip()
-                if text:
-                    self._stderr_lines.append(text)
-                    if len(self._stderr_lines) > 50:
-                        self._stderr_lines.pop(0)
-            except (asyncio.CancelledError, OSError):
+            except asyncio.CancelledError:
+                raise
+            except OSError:
                 break
+            except ValueError:
+                # 一行超过流的单行上限（默认 64 KiB，见 STREAM_LINE_LIMIT）。这不是
+                # 通信故障，只是这一行长：记一个截断标记后继续读。若在这里退出，stderr
+                # 管道就没人读了，一个继续写 stderr 的子进程会永远阻塞下去。
+                #
+                # 特意**不**去"把剩余部分读完"：`readline()` 抛 ValueError 时已经动过
+                # 内部缓冲区了——换行符若在缓冲区内，整行（含换行符）已被删掉，流已经
+                # 停在下一行的行首；若不在，缓冲区被清空，行的剩余部分还在管道里。
+                # 两种情况从外部无法区分，而盲读要么把已经排好的下一行一起吞掉，要么在
+                # 数据永不到来时永久阻塞。直接继续 `readline()` 两种情况下都能前进：
+                # 前者读到下一行，后者读到这一行的尾巴（一行无害的诊断）。
+                self._remember_stderr("<stderr line exceeded the stream limit; truncated>")
+                continue
+            if not line:
+                break
+            text = line.decode("utf-8", errors="replace").strip()
+            if text:
+                self._remember_stderr(text)
+
+    def _remember_stderr(self, text: str) -> None:
+        """记一行诊断，并把长度压在有界范围内。"""
+        self._stderr_lines.append(text)
+        if len(self._stderr_lines) > MAX_STDERR_LINES:
+            self._stderr_lines.pop(0)
 
     async def start(self) -> None:
         """启动外部进程并完成标准 MCP 握手协议 (initialize -> initialized)。"""
@@ -79,6 +109,7 @@ class MCPClient:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            limit=STREAM_LINE_LIMIT,
         )
 
         if self._process.stderr is not None:
@@ -234,6 +265,14 @@ class MCPClient:
             except TimeoutError as exc:
                 raise MCPError(
                     f"server {self.config.name} timed out after {timeout}s waiting for {method}"
+                ) from exc
+            except ValueError as exc:
+                # 一行超过流的单行上限（见 _drain_stderr 里对两种成因的说明）。这次
+                # 请求的响应已经拿不到了，所以报错；但不盲读补救——那会把下一个响应
+                # 吞掉。由 MCPClientManager 决定是关掉这个 server 还是把错误还给模型。
+                raise MCPError(
+                    f"server {self.config.name} sent a line longer than the stream limit "
+                    f"while answering {method}"
                 ) from exc
 
             if not resp_line:

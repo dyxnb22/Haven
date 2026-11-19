@@ -31,6 +31,7 @@ from haven.application.skills import (
     render_catalog,
     resolve_selected_skills,
 )
+from haven.domain.digest import sha256_text
 
 MINIMAL = "---\nname: {name}\ndescription: 先写失败测试\n---\n\n正文。\n"
 
@@ -118,6 +119,19 @@ class TestBounds:
         skill = parse_skill(text, name="demo", scope="user", source="s")
         assert len(skill.body) == MAX_BODY_CHARS
 
+    def test_the_digest_covers_the_body_that_is_actually_shown(self) -> None:
+        """digest 必须等于 `body` 的摘要，而不是完整正文的摘要。
+
+        `body` 存的是截断后的那一份，`haven skills info` 又把 digest 和 body 并排打印，
+        用户自然会拿它们互验。此前 digest 算的是完整正文：正文一旦超过
+        MAX_BODY_CHARS，digest 说的就是没人见过的字节，二者对不上——而这个字段
+        唯一的用途正是"让模型和追踪验证看到的正文确实是这一条"。
+        """
+        text = f"---\nname: demo\ndescription: x\n---\n\n{'b' * 9000}\n"
+        skill = parse_skill(text, name="demo", scope="user", source="s")
+        assert len(skill.body) == MAX_BODY_CHARS
+        assert skill.digest == sha256_text(skill.body)[:12]
+
     def test_the_catalog_is_truncated_to_the_cap(self) -> None:
         skills = [
             _skill(f"skill-{index:02d}", description="x" * 100) for index in range(MAX_SKILLS)
@@ -126,11 +140,56 @@ class TestBounds:
         assert len(catalog) <= MAX_CATALOG_CHARS
         assert len(catalog.splitlines()) < MAX_SKILLS + 1
 
+    def test_a_bounded_catalog_says_that_it_is_bounded(self) -> None:
+        """目录条目排不下时必须明说，而不是静默少列几个。
+
+        一个静默截断的目录会让模型和用户都认为没列出的技能不存在，于是
+        `--skill <那个技能>` 拿到一句"unknown skill"——一个纯粹由呈现方式造成的死胡同。
+        实测 1500 字符下，12 个 description 用满的技能只列得出 6 个左右，所以这条
+        路径经常走到，不是理论问题。
+        """
+        skills = [
+            _skill(f"skill-{index:02d}", description="d" * MAX_DESCRIPTION_CHARS)
+            for index in range(MAX_SKILLS)
+        ]
+        catalog = render_catalog(skills)
+        listed = catalog.splitlines()[1:]
+        assert any("not listed" in line for line in listed), (
+            "条目被预算挤掉时必须留下一句'还有 N 个没列出'"
+        )
+        # 那句话自己也要数对。
+        omitted = MAX_SKILLS - sum(1 for line in listed if "not listed" not in line)
+        assert any(f"and {omitted} more skill(s) not listed" in line for line in listed)
+        # 并且不能因为多了一句就超预算——有界性本身不能因为省字符被挤掉。
+        assert len(catalog) <= MAX_CATALOG_CHARS
+
+    def test_an_untruncated_catalog_has_no_such_note(self) -> None:
+        skills = [_skill(f"skill-{index:02d}", description="short") for index in range(MAX_SKILLS)]
+        assert "not listed" not in render_catalog(skills)
+
     def test_at_most_max_skills_are_listed(self, tmp_path: Path) -> None:
         for index in range(MAX_SKILLS + 5):
             _write(tmp_path, f"skill-{index:02d}")
         catalog = discover_skills(user_root=tmp_path, project_root=tmp_path / "no-project")
         assert len(catalog.skills) == MAX_SKILLS
+
+    def test_the_catalog_cap_is_not_a_silent_drop(self, tmp_path: Path) -> None:
+        """超出 MAX_SKILLS 的技能必须留下拒绝记录，而不是无声消失。
+
+        与 `test_the_scan_is_bounded_and_says_so` 是同一条原则。此前这里是
+        `accepted[:MAX_SKILLS]`：一个装了几十个技能的仓库在 `haven skills list` 里
+        看起来只装了 12 个，而 `haven skills info <被丢的那个>` 只会回答"没有这个技能"，
+        用户无从区分它是被拒绝了、还是根本没被发现。
+        """
+        for index in range(MAX_SKILLS + 5):
+            _write(tmp_path, f"skill-{index:02d}")
+        catalog = discover_skills(user_root=tmp_path, project_root=tmp_path / "no-project")
+        dropped = [r for r in catalog.refused if "not listed" in r.reason]
+        assert len(dropped) == 5
+        # 拒绝记录要点名是哪一个，而不只是报个数。
+        assert {r.source for r in dropped} == {
+            f"skills/skill-{index:02d}/SKILL.md" for index in range(MAX_SKILLS, MAX_SKILLS + 5)
+        }
 
     def test_the_scan_is_bounded_and_says_so(self, tmp_path: Path) -> None:
         for index in range(MAX_SCANNED_PER_ROOT + 6):

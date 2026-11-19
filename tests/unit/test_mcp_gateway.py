@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 import tomllib
@@ -22,7 +23,12 @@ from pathlib import Path
 import pytest
 
 from haven.application.approval_cards import ApprovalCardRenderer
-from haven.application.mcp_client import MCPClient, MCPClientManager, MCPSchemaDriftError
+from haven.application.mcp_client import (
+    MCPClient,
+    MCPClientManager,
+    MCPError,
+    MCPSchemaDriftError,
+)
 from haven.application.registry import ToolRegistry, ValidationFailure
 from haven.config import ConfigError, _parse_mcp_servers
 from haven.contracts.mcp import MCPServerConfig, MCPToolArgs, MCPToolSchema
@@ -115,6 +121,110 @@ NOISY_MCP_SERVER_SCRIPT = MOCK_MCP_SERVER_SCRIPT.replace(
         sys.stdout.flush()
 """,
 )
+
+
+#: 与上面的 mock 相同，但 tools/call 返回一段 20 万字符的文本。它远在流的单行上限
+#: 之内，所以能正常到达客户端——问题出在客户端之外：`execute_mcp` 是全表唯一不做
+#: `clip(..., MODEL_PAYLOAD_CHARS)` 的成功路径，一个回了大结果的外部 server 会把这
+#: 20 万字符直接塞进模型上下文。`raw` 是同一份正文的第二份拷贝，也要管。
+HUGE_RESULT_MCP_SERVER_SCRIPT = MOCK_MCP_SERVER_SCRIPT.replace(
+    '    elif method == "tools/call":',
+    """    elif method == "tools/call":
+        res = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "content": [{"type": "text", "text": "z" * 200000}]
+            }
+        }
+        sys.stdout.write(json.dumps(res) + "\\n")
+        sys.stdout.flush()
+""",
+)
+
+
+@pytest.mark.asyncio
+async def test_a_huge_mcp_result_is_bounded_before_it_reaches_the_model(tmp_path: Path) -> None:
+    """外部 server 返回的巨大结果必须在进入上下文之前被截住。
+
+    `repo.read` 之类早有 `MODEL_PAYLOAD_CHARS` 这道闸；`mcp.*` 此前是唯一没有的。
+    """
+    from haven.adapters.memory_session import MemorySessionStore
+    from haven.adapters.process_executor import ProcessExecutor
+    from haven.adapters.workspace_fs import FsWorkspace
+    from haven.application.emitter import EventEmitter
+    from haven.application.state import RunContext
+    from haven.application.tool_execution_types import MODEL_PAYLOAD_CHARS
+    from haven.application.tool_pipeline import ToolPipeline
+    from haven.contracts.model import ToolCallProposal
+    from haven.domain.budget import Budget
+    from haven.domain.enums import ApprovalDecision, PermissionMode, RunStatus, ToolStatus
+    from haven.domain.ids import RunId, ToolCallId
+
+    class SimpleResponder:
+        def __init__(self, decision: ApprovalDecision) -> None:
+            self.decision = decision
+
+        async def respond(self, request: object) -> ApprovalDecision:
+            return self.decision
+
+    config = MCPServerConfig(
+        name="huge_srv",
+        command=sys.executable,
+        args=("-c", HUGE_RESULT_MCP_SERVER_SCRIPT),
+        allowed_tools=("lookup",),
+        read_only_tools=("lookup",),
+    )
+    mcp_manager = MCPClientManager((config,))
+    tools = await mcp_manager.initialize()
+    registry = ToolRegistry()
+    registry.register_mcp_tools(tools)
+
+    ctx = RunContext(
+        run_id=RunId("run-mcp-huge"),
+        goal="test huge mcp result",
+        mode=PermissionMode.INTERACTIVE,
+        budget=Budget(),
+    )
+    ctx.move_to(RunStatus.RUNNING_MODEL)
+    pipeline = ToolPipeline(
+        workspace=FsWorkspace(tmp_path),
+        executor=ProcessExecutor(),
+        store=MemorySessionStore(),
+        emitter=EventEmitter(MemorySessionStore(), []),
+        approvals=SimpleResponder(ApprovalDecision.REJECTED),
+        registry=registry,
+        recipes={},
+        mode=PermissionMode.INTERACTIVE,
+        scratch_dir=tmp_path / "scratch",
+        mcp_manager=mcp_manager,
+    )
+    try:
+        ctx.move_to(RunStatus.VALIDATING_TOOL)
+        res = await pipeline.execute(
+            ctx,
+            1,
+            ToolCallProposal(
+                call_id=ToolCallId("call-huge"),
+                tool_name="mcp.huge_srv.lookup",
+                arguments_json='{"query": "x"}',
+            ),
+        )
+        assert res.result.status == ToolStatus.OK
+        # 截断必须自己说清楚，模型才知道可以再要一次。
+        assert res.result.truncated is True
+        payload = res.result.payload
+        # 截断标记本身也占字符，所以留一点余量；关键是它不再是 20 万。
+        assert len(payload["content"]) <= MODEL_PAYLOAD_CHARS + 64
+        assert "truncated" in payload["content"]
+        # `raw` 里那份正文同样要有界——它和 `content` 一样会进模型上下文。
+        inner = payload["raw"]["content"][0]["text"]
+        assert len(inner) <= MODEL_PAYLOAD_CHARS + 64
+        assert "truncated" in inner
+        # 最终发给模型的那段文本必须有界。
+        assert len(res.result.to_model_text()) < 20_000
+    finally:
+        await mcp_manager.close_all()
 
 
 def test_config_parsing_mcp_servers() -> None:
@@ -599,5 +709,137 @@ async def test_mcp_client_drains_stderr_properly(tmp_path: Path) -> None:
         # 等待后台任务排空 stderr
         await asyncio.sleep(0.1)
         assert "debug warning log line 1" in client.last_stderr
+    finally:
+        await client.close()
+
+
+#: 与 mock 相同，但 tools/call 的响应是一个超过 STREAM_LINE_LIMIT 的单行。
+#: 这不是协议错误，只是这一行长：`resources/read` 的预算本身就是 64 KiB，一个带回
+#: 内容的 `tools/call` 或一份大的 schema 都会走到这里——所以流的单行上限被抬到了
+#: 8 MiB，只有真的异常大的行才落到这条兜底路径上。
+OVERSIZED_LINE_MCP_SERVER_SCRIPT = MOCK_MCP_SERVER_SCRIPT.replace(
+    '    elif method == "tools/call":',
+    """    elif method == "tools/call":
+        payload = {"jsonrpc": "2.0", "id": req["id"], "result": {"content": [
+            {"type": "text", "text": "y" * (8 * 1024 * 1024 + 4096)}]}}
+        sys.stdout.write(json.dumps(payload) + "\\n")
+        sys.stdout.flush()
+""",
+)
+
+
+@pytest.mark.asyncio
+async def test_an_oversized_response_line_is_a_clean_error_not_a_crash() -> None:
+    """超过流上限的一行必须变成 MCPError，而不是未处理的 ValueError。
+
+    asyncio 的 `readline()` 对超过单行上限的行抛 `ValueError`。此前的代码只捕获
+    `TimeoutError` 与 `JSONDecodeError`，于是这个 `ValueError` 会原样逃出
+    `_send_request`——经 `read_resource` 它甚至逃得更远。
+    """
+    config = MCPServerConfig(
+        name="oversized_srv",
+        command=sys.executable,
+        args=("-c", OVERSIZED_LINE_MCP_SERVER_SCRIPT),
+        allowed_tools=("lookup",),
+        read_only_tools=("lookup",),
+    )
+    client = MCPClient(config)
+    try:
+        await client.start()
+        await client.discover_tools()
+        with pytest.raises(MCPError, match="longer than the stream limit"):
+            await client.call_tool("lookup", {"query": "x"})
+    finally:
+        await client.close()
+
+
+#: 与 mock 相同，但 tools/call 的响应是一个"大但合法"的单行：200 KiB，远超 asyncio
+#: 默认的 64 KiB 行上限，却远在 STREAM_LINE_LIMIT 之内。`resources/read` 的预算本身
+#: 就是 64 KiB，加上 JSON 包装很容易越过默认值——把它当成坏响应会毁掉正常功能。
+LARGE_RESPONSE_MCP_SERVER_SCRIPT = MOCK_MCP_SERVER_SCRIPT.replace(
+    '    elif method == "tools/call":',
+    """    elif method == "tools/call":
+        payload = {"jsonrpc": "2.0", "id": req["id"],
+                   "result": {"content": [{"type": "text", "text": "y" * 200000}]}}
+        sys.stdout.write(json.dumps(payload) + "\\n")
+        sys.stdout.flush()
+""",
+)
+
+
+@pytest.mark.asyncio
+async def test_a_large_but_legal_response_is_not_mistaken_for_a_broken_one() -> None:
+    """超过 asyncio 默认 64 KiB、但在 STREAM_LINE_LIMIT 之内的响应必须正常返回。
+
+    这条测试钉住流的单行上限确实被抬高了：若 `create_subprocess_exec` 退回到默认的
+    64 KiB，这个 200 KiB 的响应会走到 ValueError 分支，正常功能就没了。
+    """
+    config = MCPServerConfig(
+        name="large_srv",
+        command=sys.executable,
+        args=("-c", LARGE_RESPONSE_MCP_SERVER_SCRIPT),
+        allowed_tools=("lookup",),
+        read_only_tools=("lookup",),
+    )
+    client = MCPClient(config)
+    try:
+        await client.start()
+        await client.discover_tools()
+        result = await client.call_tool("lookup", {"query": "x"})
+        assert result["is_error"] is False
+        assert len(result["content"]) == 200000
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_an_oversized_stderr_line_does_not_kill_the_drain() -> None:
+    """stderr 里一个超长行不能终止排空。
+
+    `_drain_stderr` 若在这一行上退出，stderr 管道就没人读了，一个继续写 stderr 的
+    子进程会永远阻塞下去。它必须截断这一行、然后继续读。
+    """
+    # drain 任务在握手之前就启动，所以这个脚本先写 stderr，再应答 initialize。
+    # 用 chr(10) 拼接而不是字面量里的 "\n"：这个文件曾因外壳 heredoc 吞掉一层
+    # 反斜杠而生出 SyntaxError，那样的失败与产品代码毫无关系。
+    NL = chr(10)
+    script = NL.join(
+        (
+            "import sys, json",
+            "sys.stderr.write('e' * (8 * 1024 * 1024 + 4096) + chr(10))",
+            "sys.stderr.flush()",
+            "sys.stderr.write('a later diagnostic line' + chr(10))",
+            "sys.stderr.flush()",
+            "for line in sys.stdin:",
+            "    req = json.loads(line)",
+            "    if req.get('method') == 'initialize':",
+            "        sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': req['id'],"
+            " 'result': {'protocolVersion': '2024-11-05', 'capabilities': {},"
+            " 'serverInfo': {'name': 's', 'version': '1'}}}) + chr(10))",
+            "        sys.stdout.flush()",
+        )
+    )
+    config = MCPServerConfig(
+        name="noisy_stderr",
+        command=sys.executable,
+        args=("-c", script),
+        allowed_tools=(),
+        read_only_tools=(),
+    )
+    client = MCPClient(config)
+    try:
+        await client.start()
+        # 超长行被截断成一个标记，之后的诊断行仍必须被读到。
+        for _ in range(100):
+            await asyncio.sleep(0.02)
+            if any("later diagnostic" in line for line in client.last_stderr.splitlines()):
+                break
+        lines = client.last_stderr.splitlines()
+        assert any("later diagnostic" in line for line in lines), (
+            "超长 stderr 行之后的诊断行也必须被读到——排空不能在一行上中断"
+        )
+        assert any("exceeded the stream limit" in line for line in lines), (
+            "超长行本身也要留下一个截断标记，而不是无声消失"
+        )
     finally:
         await client.close()

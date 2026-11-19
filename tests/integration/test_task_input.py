@@ -10,7 +10,21 @@ import pytest
 from haven.application.background_tasks import TaskManager
 from haven.contracts.events import ApprovalRequested, PolicyDecided
 from haven.domain.enums import AgentMode, ApprovalMode, PermissionMode, RunStatus
+from haven.ports.sandbox import SandboxSpec
+from tests.integration.fakes import RecordingLauncher
 from tests.integration.harness import Harness, finish, make_repo, text, tool
+
+
+def _sandbox(root: Path) -> SandboxSpec:
+    """最小可用的沙箱规格；`RecordingLauncher` 记录它但并不真正限制。"""
+    return SandboxSpec(workspace_root=root, scratch_dir=root / "scratch", writable=False)
+
+
+async def _start(manager: TaskManager, root: Path, **kwargs: object):
+    """带沙箱启动——`TaskManager.start` 缺沙箱即拒绝，不会光着跑。"""
+    kwargs.setdefault("sandbox_spec", _sandbox(root))
+    kwargs.setdefault("launcher", RecordingLauncher())
+    return await manager.start(**kwargs)  # type: ignore[arg-type]
 
 
 async def wait_output(manager: TaskManager, task_id: str, expected: str) -> None:
@@ -36,8 +50,12 @@ async def test_interactive_prompt_input_eof_and_scrubbed_environment(
         "print('eof='+str(sys.stdin.read()==''),flush=True)"
     )
     try:
-        task = await manager.start(
-            argv=(sys.executable, "-c", script), cwd=tmp_path, terminal=terminal
+        task = await _start(
+            manager,
+            tmp_path,
+            argv=(sys.executable, "-c", script),
+            cwd=tmp_path,
+            terminal=terminal,
         )
         await wait_output(manager, task.task_id, "name? ")
         output = "\n".join(manager.logs(task.task_id)["stdout"])
@@ -62,7 +80,9 @@ async def test_interactive_prompt_input_eof_and_scrubbed_environment(
 async def test_long_unterminated_output_is_visible_and_bounded(tmp_path: Path) -> None:
     manager = TaskManager()
     try:
-        task = await manager.start(
+        task = await _start(
+            manager,
+            tmp_path,
             argv=(
                 sys.executable,
                 "-c",
@@ -88,7 +108,9 @@ async def test_stop_cleans_descendants(tmp_path: Path) -> None:
     )
     manager = TaskManager()
     try:
-        task = await manager.start(argv=(sys.executable, "-c", parent), cwd=tmp_path, terminal=True)
+        task = await _start(
+            manager, tmp_path, argv=(sys.executable, "-c", parent), cwd=tmp_path, terminal=True
+        )
         await wait_output(manager, task.task_id, "ready")
         assert (await manager.stop(task.task_id))["status"] == "stopped"
         await asyncio.sleep(0.7)

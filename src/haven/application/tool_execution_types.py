@@ -84,6 +84,37 @@ def clip(text: str, limit: int) -> str:
     return text[:limit] + f"... [truncated {len(text) - limit} chars]"
 
 
+def clip_payload(value: object, limit: int) -> tuple[object, bool]:
+    """递归地把结构化结果里过长的字符串截到 `limit`，返回（新值，是否截断过）。
+
+    工具结果的结构化部分和展示文本一样会原样进入模型的 `<tool_output>`
+    （`ToolResult.to_model_text` 把整个 payload 序列化进去），所以它同样需要上界。
+    `mcp.*` 的 `raw` 就是活例子：那是一个完整的 JSON-RPC 结果，里面的正文与
+    `content` 一样大——只截 `content` 的话这一步等于白做。
+    """
+    if isinstance(value, str):
+        if len(value) <= limit:
+            return value, False
+        return clip(value, limit), True
+    if isinstance(value, dict):
+        clipped: dict[str, object] = {}
+        truncated = False
+        for key, item in value.items():
+            new_item, did_truncate = clip_payload(item, limit)
+            clipped[str(key)] = new_item
+            truncated = truncated or did_truncate
+        return clipped, truncated
+    if isinstance(value, (list, tuple)):
+        items: list[object] = []
+        truncated = False
+        for item in value:
+            new_item, did_truncate = clip_payload(item, limit)
+            items.append(new_item)
+            truncated = truncated or did_truncate
+        return (items if isinstance(value, list) else tuple(items)), truncated
+    return value, False
+
+
 def summarize_payload(result: ToolResult) -> str:
     """生成完成事件使用的短结果摘要，避免把完整 payload 写入事件。"""
     if not result.payload:

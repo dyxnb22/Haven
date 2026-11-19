@@ -35,6 +35,10 @@ MAX_SKILLS = 12
 MAX_DESCRIPTION_CHARS = 200
 #: 渲染后目录的总字符上限。目录每一轮都在头部，因此这段开销是每轮都付的。
 MAX_CATALOG_CHARS = 1_500
+#: `render_catalog` 为结尾那句"还有 N 个没列出"预留的字符数。有界性本身不能因为
+#: 省字符被挤掉，所以重排时要先把它的位置占住；预留值只需大于那句的实际长度
+#: （`... and N more skill(s) not listed (catalog is bounded)`，N 有 9 位数字也放得下）。
+CATALOG_NOTE_RESERVE = 64
 #: 单个被选中技能正文的截断长度。
 MAX_BODY_CHARS = 4_000
 #: `skill.read` 读取单个辅助文件的上限。它与 `MODEL_PAYLOAD_CHARS` 同量级：一个
@@ -86,7 +90,9 @@ class Skill:
     #: 发现该文件的相对位置，例如 `skills/foo/SKILL.md` 或
     #: `.haven/skills/foo/SKILL.md`。绝不包含绝对路径，以免把 $HOME 写进提示词。
     source: str
-    #: 正文的 SHA-256 前 12 位十六进制。
+    #: 正文的 SHA-256 前 12 位十六进制。只覆盖 `body` 里实际存下的那些字节
+    #: （即截断后的那一份），因此它永远可以被验证：`haven skills info` 把二者
+    #: 并排打印，模型和追踪都能确认"看到的正文确实是这一条"。
     digest: str
     #: 正文原文（加载时按 `MAX_BODY_CHARS` 截断）。
     body: str
@@ -170,13 +176,18 @@ def parse_skill(text: str, *, name: str, scope: SkillScope, source: str) -> Skil
         raise SkillError(f"name {declared!r} does not match directory {name!r}")
     if not body:
         raise SkillError("empty skill body")
+    # 摘要只覆盖**会被存下来、会被展示出去**的那些字节。此前它算的是完整正文，
+    # 而 body 字段存的是截断后的那一份：正文一旦超过 MAX_BODY_CHARS，digest 说的
+    # 就是没人见过的字节，`haven skills info` 把 digest 和 body 并排打印时二者对不上，
+    # 模型和追踪也就无法验证"我看到的正文确实是这一条"——那正是这个字段唯一的用途。
+    visible = body[:MAX_BODY_CHARS]
     return Skill(
         name=name,
         description=fields["description"],
         scope=scope,
         source=source,
-        digest=sha256_text(body)[:12],
-        body=body[:MAX_BODY_CHARS],
+        digest=sha256_text(visible)[:12],
+        body=visible,
         granted_tools=parse_allowed_tools(fields.get("allowed-tools", "")),
     )
 
@@ -293,6 +304,14 @@ def discover_skills(*, user_root: Path, project_root: Path) -> SkillCatalog:
             refused.append(
                 SkillRefusal(f"{prefix}/", f"{skipped} more skill(s) not scanned (bounded scan)")
             )
+    # 与上面"扫描有界"是同一条原则：截断必须自己说清楚。此前这里是
+    # `accepted[:MAX_SKILLS]`，多出来的技能无声消失——一个装了几十个技能的仓库在
+    # `haven skills list` 里看起来只装了 12 个，而 `haven skills info <被丢的那个>`
+    # 只会回答"没有这个技能"，用户无从区分它是被拒绝了、还是根本没被发现。
+    for dropped in accepted[MAX_SKILLS:]:
+        refused.append(
+            SkillRefusal(dropped.source, f"not listed (catalog holds at most {MAX_SKILLS})")
+        )
     return SkillCatalog(
         tuple(accepted[:MAX_SKILLS]),
         tuple(refused),
@@ -394,6 +413,17 @@ def scaffold_skill(
     for tool in allowed_tools:
         if tool not in KNOWN_TOOLS:
             raise SkillError(f"unregistered tool in allowed-tools: {tool!r}")
+    # 脚手架写出的文件必须能通过它自己的 `parse_skill`，否则用户刚看到
+    # "created skill"，转头就在 `haven skills validate` 里看到同一个文件被拒。
+    #
+    # frontmatter 是按行解析的（`parse_skill` 里 `rest[:end].splitlines()`），而
+    # `str.splitlines()` 认定的行边界远不止 `\n`：`\r`、`\v`、`\f`、`\x1c`-`\x1e`、
+    # `\x85`、U+2028、U+2029 都算。任何一个出现在 description 里，它就会变成第二条
+    # frontmatter 行，于是文件带着 "frontmatter line is not 'key: value'" 被拒。
+    # 这里用"拆开后必须正好还原成原串"来表达那条约束——比列举字符集更贴合成因。
+    lines = description.splitlines()
+    if not description.strip() or len(lines) != 1 or lines[0] != description:
+        raise SkillError(f"description must be a single non-empty line; got {description!r}")
     skill_dir = root / name
     skill_file = skill_dir / SKILL_FILENAME
     if skill_file.exists():
@@ -421,6 +451,24 @@ description: {description}
     return skill_file
 
 
+def _layout_catalog(header: str, entries: tuple[Skill, ...], budget: int) -> list[str]:
+    """在 `budget` 字符内尽量多地排下目录条目；返回含表头的所有行。"""
+    lines = [header]
+    used = len(header) + 1
+    for skill in entries:
+        description = skill.description[:MAX_DESCRIPTION_CHARS]
+        entry = f"- {skill.name} [{skill.scope}] {skill.digest} — {description}"
+        if skill.granted_tools:
+            # 授权是程序事实，不是技能的自我声明：这句话由 Haven 渲染，因此模型
+            # 读到的是"确实如此"，而不是"某段文本说它应该如此"。
+            entry += f" (standing approval granted for this run: {', '.join(skill.granted_tools)})"
+        if used + len(entry) + 1 > budget:
+            break
+        lines.append(entry)
+        used += len(entry) + 1
+    return lines
+
+
 def render_catalog(skills: Iterable[Skill]) -> str:
     """把目录渲染成一段有界的英文文本，供 `skill_catalog` 片段使用。
 
@@ -430,19 +478,19 @@ def render_catalog(skills: Iterable[Skill]) -> str:
     header = (
         "Skill catalog (advisory prompt fragments; a skill is NOT a tool and grants no authority):"
     )
-    lines = [header]
-    used = len(header) + 1
-    for skill in skills:
-        description = skill.description[:MAX_DESCRIPTION_CHARS]
-        entry = f"- {skill.name} [{skill.scope}] {skill.digest} — {description}"
-        if skill.granted_tools:
-            # 授权是程序事实，不是技能的自我声明：这句话由 Haven 渲染，因此模型
-            # 读到的是"确实如此"，而不是"某段文本说它应该如此"。
-            entry += f" (standing approval granted for this run: {', '.join(skill.granted_tools)})"
-        if used + len(entry) + 1 > MAX_CATALOG_CHARS:
-            break
-        lines.append(entry)
-        used += len(entry) + 1
+    entries = tuple(skills)
+    lines = _layout_catalog(header, entries, MAX_CATALOG_CHARS)
+    if len(lines) - 1 < len(entries):
+        # 有界的索引必须自己说清楚它是有界的，理由与 `discover_skills` 里"扫描有界"
+        # 完全相同：一个静默截断的目录会让模型和用户都认为没列出的技能不存在，于是
+        # `--skill <那个技能>` 拿到一句"unknown skill"——一个纯粹由呈现方式造成的死胡同。
+        # 实测 1500 字符只列得出 12 个技能中的 6 个左右，所以这条路经常走到。
+        #
+        # 先按扣掉预留值的预算重排，再按**重排后实际列出的条数**数那句话里的 N：
+        # 若拿第一遍的数字，重排少列一个时那句话就会多数一个，数字对不上。
+        lines = _layout_catalog(header, entries, MAX_CATALOG_CHARS - CATALOG_NOTE_RESERVE)
+        omitted = len(entries) - (len(lines) - 1)
+        lines.append(f"... and {omitted} more skill(s) not listed (catalog is bounded)")
     return "\n".join(lines)
 
 

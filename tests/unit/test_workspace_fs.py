@@ -257,6 +257,39 @@ class TestEdit:
             )
         assert exc.value.code == "invalid_arguments"
 
+    @pytest.mark.parametrize("occurrence", [0, -1, -100])
+    async def test_a_non_positive_occurrence_is_rejected_not_silently_applied(
+        self, workspace: FsWorkspace, occurrence: int
+    ) -> None:
+        """`occurrence` 是 1 起的序号；0 或负数必须被拒绝，而不是被写进文件。
+
+        契约层的 `ge=1` 保护的是模型侧的 `RepoEditArgs`，而这里是工作区端口——
+        最后一个写字节的层。少了这道守卫，`index` 会停在 -1：`text[:index]` 截掉文件头，
+        新文本插到末尾，尾部整段复制一遍。实测一个 23 字节的文件会变成 46 字节的乱码，
+        且不报任何错。
+        """
+        original = (workspace.root / "src" / "calc.py").read_text()
+        with pytest.raises(WorkspaceError) as exc:
+            await workspace.preview_edit(
+                "src/calc.py", "return a - b", "return a + b", occurrence=occurrence
+            )
+        assert exc.value.code == "invalid_arguments"
+        assert "at least 1" in str(exc.value)
+        # 预览这一步就不能动磁盘。
+        assert (workspace.root / "src" / "calc.py").read_text() == original
+
+        # 真正写入的那条路径同样要挡住。
+        with pytest.raises(WorkspaceError) as exc:
+            await workspace.apply_edit(
+                "src/calc.py",
+                "return a - b",
+                "return a + b",
+                workspace.path_facts("src/calc.py").digest or "",
+                occurrence=occurrence,
+            )
+        assert exc.value.code == "invalid_arguments"
+        assert (workspace.root / "src" / "calc.py").read_text() == original
+
     async def test_replace_all_still_binds_to_the_preimage(self, workspace: FsWorkspace) -> None:
         preview = await workspace.preview_edit("src/calc.py", "a - b", "a + b", replace_all=True)
         (workspace.root / "src" / "calc.py").write_text("changed under us\n")

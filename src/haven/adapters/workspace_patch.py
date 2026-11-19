@@ -152,6 +152,18 @@ def apply_replacement(
     """
     if replace_all and occurrence is not None:
         raise WorkspaceError("invalid_arguments", "set either replace_all or occurrence, not both")
+    if occurrence is not None and occurrence < 1:
+        # `occurrence` 是 1 起的序号。契约层有 `ge=1`，但那保护的是模型侧的
+        # `RepoEditArgs`；这里是工作区端口，`apply_edit` / `preview_edit` /
+        # `apply_patch` 都直接收这个参数，是最后一个写字节的层。
+        #
+        # 少了这道守卫，`occurrence=0` 不会报错，而是 `index` 停在 -1：
+        # `text[:index]` 把文件头截掉，新文本插到末尾，尾部再整段复制一遍——一次
+        # 无声的损坏（实测 23 字节的文件变成 46 字节的乱码），而不是一句诊断。
+        raise WorkspaceError(
+            "invalid_arguments",
+            f"occurrence is 1-based and must be at least 1; got {occurrence}",
+        )
 
     count = text.count(old)
     if count == 0:
