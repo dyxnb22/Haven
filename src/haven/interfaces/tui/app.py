@@ -497,7 +497,7 @@ class HavenApp(App[None]):
                 self._log_line("system", "no recorded changes to review")
 
         if self._services is not None:
-            self.run_worker(show(), exclusive=False)
+            self.run_worker(self._run_query("showing the diff", show()), exclusive=False)
 
     def _start_resume(self, run_id: str) -> None:
         async def _do() -> None:
@@ -513,7 +513,7 @@ class HavenApp(App[None]):
             self._log_line("system", f"resuming run {run_id}")
             self._run_worker = self._execute_resume(ctx)
 
-        self.run_worker(_do(), exclusive=False)
+        self.run_worker(self._run_query("resuming", _do()), exclusive=False)
 
     # -- 事件 -> 状态 -> 控件 ----------------------------------------------------
 
@@ -569,6 +569,22 @@ class HavenApp(App[None]):
         self._state = replace(self._state, timeline=(*self._state.timeline, entry))
         self._rendered_timeline = len(self._state.timeline)
         self._write_timeline(entry)
+
+    async def _run_query(self, label: str, coro: Awaitable[object]) -> None:
+        """跑一个即发即弃的只读查询，把失败变成一行日志而不是进程死亡。
+
+        Textual 对未捕获的 worker 异常会直接退出整个应用（`App._handle_exception`
+        的注释原文："Always results in the app exiting"）。而这些查询都是只读且可失败的：
+        磁盘满了、SQLite 被锁、工作区一个瞬时的 OSError。为一次 `/diff` 杀掉会话、并
+        中止在飞的运行是不可接受的。同一个文件里 `_show_run_stats`、
+        `_show_process_output`、`_handoff_command` 早就各自这么做了，这里统一成一处，
+        把其余几处补齐。
+        """
+        try:
+            await coro
+        except Exception as exc:
+            # 消息本身要转义：异常文本里可能带不可信的路径或模型输出。
+            self._log_line("system", f"{label} failed: {sanitize(str(exc), 300)}")
 
     def _refresh_panels(self) -> None:
         panels = panel_text(self._state)
@@ -757,7 +773,7 @@ class HavenApp(App[None]):
             else:
                 self._log_line("system", "no active run to steer; send again to start one")
 
-        self.run_worker(_do(), exclusive=False)
+        self.run_worker(self._run_query("queueing steering input", _do()), exclusive=False)
 
     def _handle_command(self, command: str) -> None:
         budget = self._services.config.budget if self._services is not None else None
@@ -834,7 +850,11 @@ class HavenApp(App[None]):
             self._skill_command(action.value)
         elif action.kind == "fork":
             if self._can_switch_session():
-                self.run_worker(self._select_session(SessionSelection(action.value, "fork")))
+                self.run_worker(
+                    self._run_query(
+                        "forking", self._select_session(SessionSelection(action.value, "fork"))
+                    )
+                )
         elif action.kind == "diff":
             self.query_one("#tabs", TabbedContent).active = "tab-diff"
             self._show_diff(action.value)
@@ -920,7 +940,7 @@ class HavenApp(App[None]):
         async def _do() -> None:
             self._log_line("system", await rewind_text(self._svc.recovery, run_id))
 
-        self.run_worker(_do(), exclusive=False)
+        self.run_worker(self._run_query("rewinding", _do()), exclusive=False)
 
     def _verification_command(self, value: str) -> None:
         if self._services is None:
@@ -1098,14 +1118,16 @@ class HavenApp(App[None]):
 
             def selected(selection: SessionSelection | None) -> None:
                 if selection is not None:
-                    self.run_worker(self._select_session(selection))
+                    self.run_worker(
+                        self._run_query("opening the session", self._select_session(selection))
+                    )
 
             self.push_screen(
                 SessionPickerScreen(self._svc.store, self._svc.run_service.workspace_digest, query),
                 selected,
             )
 
-        self.run_worker(_do(), exclusive=False)
+        self.run_worker(self._run_query("listing sessions", _do()), exclusive=False)
 
     def _handoff_command(self, value: str) -> None:
         if self._services is None or not self._state.run_id:
@@ -1214,7 +1236,7 @@ class HavenApp(App[None]):
             message = await export_run_text(self._svc.store, self._state.run_id, Path.cwd())
             self._log_line("system", message)
 
-        self.run_worker(_do(), exclusive=False)
+        self.run_worker(self._run_query("exporting the run", _do()), exclusive=False)
 
     # -- 动作 -------------------------------------------------------------------
 

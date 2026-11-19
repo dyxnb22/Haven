@@ -771,9 +771,12 @@ class RunService:
                 data = await self._store.get_artifact(checkpoint.evidence.diffs[-1].diff_digest)
                 if data is not None:
                     return data.decode("utf-8", errors="replace")
-                for envelope in reversed(await self._store.load_events(run_id)):
-                    if isinstance(envelope.event, DiffPreview):
-                        return envelope.event.preview
+            # 构件拿不到（或 checkpoint 里没有 diff 记录）时回退到事件流。这一段必须和
+            # 上面的 if 平级：原先被错缩进在里面，于是"没有带 diff 的 checkpoint"这个
+            # 常见情况下它永远是死代码——`haven://runs/{id}/diff` 因此恒返回空。
+            for envelope in reversed(await self._store.load_events(run_id)):
+                if isinstance(envelope.event, DiffPreview):
+                    return envelope.event.preview
             return ""
         return (await self._workspace.run_diff()).diff
 
@@ -934,12 +937,14 @@ class RunService:
         )
         self._actors[ctx.run_id] = actor
         self._active_run_id = ctx.run_id
-        current_task = asyncio.current_task()
-        if current_task is not None:
-            self._tasks[ctx.run_id] = current_task
         await self._pipeline.replace_scratch_dir(self._scratch_dir)
+        # 记的是**运行自己的** task，不是调用方的。`_drive` 是被 `run()` 调用的，
+        # 而 `run()` 又可能被别的请求处理器 await——那时 `current_task()` 拿到的是那个
+        # 请求的 task，`cancel()` 就会把取消请求自己干掉，而不是干掉这次运行。
+        drive_task = asyncio.create_task(actor.drive())
+        self._tasks[ctx.run_id] = drive_task
         try:
-            outcome = await actor.drive()
+            outcome = await drive_task
         finally:
             self._tasks.pop(ctx.run_id, None)
             self._actors.pop(ctx.run_id, None)

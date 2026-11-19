@@ -62,6 +62,11 @@ class HavenRuntime:
         return self._store
 
     @property
+    def workspace_digest(self) -> str:
+        """本运行时绑定工作区的摘要；存储是全局的，靠它把范围收回来。"""
+        return self._run_service.workspace_digest
+
+    @property
     def emitter(self) -> EventEmitter:
         """底层事件发射器。"""
         return self._emitter

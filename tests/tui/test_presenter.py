@@ -1,5 +1,7 @@
 """Presenter reducer 单元测试（纯逻辑，不需要 Textual）。"""
 
+from textual.content import Content
+
 from haven.contracts.events import (
     ApprovalRequested,
     AssistantDelta,
@@ -57,9 +59,15 @@ def test_run_created_initializes_header() -> None:
 
 
 def test_header_line_displays_active_skills() -> None:
+    """断言**渲染后**的文本。
+
+    标题栏是启用标记的 `Static`，所以方括号必须转义——旧版不断转义，`[tdd, review]`
+    会被 Rich 当成样式标记整个吞掉，用户在标题栏里根本看不到技能列表。
+    """
     state = PresenterState(workspace="/home/user/project", selected_skills=("tdd", "review"))
     header = state.header_line()
-    assert "skills: [tdd, review]" in header
+    assert "skills: \\[tdd, review]" in header
+    assert "skills: [tdd, review]" in Content.from_markup(header).plain
 
 
 def test_plan_exposes_acceptance_dependencies_and_blockers() -> None:
@@ -183,7 +191,8 @@ def test_run_finished_stops_running() -> None:
 
 class TestSanitize:
     def test_strips_ansi_and_control_chars(self) -> None:
-        assert sanitize("hello\x1b[31mred\x07\x00") == "hello[31mred"
+        # 控制字节被剥掉；剩下的 `[31m` 也必须转义，否则任何畸形标记都能进面板
+        assert sanitize("hello\x1b[31mred\x07\x00") == "hello\\[31mred"
 
     def test_bounds_length(self) -> None:
         assert sanitize("x" * 5000, limit=100).endswith("…[truncated]")

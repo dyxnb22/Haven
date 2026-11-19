@@ -30,12 +30,27 @@ MCP_PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "haven"
 SERVER_VERSION = "0.1.0"
 
+#: `resources/read` 一次最多返回多少个事件。事件流本身无上界，而 Haven 自己的客户端
+#: 会拒绝超过 8 MiB 的响应行——不截断的话发出去也读不回来。
+MAX_EVENTS_PER_READ = 500
+
 
 class MCPServer:
     """处理标准 MCP JSON-RPC 请求并协调底层 HavenRuntime。"""
 
-    def __init__(self, runtime: HavenRuntime) -> None:
+    def __init__(self, runtime: HavenRuntime, *, read_only: bool = True) -> None:
         self._runtime = runtime
+        # 服务器实际以什么模式运行。它必须体现在对外声明里：外部客户端选工具全靠
+        # 名称 + inputSchema + description，这是它唯一的信号。
+        self._read_only = read_only
+        # 会话存储是**全局**的（~/Library/Application Support/haven/haven.db，所有工作区
+        # 共用），而 RunRecord 带着 workspace_digest。不收窄范围的话，`resources/list`
+        # 会把机器上每个工作区最近 10 次运行的 id 白送出去，而根资源返回的 checkpoint
+        # 含完整对话与文件内容。`search_runs` 本来就接受 workspace_digest，这里用上它。
+        self._workspace_digest = runtime.workspace_digest
+        # 串行化"会占用单活跃运行名额"的请求；其余请求可并发，好让 cancel/ping 能插队。
+        self._run_lock = asyncio.Lock()
+        self._inflight: set[asyncio.Task[None]] = set()
 
     async def handle_request(self, req: dict[str, Any]) -> dict[str, Any] | None:
         """分发并处理单个 JSON-RPC 2.0 请求。"""
@@ -77,18 +92,66 @@ class MCPServer:
                     "resources": {"subscribe": False, "listChanged": False},
                 },
                 "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
+                # 让客户端能发现本次连接的有效权限，而不是只能从描述文字里猜。
+                "haven": {"readOnly": self._read_only},
             },
         }
 
+    async def _dispatch(self, req: dict[str, Any], writer: asyncio.StreamWriter) -> None:
+        """处理一个请求并把响应写回去；失败不影响读循环。"""
+        try:
+            method = req.get("method")
+            params = req.get("params") or {}
+            tool = params.get("name") if isinstance(params, dict) else None
+            # 只有这两个工具会启动或延续一次运行，需要串行（RunService 的
+            # `_active_run_id` 是单数，没有并发守卫）；其余请求——ping、cancel、
+            # resources/*——可以随时插进来。
+            needs_run_slot = method == "tools/call" and tool in (
+                "haven.run_readonly",
+                "haven.continue_readonly",
+            )
+            if needs_run_slot:
+                async with self._run_lock:
+                    resp = await self.handle_request(req)
+            else:
+                resp = await self.handle_request(req)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # 处理器自身的意外也不能把读循环带走；能拿到 id 就按 id 回一个错误。
+            req_id = req.get("id") if isinstance(req, dict) else None
+            if req_id is None:
+                return
+            resp = {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {"code": -32603, "message": "Internal error"},
+            }
+        if resp is not None:
+            await _write_json(writer, resp)
+
     def _handle_tools_list(self, req_id: Any) -> dict[str, Any]:
+        # 描述必须与实际授予的能力一致。`haven mcp serve --write` 会以 INTERACTIVE 模式
+        # 加 AutoApprover("approve_all") 运行，此时若照旧声称 "Cannot modify files"，
+        # 客户端就是凭一句假话把整个工作区的写权限交出去——而它无从发现真相。
+        if self._read_only:
+            run_desc = (
+                "Run a bounded, auditable, read-only session in Haven on the fixed workspace. "
+                "Cannot modify files or escape sandbox. "
+                "Returns structured outcome and resource URI."
+            )
+        else:
+            run_desc = (
+                "Run a bounded, auditable session in Haven on the fixed workspace. "
+                "THIS SERVER WAS STARTED WITH --write: the session may modify files in the "
+                "workspace, and every approval is granted automatically with no human in the "
+                "loop. Treat it as fully privileged. "
+                "Returns structured outcome and resource URI."
+            )
         tools = [
             {
                 "name": "haven.run_readonly",
-                "description": (
-                    "Run a bounded, auditable, read-only session in Haven on the fixed workspace. "
-                    "Cannot modify files or escape sandbox. "
-                    "Returns structured outcome and resource URI."
-                ),
+                "description": run_desc,
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -159,9 +222,17 @@ class MCPServer:
         try:
             if tool_name == "haven.run_readonly":
                 goal = arguments.get("goal")
-                if not goal or not isinstance(goal, str):
-                    return self._tool_error(req_id, "Missing or invalid 'goal' parameter")
-                skill_names = arguments.get("skill_names") or ()
+                # 按 tools/list 里声明的 inputSchema 校验：minLength/maxLength 与类型。
+                # 只查真值会让 `skill_names: "abc"` 被当成三个单字符技能名，
+                # 超长 goal 则把内部错误消息当 schema 违规返回。
+                if not goal or not isinstance(goal, str) or not (3 <= len(goal) <= 4000):
+                    return self._tool_error(req_id, "Invalid or missing 'goal' parameter")
+                names = arguments.get("skill_names") or ()
+                if isinstance(names, str) or not isinstance(names, (list, tuple)):
+                    return self._tool_error(req_id, "Invalid 'skill_names' parameter")
+                if not all(isinstance(name, str) for name in names):
+                    return self._tool_error(req_id, "Invalid 'skill_names' parameter")
+                skill_names = tuple(names)
                 outcome = await self._runtime.start_run(goal, skill_names=skill_names)
                 data = {
                     "run_id": outcome.run_id,
@@ -202,8 +273,10 @@ class MCPServer:
                 "id": req_id,
                 "error": {"code": -32602, "message": f"Unknown tool: {tool_name}"},
             }
-        except Exception as exc:
-            return self._tool_error(req_id, f"Execution failed: {exc}")
+        except Exception:
+            # 不回显异常载荷：那是信任边界，而 `feedback.py` 的既定做法是给固定建议。
+            # 原样反射会把本地技能目录、环境变量名、sqlite 路径和绝对路径一起送出去。
+            return self._tool_error(req_id, "Execution failed; see the Haven logs for details")
 
     def _tool_result(self, req_id: Any, payload: dict[str, Any]) -> dict[str, Any]:
         text = json.dumps(payload, ensure_ascii=False, indent=2)
@@ -221,7 +294,9 @@ class MCPServer:
         }
 
     async def _handle_resources_list(self, req_id: Any) -> dict[str, Any]:
-        runs = await self._runtime.store.list_runs(limit=10)
+        runs = await self._runtime.store.search_runs(
+            "", limit=10, workspace_digest=self._workspace_digest
+        )
         resources: list[dict[str, Any]] = []
         for r in runs:
             resources.extend(
@@ -275,6 +350,13 @@ class MCPServer:
                 "id": req_id,
                 "error": {"code": -32602, "message": f"Run not found: {run_id}"},
             }
+        # 存储是全局的：别的跑在同一个库里的工作区，其运行对本次连接不可见。
+        if run_rec.workspace_digest != self._workspace_digest:
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {"code": -32602, "message": f"Run not found: {run_id}"},
+            }
 
         if not sub:
             checkpoint = await self._runtime.get_checkpoint(run_id)
@@ -302,8 +384,10 @@ class MCPServer:
             }
 
         if sub == "events":
+            # 有界：`load_events` 会返回整条事件流，而 ModelCompleted.text 是无界字符串。
+            # 不设上限的话，任何客户端都能让这个长驻进程反复做一次任意大的分配。
             events = await self._runtime.store.load_events(run_id)
-            dumped = [e.event.model_dump(mode="json") for e in events]
+            dumped = [e.event.model_dump(mode="json") for e in events[-MAX_EVENTS_PER_READ:]]
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
@@ -336,11 +420,13 @@ class MCPServer:
             }
 
         if sub == "diff":
-            # 只读模式通常无修改
+            # 真diff：`repo.diff` 是只读工具，只读运行（这里的常态）照样会产生差异。
+            # 此前这里恒返回空串，客户端无法区分"这次运行没改任何东西"和"这个资源没实现"。
+            diff = await self._runtime.run_service.get_diff(run_id)
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
-                "result": {"contents": [{"uri": uri, "mimeType": "text/plain", "text": ""}]},
+                "result": {"contents": [{"uri": uri, "mimeType": "text/plain", "text": diff}]},
             }
 
         return {
@@ -354,31 +440,110 @@ class MCPServer:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
-        """从 reader 逐行读取 JSON-RPC 消息，处理并向 writer 输出响应。"""
+        """从 reader 逐行读取 JSON-RPC 消息，处理并向 writer 输出响应。
+
+        这里是信任边界：对端是不可信的外部客户端。三种输入都曾让异常直接逃出本方法，
+        顺着 `run_mcp_server` 的 finally 掀翻整个 server、丢掉在飞的运行——
+
+        - 非 UTF-8 字节（`.decode("utf-8")` 抛 UnicodeDecodeError）；
+        - 超过 asyncio 流默认 64 KiB 上限的一行（`readline()` 抛 ValueError）；
+        - `params` 不是对象，或整个消息是 JSON-RPC 批量数组（`req.get(...)` 抛
+          AttributeError）。
+
+        Haven 自己的 MCP **客户端**这三样全防（见 `application/mcp_client.py`），
+        server 不该比它脆。现在逐条转成 JSON-RPC 错误响应，连接继续。
+        """
         while True:
-            line = await reader.readline()
+            try:
+                line = await reader.readline()
+            except ValueError:
+                # 一行超过流的单行上限。**不要**去"把剩余部分读完"：`readline()` 抛
+                # ValueError 时已经动过内部缓冲区了——换行符若在缓冲区内，整行已被删掉；
+                # 若不在，缓冲区被清空、剩余部分还在流里。两种情况从外部无法区分，而按
+                # 原始块盲读会把已经排好的下一行一起吞掉。直接继续：下一次 readline()
+                # 要么读到下一行，要么读到这一行的尾巴（那会是一次 parse error，诚实）。
+                await _write_json(
+                    writer,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32600, "message": "line exceeded the size limit"},
+                    },
+                )
+                continue
             if not line:
                 break
-            line_str = line.decode("utf-8").strip()
+            try:
+                line_str = line.decode("utf-8").strip()
+            except UnicodeDecodeError:
+                await _write_json(
+                    writer,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32700, "message": "Parse error"},
+                    },
+                )
+                continue
             if not line_str:
                 continue
 
             try:
                 req = json.loads(line_str)
             except Exception:
-                err_resp = {
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {"code": -32700, "message": "Parse error"},
-                }
-                writer.write(json.dumps(err_resp).encode("utf-8") + b"\n")
-                await writer.drain()
+                await _write_json(
+                    writer,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32700, "message": "Parse error"},
+                    },
+                )
                 continue
 
-            resp = await self.handle_request(req)
-            if resp is not None:
-                writer.write(json.dumps(resp, ensure_ascii=False).encode("utf-8") + b"\n")
-                await writer.drain()
+            # 批量数组与畸形 params：JSON-RPC 2.0 的 Request 必须是对象。
+            # 两处顺序都不能反：`isinstance(req, dict)` 必须先判（批量数组时
+            # `req.get` 自己就会抛），而 `params` 不能写 `or {}`——空列表为假，
+            # 会被换成 {} 从而绕过检查，随后 `params.get(...)` 抛 AttributeError。
+            if not isinstance(req, dict):
+                malformed = True
+            else:
+                raw_params = req.get("params")
+                malformed = raw_params is not None and not isinstance(raw_params, dict)
+            if malformed:
+                await _write_json(
+                    writer,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": req.get("id") if isinstance(req, dict) else None,
+                        "error": {"code": -32600, "message": "Invalid Request"},
+                    },
+                )
+                continue
+
+            # 每个请求各自跑在一个 task 里，读循环永不堵塞。
+            #
+            # 此前 `await self.handle_request(req)` 是串行的：一次 `haven.run_readonly`
+            # 会把 `serve_stdio` 堵在整个运行期间，之后所有请求——包括 `haven.cancel_run`
+            # 和 `ping`——都躺在 StreamReader 里没人读。广告里的取消工具因此在唯一可用的
+            # 传输上永远是死代码，带活性超时的 MCP 客户端还会在运行中途把 server 拆掉。
+            task = asyncio.create_task(self._dispatch(req, writer))
+            self._inflight.add(task)
+            task.add_done_callback(self._inflight.discard)
+
+        # 对端断开前把在途请求排空：响应是从各自的 task 写回的，不排就会丢。
+        if self._inflight:
+            await asyncio.gather(*list(self._inflight), return_exceptions=True)
+
+
+async def _write_json(writer: asyncio.StreamWriter, payload: dict[str, Any]) -> None:
+    """写一行 JSON 并 flush；写失败（对端已断开）时安静结束。"""
+    try:
+        writer.write(json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n")
+        await writer.drain()
+    except (ConnectionError, OSError):
+        # 对端已经走了：这不是错误，只是没有人在听。
+        pass
 
 
 async def run_mcp_server(
@@ -408,7 +573,7 @@ async def run_mcp_server(
         )
         writer = asyncio.StreamWriter(write_transport, write_protocol, reader, loop)
 
-        server = MCPServer(services.runtime)
+        server = MCPServer(services.runtime, read_only=read_only)
         await server.serve_stdio(reader, writer)
     finally:
         await services.close()

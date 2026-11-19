@@ -9,8 +9,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field, replace
 
-from rich.markup import escape
-
 from haven.contracts.events import (
     ApprovalDecided,
     ApprovalRequested,
@@ -48,25 +46,48 @@ from haven.interfaces.model_display import cost_text, model_call_text
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
-def sanitize(text: str, limit: int = 2000) -> str:
-    """将不可信文本处理为可安全显示的内容，并限制其长度。
+def _truncate(text: str, limit: int) -> str:
+    """超长时截断并附上标记；标记必须最后加，否则会被一起转义。"""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + " …[truncated]"
 
-    有两类风险，都来自模型或仓库控制的文本：
 
-    - ANSI/控制序列可能重写面板周围的终端内容；
-    - Rich 控制台标记会由 chat/diff/evidence/trace 面板渲染（这些是启用了标记的
-      `Static` widgets）。如果原样保留，包含 `[red]`、`[/]` 或 `[link=...]` 的
-      模型输出可能重新设置样式或隐藏对话记录的一部分，足以伪造令人信服的“成功”
-      行。转义后，标记会以字面文本形式显示。
+def _escape_markup(text: str) -> str:
+    """把每个 `[` 转成 `\\[`，使文本绝不可能被 Rich 当成标记。
 
-    时间线 `RichLog` 已经禁用标记，因此这里主要是保护各面板中的文本；统一在所有
-    位置转义可以保持单一规则。
+    不能用 `rich.markup.escape`：它的正则只转义"看起来像样式标签"的 `[`
+    （`\\[[a-z#/@]`），且 `[^[]*?` 不能跨越另一个 `[`，于是在
+    `skills: [a[link=…]b]` 这种连续方括号上会漏掉第一个——而漏掉的那个恰恰是畸形
+    标记，`Content.from_markup` 会抛 `MarkupError`。逐个替换 `[` 的规则显然正确，
+    且已对畸形标签、样式标签、连续方括号、裸方括号逐一验证过逐字节还原。
     """
-    cleaned = _CONTROL_CHARS.sub("", text)
-    cleaned = escape(cleaned)
-    if len(cleaned) > limit:
-        cleaned = cleaned[:limit] + " …[truncated]"
-    return cleaned
+    return text.replace("[", "\\[")
+
+
+def sanitize(text: str, limit: int = 2000) -> str:
+    """处理面向**启用标记的面板**的不可信文本，并限制其长度。
+
+    面板是启用了标记的 `Static` widgets。如果原样保留 `[red]`、`[/]` 或
+    `[link=...]`，模型或仓库控制的输出可能重新设置样式、隐藏对话记录的一部分，
+    足以伪造令人信服的“成功”行；畸形的标记（如孤立的 `[/i]`）更会让
+    `Content.from_markup` 抛 `MarkupError`，直接把 TUI 事件循环打死。转义后，
+    标记会以字面文本形式显示。
+
+    时间线请用 `sanitize_plain`：它的 `RichLog` 禁用了标记，转义只会显示成字面
+    反斜杠。
+    """
+    return _truncate(_escape_markup(_CONTROL_CHARS.sub("", text)), limit)
+
+
+def sanitize_plain(text: str, limit: int = 2000) -> str:
+    """处理面向**禁用标记的时间线**的不可信文本，并限制其长度。
+
+    时间线是 `markup=False` 的 `RichLog`，写进去的 `Text` 不做标记解析，所以这里
+    只需要剥掉 ANSI/控制序列——再转义 Rich 标记只会以字面反斜杠显示给用户
+    （`fix [bug]` 会变成 `fix \[bug]`）。
+    """
+    return _truncate(_CONTROL_CHARS.sub("", text), limit)
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,15 +185,26 @@ class PresenterState:
         )
         if self.agent_mode == "plan":
             mode_str = f"plan ({mode_str})"
-        skills_str = f"skills: [{', '.join(self.selected_skills)}]" if self.selected_skills else ""
+        # `selected_skills` 来自用户在 `/skill use` 里输入的原文（名字解析被刻意推迟到
+        # 运行开始，见 commands.py 的注释），所以它和模型输出一样不可信：一个畸形的
+        # Rich 标记会让 `Content.from_markup` 抛 MarkupError，而标题栏每个事件都会刷新
+        # 一次——那会直接打死 TUI 的事件循环。工作区基名与分支名同理。
+        # 注意 `mode_str` 里的 `[ask]`：它也必须转义，否则会被当成标记吞掉。
+        # 整段一起 sanitize：外层那对方括号是自己加的，同样会被 Rich 当成标记——
+        # 只转义名字会让 `skills: [a\[link=x]b]` 变成畸形标记，照样抛 MarkupError。
+        skills_str = (
+            sanitize(f"skills: [{', '.join(self.selected_skills)}]", 400)
+            if self.selected_skills
+            else ""
+        )
         parts = [
             "Haven",
-            self.workspace.rsplit("/", 1)[-1] if self.workspace else "",
-            self.branch,
+            sanitize(self.workspace.rsplit("/", 1)[-1], 100) if self.workspace else "",
+            sanitize(self.branch, 100),
             sanitize(
                 self.last_model_call.model_name if self.last_model_call else self.model_name, 100
             ),
-            mode_str,
+            sanitize(mode_str, 100),
             skills_str,
         ]
         if self.model_preset:
@@ -204,7 +236,16 @@ class PresenterState:
         return "idle — type a task and press Enter, /help for commands"
 
 
+#: 时间线保留的条目数上限。TUI 是一个进程跑很多次运行，而 `RunCreated` 会重置
+#: 其他所有显示缓冲（chat/diff/evidence/process/trace）却**不**重置时间线——它原先
+#: 只由 `/new` 或切换会话清空。没有上限时，一个长会话的时间线会一直涨，且每次追加
+#: 都要重建整个元组，成本随会话长度线性增长。`evidence_rows` 压在 50、`process_results`
+#: 压在 10，这里是同一类边界。
+MAX_TIMELINE_ENTRIES = 2000
+
+
 def _push(state: PresenterState, entry: TimelineEntry) -> PresenterState:
+    return replace(state, timeline=(*state.timeline, entry)[-MAX_TIMELINE_ENTRIES:])
     return replace(state, timeline=(*state.timeline, entry))
 
 
@@ -252,12 +293,14 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
             verification_checks=(),
             last_edit_seq=-1,
         )
-        return _push(state, TimelineEntry("user", sanitize(event.goal)))
+        return _push(state, TimelineEntry("user", sanitize_plain(event.goal)))
 
     if isinstance(event, ChildStarted):
         return _push(
             state,
-            TimelineEntry("system", f"{event.role} investigating: {sanitize(event.task, 200)}"),
+            TimelineEntry(
+                "system", f"{event.role} investigating: {sanitize_plain(event.task, 200)}"
+            ),
         )
     if isinstance(event, ChildFinished):
         return _push(
@@ -338,7 +381,7 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
                 state,
                 chat_text=(state.chat_text + f"\n● {text}\n" if state.chat_text else f"● {text}\n"),
             )
-            state = _push(state, TimelineEntry("agent", sanitize(event.text, 300)))
+            state = _push(state, TimelineEntry("agent", sanitize_plain(event.text, 300)))
         return state
 
     if isinstance(event, HandoffUpdated):
@@ -350,7 +393,10 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
         state = replace(state, tool_calls=state.tool_calls + 1, status="tool")
         return _push(
             state,
-            TimelineEntry("tool", f"{event.tool_name} {sanitize(event.args_summary, 160)}"),
+            TimelineEntry(
+                "tool",
+                f"{sanitize_plain(event.tool_name, 120)} {sanitize_plain(event.args_summary, 160)}",
+            ),
         )
 
     if isinstance(event, PolicyDecided):
@@ -367,7 +413,7 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
 
     if isinstance(event, ApprovalRequested):
         state = replace(state, status="waiting_approval")
-        return _push(state, TimelineEntry("approval", sanitize(event.summary, 200)))
+        return _push(state, TimelineEntry("approval", sanitize_plain(event.summary, 200)))
 
     if isinstance(event, ApprovalDecided):
         return _push(state, TimelineEntry("approval", f"decision: {event.decision}"))
@@ -381,7 +427,7 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
             ),
             trace_rows=(
                 *state.trace_rows,
-                f"tool {event.tool_name} -> {outcome} ({event.duration_ms}ms)",
+                f"tool {sanitize(event.tool_name, 120)} -> {outcome} ({event.duration_ms}ms)",
             ),
         )
         return _push(
@@ -443,12 +489,13 @@ def reduce(state: PresenterState, envelope: EventEnvelope) -> PresenterState:
 
     if isinstance(event, Notice):
         return _push(
-            state, TimelineEntry("notice", f"[{event.level}] {sanitize(event.message, 300)}")
+            state, TimelineEntry("notice", f"[{event.level}] {sanitize_plain(event.message, 300)}")
         )
 
     if isinstance(event, SteerQueued):
         return _push(
-            state, TimelineEntry("user", f"queued steering input: {sanitize(event.text, 160)}")
+            state,
+            TimelineEntry("user", f"queued steering input: {sanitize_plain(event.text, 160)}"),
         )
 
     if isinstance(event, RunFinished):
