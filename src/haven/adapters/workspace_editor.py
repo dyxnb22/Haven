@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import tempfile
 from pathlib import Path
@@ -28,7 +29,7 @@ from haven.adapters.workspace_patch import (
     validate_create_path,
 )
 from haven.domain.digest import sha256_bytes, sha256_text
-from haven.domain.syntax_gate import format_syntax_error, validate_syntax
+from haven.domain.syntax_gate import SyntaxDiagnostic, format_syntax_error, validate_syntax
 from haven.ports.workspace import (
     EditOutcome,
     EditPreview,
@@ -74,15 +75,15 @@ class WorkspaceEditor:
     ) -> EditPreview:
         """读取文件并计算单次文本替换的预览，不写入磁盘。"""
         target, normalized = self._require_inside(path)
-        text, preimage = self._load_editable(target, normalized)
+        text, preimage = await self._load_editable(target, normalized)
         new_text = self._apply_replacement(
             text, old, new, normalized, occurrence=occurrence, replace_all=replace_all
         )
         if not skip_syntax_check:
-            syntax_diag = validate_syntax(normalized, new_text)
+            syntax_diag = await self._check_syntax(normalized, new_text)
             if not syntax_diag.is_valid:
                 raise WorkspaceError("syntax_error", format_syntax_error(syntax_diag))
-        return self._diff_preview(normalized, text, new_text, preimage)
+        return await self._diff_preview(normalized, text, new_text, preimage)
 
     async def apply_edit(
         self,
@@ -97,7 +98,7 @@ class WorkspaceEditor:
     ) -> EditOutcome:
         """重新校验前像后原子写入编辑结果，防止 TOCTOU 覆盖并发修改。"""
         target, normalized = self._require_inside(path)
-        text, preimage = self._load_editable(target, normalized)
+        text, preimage = await self._load_editable(target, normalized)
         if preimage != expected_preimage:
             raise WorkspaceError(
                 "stale_preimage",
@@ -107,7 +108,7 @@ class WorkspaceEditor:
             text, old, new, normalized, occurrence=occurrence, replace_all=replace_all
         )
         if not skip_syntax_check:
-            syntax_diag = validate_syntax(normalized, new_text)
+            syntax_diag = await self._check_syntax(normalized, new_text)
             if not syntax_diag.is_valid:
                 raise WorkspaceError("syntax_error", format_syntax_error(syntax_diag))
 
@@ -115,7 +116,7 @@ class WorkspaceEditor:
         # 因此运行前内容必然拿得到——只有进程写入才可能留下 uncaptured。
         self._run_diff.remember(normalized, OriginalContent.captured(text))
 
-        postimage = self._atomic_write(target, normalized, new_text)
+        postimage = await self._atomic_write(target, normalized, new_text)
         return EditOutcome(path=normalized, preimage_digest=preimage, postimage_digest=postimage)
 
     # -- 创建 ------------------------------------------------------------------
@@ -126,10 +127,10 @@ class WorkspaceEditor:
         """校验新路径和大小限制，并生成创建差异预览。"""
         normalized = self._require_creatable(path, content)
         if not skip_syntax_check:
-            syntax_diag = validate_syntax(normalized, content)
+            syntax_diag = await self._check_syntax(normalized, content)
             if not syntax_diag.is_valid:
                 raise WorkspaceError("syntax_error", format_syntax_error(syntax_diag))
-        return self._diff_preview(normalized, None, content, preimage="")
+        return await self._diff_preview(normalized, None, content, preimage="")
 
     async def apply_create(
         self, path: str, content: str, *, skip_syntax_check: bool = False
@@ -137,14 +138,14 @@ class WorkspaceEditor:
         """原子创建新文件；已有目标或受保护路径会失败。"""
         normalized = self._require_creatable(path, content)
         if not skip_syntax_check:
-            syntax_diag = validate_syntax(normalized, content)
+            syntax_diag = await self._check_syntax(normalized, content)
             if not syntax_diag.is_valid:
                 raise WorkspaceError("syntax_error", format_syntax_error(syntax_diag))
         target = self._root / normalized
         target.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            postimage = self._atomic_create(target, normalized, content)
+            postimage = await self._atomic_create(target, normalized, content)
         except EffectUnknownError:
             # 发布已经发生但后像无法确认；仍要把可能落盘的文件纳入运行差异。
             self._run_diff.remember(normalized, OriginalContent.missing())
@@ -157,20 +158,20 @@ class WorkspaceEditor:
     async def preview_delete(self, path: str) -> EditPreview:
         """读取并固定待删除文件的前像，返回从内容到空文件的差异。"""
         target, normalized = self._require_inside(path)
-        text, preimage = self._load_editable(target, normalized)
+        text, preimage = await self._load_editable(target, normalized)
         # 删除就是从文件内容到空内容的 diff。
-        return self._diff_preview(normalized, text, None, preimage=preimage)
+        return await self._diff_preview(normalized, text, None, preimage=preimage)
 
     async def apply_delete(self, path: str, expected_preimage: str) -> EditOutcome:
         """校验前像后删除文件，并将删除纳入运行级差异基线。"""
         target, normalized = self._require_inside(path)
-        text, preimage = self._load_editable(target, normalized)
+        text, preimage = await self._load_editable(target, normalized)
         if preimage != expected_preimage:
             raise WorkspaceError(
                 "stale_preimage", f"file changed since it was approved: {normalized!r}"
             )
         self._run_diff.remember(normalized, OriginalContent.captured(text))
-        target.unlink()
+        await self._unlink(target)
         # 空 postimage 表示删除，与 ledger 使用相同约定。
         return EditOutcome(path=normalized, preimage_digest=preimage, postimage_digest="")
 
@@ -179,10 +180,10 @@ class WorkspaceEditor:
     async def preview_move(self, src: str, dest: str) -> tuple[EditPreview, EditPreview]:
         """同时生成源文件删除和目标文件创建两个预览。"""
         src_target, src_norm = self._require_inside(src)
-        text, preimage = self._load_editable(src_target, src_norm)
+        text, preimage = await self._load_editable(src_target, src_norm)
         dest_norm = self._require_creatable(dest, text)
-        removal = self._diff_preview(src_norm, text, None, preimage=preimage)
-        addition = self._diff_preview(dest_norm, None, text, preimage="")
+        removal = await self._diff_preview(src_norm, text, None, preimage=preimage)
+        addition = await self._diff_preview(dest_norm, None, text, preimage="")
         return removal, addition
 
     async def apply_move(
@@ -190,7 +191,7 @@ class WorkspaceEditor:
     ) -> tuple[EditOutcome, EditOutcome]:
         """校验源前像后写入目标并删除源文件，不覆盖已有目标。"""
         src_target, src_norm = self._require_inside(src)
-        text, preimage = self._load_editable(src_target, src_norm)
+        text, preimage = await self._load_editable(src_target, src_norm)
         if preimage != expected_preimage:
             raise WorkspaceError(
                 "stale_preimage", f"file changed since it was approved: {src_norm!r}"
@@ -199,14 +200,14 @@ class WorkspaceEditor:
         dest_target = self._root / dest_norm
         dest_target.parent.mkdir(parents=True, exist_ok=True)
         try:
-            postimage = self._atomic_create(dest_target, dest_norm, text)
+            postimage = await self._atomic_create(dest_target, dest_norm, text)
         except EffectUnknownError:
             self._run_diff.remember(src_norm, OriginalContent.captured(text))
             self._run_diff.remember(dest_norm, OriginalContent.missing())
             raise
         self._run_diff.remember(src_norm, OriginalContent.captured(text))
         self._run_diff.remember(dest_norm, OriginalContent.missing())
-        src_target.unlink()
+        await self._unlink(src_target)
         removal = EditOutcome(path=src_norm, preimage_digest=preimage, postimage_digest="")
         addition = EditOutcome(path=dest_norm, preimage_digest="", postimage_digest=postimage)
         return removal, addition
@@ -248,14 +249,21 @@ class WorkspaceEditor:
 
     # -- 共享写入基础设施 -------------------------------------------------------
 
-    def _atomic_write(
+    async def _atomic_write(
         self, target: Path, normalized: str, new_text: str, *, mode: int | None = None
     ) -> str:
-        """通过临时文件 + fsync + rename 写入，然后重新读取以确认结果。"""
-        return atomic_write(target, normalized, new_text, mode=mode)
+        """通过临时文件 + fsync + rename 写入，然后重新读取以确认结果。
 
-    def _atomic_create(self, target: Path, normalized: str, new_text: str) -> str:
-        """用硬链接原子发布新文件，保证审批后出现的目标永远不会被覆盖。"""
+        卸载到线程：fsync 加两次整文件读取在忙磁盘上要上百毫秒，而这是在事件循环里
+        跑的——TUI 会为此卡住，stderr 排空和后台任务输出收集也会一起停。
+        """
+        return await asyncio.to_thread(atomic_write, target, normalized, new_text, mode=mode)
+
+    async def _atomic_create(self, target: Path, normalized: str, new_text: str) -> str:
+        """用硬链接原子发布新文件，保证审批后出现的目标永远不会被覆盖。
+
+        同样卸载到线程，理由见 `_atomic_write`。
+        """
         fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=".haven-create-")
         try:
             os.fchmod(fd, 0o644)
@@ -278,16 +286,30 @@ class WorkspaceEditor:
         return postimage
 
     @staticmethod
-    def _diff_preview(
+    async def _check_syntax(path: str, content: str) -> SyntaxDiagnostic:
+        """AST/结构化语法预检。
+
+        卸载到线程：对 240 KB（MAX_EDIT_FILE_BYTES）的文件实测要 115 ms，这是在事件
+        循环里跑的——TUI 会为此卡住，stderr 排空和后台任务输出收集也会一起停。
+        """
+        return await asyncio.to_thread(validate_syntax, path, content)
+
+    @staticmethod
+    async def _diff_preview(
         normalized: str,
         before: str | None,
         after: str | None,
         preimage: str,
     ) -> EditPreview:
-        return diff_preview(normalized, before, after, preimage)
+        """计算编辑差异预览；同为纯计算，理由见 `_check_syntax`。"""
+        return await asyncio.to_thread(diff_preview, normalized, before, after, preimage)
 
-    def _load_editable(self, target: Path, normalized: str) -> tuple[str, str]:
-        return load_editable(target, normalized)
+    async def _load_editable(self, target: Path, normalized: str) -> tuple[str, str]:
+        return await asyncio.to_thread(load_editable, target, normalized)
+
+    @staticmethod
+    async def _unlink(target: Path) -> None:
+        await asyncio.to_thread(target.unlink)
 
     @staticmethod
     def _apply_replacement(

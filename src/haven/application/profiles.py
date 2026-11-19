@@ -173,16 +173,19 @@ def profile_for(model_name: str) -> ModelProfile:
         fast_p = profile_for(fast_name)
         deep_p = profile_for(deep_name)
         pricing = deep_p.pricing if deep_p.pricing.is_known else fast_p.pricing
-        max_context = max(fast_p.max_context_chars, deep_p.max_context_chars)
-        return ModelProfile(
+        # 用 `replace(deep_p, …)` 而不是手写一个 ModelProfile：手写会把此后新增的
+        # 每一个字段静默丢成默认值。这里此前就漏了 reasoning_supported、
+        # output_limit_tokens、documentation_status 和 use_max_completion_tokens 四个
+        # （当前注册的 profile 恰好都没设它们，所以是潜伏缺陷）——其中
+        # `use_max_completion_tokens` 直接决定请求里用 max_tokens 还是
+        # max_completion_tokens，丢了就是每轮一个 400。
+        return replace(
+            deep_p,
             name=model_name,
-            max_context_chars=max_context,
             pricing=pricing,
-            reasoning_effort=deep_p.reasoning_effort,
-            requires_tool_call_reasoning=deep_p.requires_tool_call_reasoning,
+            # 双轨的字符预算必须装得下任一侧的请求，所以取更宽的那个。
+            max_context_chars=max(fast_p.max_context_chars, deep_p.max_context_chars),
             context_window_tokens=max(fast_p.context_window_tokens, deep_p.context_window_tokens),
-            supports_assistant_prefix=deep_p.supports_assistant_prefix,
-            prefix_beta_base_url=deep_p.prefix_beta_base_url,
             stream_idle_timeout_s=max(fast_p.stream_idle_timeout_s, deep_p.stream_idle_timeout_s),
         )
 

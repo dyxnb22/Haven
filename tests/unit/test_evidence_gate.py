@@ -134,4 +134,7 @@ def test_strip_thinking_tags() -> None:
     assert strip_thinking_tags(raw2) == "Summary:\n- done"
 
     only_thought = "<thinking>only thinking</thinking>"
-    assert strip_thinking_tags(only_thought) == only_thought
+    # 整段都是思维链时必须返回空串，而不是把思考过程当答案交出去——
+    # 那正好是这个函数要防止的事。此前的实现是 `cleaned if cleaned else text`，
+    # 于是这一格会把原始思考原样返回。
+    assert strip_thinking_tags(only_thought) == ""

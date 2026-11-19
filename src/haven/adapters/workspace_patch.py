@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import difflib
 import os
 import tempfile
@@ -402,7 +403,9 @@ class WorkspacePatchEngine:
                 continue  # 净空操作（例如先创建后删除）
             if before_text is not None:
                 preimages[normalized] = before_digest
-            preview = diff_preview(normalized, before_text, after_text, before_digest)
+            preview = await asyncio.to_thread(
+                diff_preview, normalized, before_text, after_text, before_digest
+            )
             diffs.append(preview.diff)
             insertions += preview.insertions
             deletions += preview.deletions
@@ -427,7 +430,7 @@ class WorkspacePatchEngine:
         }
         if not skip_syntax_check:
             for path, text in final_contents.items():
-                syntax_diag = validate_syntax(path, text)
+                syntax_diag = await asyncio.to_thread(validate_syntax, path, text)
                 if not syntax_diag.is_valid:
                     msg = format_syntax_error(syntax_diag)
                     raise WorkspaceError(
@@ -470,7 +473,7 @@ class WorkspacePatchEngine:
 
         if not skip_syntax_check:
             for path, text in plan.final_contents.items():
-                syntax_diag = validate_syntax(path, text)
+                syntax_diag = await asyncio.to_thread(validate_syntax, path, text)
                 if not syntax_diag.is_valid:
                     msg = format_syntax_error(syntax_diag)
                     raise WorkspaceError(

@@ -57,6 +57,33 @@ from haven.ports.model import ProviderError
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 
+async def _bounded_lines(response: httpx.Response, limit: int) -> AsyncIterator[str]:
+    """按行产出 SSE 内容，边收边计量，因此峰值内存是有界的。
+
+    不能用 `response.aiter_lines()`：它会把一整行**完整拼出来**才返回。于是一个没有
+    换行的巨行会在我们看见它之前就把内存吃满，`MAX_RESPONSE_BYTES` 那道闸也就白设了
+    ——它是用来约束不可信服务端输出的。这里按原始块累计，一旦越线立刻抛错。
+
+    行终止符按 SSE 规范的三种都认（CRLF、LF、CR），与 `aiter_lines()` 一致。
+    """
+    received = 0
+    buffer = b""
+    # `aiter_bytes` 而不是 `aiter_raw`：后者在"内容已在内存里"的响应上直接抛
+    # StreamConsumed（`is_stream_consumed` 一开始就是 True），而前者两种形态都认。
+    async for chunk in response.aiter_bytes():
+        received += len(chunk)
+        if received > limit:
+            raise ProviderError("protocol", "response exceeded size limit")
+        buffer += chunk.replace(b"\r\n", b"\n")
+        *complete, buffer = buffer.split(b"\n")
+        for raw in complete:
+            # 上面只处理了 CRLF 与 LF；裸 CR 也是合法的行终止符。
+            for piece in raw.split(b"\r"):
+                yield piece.decode("utf-8", errors="replace")
+    if buffer:
+        yield buffer.decode("utf-8", errors="replace")
+
+
 async def _read_bounded_body(response: httpx.Response, limit: int) -> bytes:
     """读取有界错误体，避免提供商用非 200 响应迫使客户端无界分配内存。"""
     body = bytearray()
@@ -111,10 +138,19 @@ class OpenAICompatibleModel:
         self._requires_tool_call_reasoning = requires_tool_call_reasoning
         self._use_max_completion_tokens = use_max_completion_tokens
         self._default_reasoning_effort = default_reasoning_effort
+        # httpx 自己的 read 超时必须**大于**外层 wait_for 用的那两个超时，否则它会在
+        # 30 秒时先炸，而精心设计的 provider_idle_timeout / provider_ttft_timeout 永远
+        # 没机会触发——实测：真实 TCP 上服务端沉默 45 秒，httpx 在 30.0s 抛
+        # ReadTimeout，且被映射成笼统的 "network timeout"，与网络抖动无从区分。
+        # 加一段余量，保证先触发的始终是外层那个：只有它能给出准确的错误码。
+        # 连接/池超时与写入不受影响；真正卡住的情况由外层 wait_for 和墙上时钟预算兜住。
+        read_timeout = max(30.0, idle_timeout, first_event_timeout) + 30.0
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             headers={"Authorization": f"Bearer {api_key}"},
-            timeout=httpx.Timeout(connect=connect_timeout, read=30.0, write=30.0, pool=10.0),
+            timeout=httpx.Timeout(
+                connect=connect_timeout, read=read_timeout, write=30.0, pool=10.0
+            ),
             transport=transport,
         )
 
@@ -182,7 +218,7 @@ class OpenAICompatibleModel:
                 received_bytes = 0
                 first = True
 
-                lines = response.aiter_lines().__aiter__()
+                lines = _bounded_lines(response, MAX_RESPONSE_BYTES)
                 while True:
                     # 第一次读取限制首 token 延迟；之后每次读取都限制空闲间隔，并在数据
                     # 到达时重置，因此持续时间很长但稳定的生成不会被提前截断。
@@ -198,7 +234,7 @@ class OpenAICompatibleModel:
                         ) from None
                     first = False
 
-                    # aiter_lines 已移除换行符；按 UTF-8 字节而非 Python 字符计数，
+                    # `_bounded_lines` 已移除换行符；按 UTF-8 字节而非 Python 字符计数，
                     # 并保守计入行分隔符，使非 ASCII 响应不能绕过线协议上限。
                     received_bytes += len(line.encode("utf-8")) + 2
                     if received_bytes > MAX_RESPONSE_BYTES:

@@ -26,9 +26,14 @@ _THOUGHT_PATTERN = re.compile(
 
 
 def strip_thinking_tags(text: str) -> str:
-    """过滤模型文本中非标准的思维链内联标签，避免思考过程污染最终答案。"""
-    cleaned = _THOUGHT_PATTERN.sub("", text).strip()
-    return cleaned if cleaned else text
+    """过滤模型文本中非标准的思维链内联标签，避免思考过程污染最终答案。
+
+    整段都是思维链时返回空串，**不是**原文。此前这里是 `return cleaned if cleaned else
+    text`，于是"只有思考"的情况会把原始思考过程当答案交出去——正好是这个函数要防止的
+    那件事。返回空串是安全的：调用方（`AnswerResolver`）本就有空回复路径，会计数、
+    发 Notice，并在超过 MAX_EMPTY_REPLIES 时收口。
+    """
+    return _THOUGHT_PATTERN.sub("", text).strip()
 
 
 FinishRun = Callable[[RunContext, RunStatus, StopReason, str, str], Awaitable[RunOutcome]]

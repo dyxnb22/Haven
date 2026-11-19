@@ -733,3 +733,295 @@ def test_tool_call_collector_handles_null_index() -> None:
     completed = collector.completed({"test_tool": "test_tool"})
     assert len(completed) == 1
     assert completed[0].call_id == "call-0"
+
+
+# -- 真实网络上的空闲超时 ------------------------------------------------------
+#
+# 下面这些用例必须用真实的 TCP 服务端，不能用 `httpx.MockTransport`：内存字节流
+# 根本不经过 httpcore 的网络读取层，也就不会触发 httpx 自己的 read 超时。这个 bug
+# 正是那样存活下来的——所有既有的流式超时测试用的都是 MockTransport。
+
+
+async def _serve_sse_with_a_gap(gap_seconds: float) -> tuple[asyncio.Server, int]:
+    """起一个真的 HTTP 服务端：发完头就沉默 `gap_seconds`，再发一行 SSE。"""
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            await reader.readuntil(b"\r\n\r\n")
+        except (asyncio.IncompleteReadError, ConnectionError):
+            return
+        writer.write(
+            b"HTTP/1.1 200 OK\r\n"
+            b"content-type: text/event-stream\r\n"
+            b"transfer-encoding: chunked\r\n\r\n"
+        )
+        await writer.drain()
+        await asyncio.sleep(gap_seconds)
+        for payload in (
+            b'data: {"choices":[{"delta":{"content":"late"}}]}\n\n',
+            b"data: [DONE]\n\n",
+        ):
+            writer.write(f"{len(payload):x}".encode() + b"\r\n" + payload + b"\r\n")
+        await writer.drain()
+        writer.write(b"0\r\n\r\n")
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    return server, server.sockets[0].getsockname()[1]
+
+
+async def test_a_gap_longer_than_httpxs_default_read_timeout_still_streams() -> None:
+    """空闲超过 httpx 默认 30 秒 read 超时的流必须能继续，而不是被网络层杀掉。
+
+    推理模型（DeepSeek `high`/`max`）可能连续数分钟不出一个事件；`stream_idle_timeout`
+    就是为这个准备的。此前 httpx 的 read 固定为 30.0，于是它先炸，idle 超时永远没机会
+    触发，错误还是笼统的 "network timeout"——重试也治不好，因为每次都一样。
+    """
+    gap = 2.0  # 比 30 秒短，但足以暴露"谁先触发"的顺序问题
+    server, port = await _serve_sse_with_a_gap(gap)
+    model = OpenAICompatibleModel(
+        base_url=f"http://127.0.0.1:{port}/v1",
+        api_key=API_KEY,
+        model="gpt-test",
+        # 故意把空闲超时设得比间隔长：这一轮本该成功
+        idle_timeout=gap * 4,
+        first_event_timeout=gap * 4,
+    )
+    try:
+        events = await collect(model)
+        text = "".join(e.text for e in events if isinstance(e, TextDelta))
+        assert text == "late"
+        assert isinstance(events[-1], StreamFinished)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_the_idle_timeout_is_what_fires_not_httpxs_read_timeout() -> None:
+    """真正卡住时，必须由外层空闲超时给出 `provider_idle_timeout` 这个准确错误码。
+
+    首事件要快到（于是走的是 idle 分支，不是 ttft 分支），之后才沉默。
+    """
+    stall = 2.0
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            await reader.readuntil(b"\r\n\r\n")
+        except (asyncio.IncompleteReadError, ConnectionError):
+            return
+        writer.write(
+            b"HTTP/1.1 200 OK\r\n"
+            b"content-type: text/event-stream\r\n"
+            b"transfer-encoding: chunked\r\n\r\n"
+        )
+        payload = b'data: {"choices":[{"delta":{"content":"first"}}]}\n\n'
+        writer.write(f"{len(payload):x}".encode() + b"\r\n" + payload + b"\r\n")
+        await writer.drain()
+        await asyncio.sleep(stall)
+        tail = b"data: [DONE]\n\n"
+        writer.write(f"{len(tail):x}".encode() + b"\r\n" + tail + b"\r\n0\r\n\r\n")
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    model = OpenAICompatibleModel(
+        base_url=f"http://127.0.0.1:{port}/v1",
+        api_key=API_KEY,
+        model="gpt-test",
+        idle_timeout=stall / 4,
+        first_event_timeout=stall * 4,
+    )
+    try:
+        with pytest.raises(ProviderError) as exc:
+            await collect(model)
+        assert exc.value.code == "timeout"
+        # 关键：错误必须点名是空闲超时，而不是被 httpx 抢先后的 "network timeout"
+        assert "idle" in str(exc.value)
+        assert "ttft" not in str(exc.value)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.parametrize(
+    ("idle_timeout", "first_event_timeout"),
+    [
+        (120.0, 30.0),
+        (300.0, 30.0),
+        (30.0, 30.0),
+        (600.0, 90.0),
+        (0.5, 0.5),
+    ],
+)
+@pytest.mark.asyncio
+async def test_the_clients_read_timeout_never_preempts_the_outer_ones(
+    idle_timeout: float, first_event_timeout: float
+) -> None:
+    """httpx 自己的 read 超时必须**大于**外层 wait_for 用的那两个。
+
+    否则它先炸，`provider_idle_timeout` / `provider_ttft_timeout` 永远没机会触发，
+    而被映射成的 "network timeout" 又与网络抖动无从区分（实测：真实 TCP 上沉默 45 秒，
+    read=30 在 30.0s 抛 ReadTimeout）。这是唯一能在不等待 30 秒的前提下钉住它的断言，
+    所以这里直接查配置值而不是等超时。
+    """
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=httpx.AsyncByteStream())
+
+    model = make_model(handler, idle_timeout=idle_timeout, first_event_timeout=first_event_timeout)
+    try:
+        read = model._client.timeout.read
+        assert read is not None
+        assert read > idle_timeout, f"read={read} 会在 idle={idle_timeout} 之前触发"
+        assert read > first_event_timeout, f"read={read} 会在 ttft={first_event_timeout} 之前触发"
+    finally:
+        await model.aclose()
+
+
+async def test_an_unbounded_single_line_is_rejected_without_buffering_it_all() -> None:
+    """一个没有换行的巨行必须在被完整拼出来之前就触发上限。
+
+    `response.aiter_lines()` 会把一整行完整拼出来才返回，于是这道闸设在看见它之后
+    就没有意义——峰值内存已经吃满了。这里用一个真的服务端持续灌字节但从不发换行，
+    断言它被 `protocol` 错误挡下，而不是把 4 MiB（或更多）都收进来。
+    """
+    from haven.adapters.providers.openai_compatible import MAX_RESPONSE_BYTES
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            await reader.readuntil(b"\r\n\r\n")
+        except (asyncio.IncompleteReadError, ConnectionError):
+            return
+        writer.write(
+            b"HTTP/1.1 200 OK\r\n"
+            b"content-type: text/event-stream\r\n"
+            b"transfer-encoding: chunked\r\n\r\n"
+        )
+        await writer.drain()
+        # 只发 data: 和一个超长的payload，始终不发换行
+        filler = b"x" * (MAX_RESPONSE_BYTES // 2)
+        try:
+            for _ in range(8):
+                writer.write(f"{len(filler):x}".encode() + b"\r\n" + filler + b"\r\n")
+                await writer.drain()
+            writer.write(b"0\r\n\r\n")
+            await writer.drain()
+        except (ConnectionError, BrokenPipeError):
+            pass
+        finally:
+            writer.close()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    model = OpenAICompatibleModel(
+        base_url=f"http://127.0.0.1:{port}/v1",
+        api_key=API_KEY,
+        model="gpt-test",
+        idle_timeout=5.0,
+        first_event_timeout=5.0,
+    )
+    try:
+        with pytest.raises(ProviderError) as exc:
+            await collect(model)
+        assert exc.value.code == "protocol"
+        assert "size limit" in str(exc.value)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_bounded_lines_raises_before_materializing_an_oversized_line() -> None:
+    """`_bounded_lines` 必须在拼出完整的一行之前就抛错。
+
+    `response.aiter_lines()` 会把一整行**完整拼出来**才返回，于是峰值内存是无界的，
+    总量上限也就形同虚设。这里直接喂一个永不加换行的字节流，断言它在交付任何一行
+    之前就报错——端到端测试观察不到这一点（两边的错误信息完全一样），只有这里能。
+    """
+    from haven.adapters.providers.openai_compatible import MAX_RESPONSE_BYTES, _bounded_lines
+
+    class EndlessLine:
+        """一个只说 `x`、永远不发换行的响应。
+
+        带一个 `aiter_lines`，行为与 httpx 一致（把整行拼出来才返回），这样若产品代码
+        退回用 `aiter_lines()`，失败会落在下面的断言上，而不是 AttributeError。
+        """
+
+        async def aiter_bytes(self) -> AsyncIterator[bytes]:
+            chunk = b"x" * (MAX_RESPONSE_BYTES // 4)
+            for _ in range(8):
+                yield chunk
+
+        async def aiter_lines(self) -> AsyncIterator[str]:
+            buffer = b""
+            async for chunk in self.aiter_bytes():
+                buffer += chunk
+                *complete, buffer = buffer.split(b"\n")
+                for raw in complete:
+                    yield raw.decode("utf-8", errors="replace")
+            if buffer:
+                yield buffer.decode("utf-8", errors="replace")
+
+    produced: list[str] = []
+    with pytest.raises(ProviderError) as exc:
+        async for line in _bounded_lines(EndlessLine(), MAX_RESPONSE_BYTES):  # type: ignore[arg-type]
+            produced.append(line)
+
+    assert exc.value.code == "protocol"
+    assert "size limit" in str(exc.value)
+    # 关键：抛错之前一行都没交付过。换成 aiter_lines() 时，它会把整行拼出来才返回，
+    # 于是这里会先拿到一个 4 MiB 的字符串。
+    assert produced == []
+
+
+async def test_oversize_bytes_are_rejected_immediately_not_after_the_line_ends() -> None:
+    """越界必须**立刻**报出来，而不是等这一行结束。
+
+    这是两种实现唯一可观察的差异：服务端发够越界字节后就此挂住，
+    `aiter_lines()` 会一直等那个永远不来的换行，最后走到空闲超时；按块计量的实现则在
+    越线那一刻就报 `protocol`。若这条测试变红，说明又回到了"先拼完整行再检查"。
+    """
+    from haven.adapters.providers.openai_compatible import MAX_RESPONSE_BYTES
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            await reader.readuntil(b"\r\n\r\n")
+        except (asyncio.IncompleteReadError, ConnectionError):
+            return
+        writer.write(
+            b"HTTP/1.1 200 OK\r\n"
+            b"content-type: text/event-stream\r\n"
+            b"transfer-encoding: chunked\r\n\r\n"
+        )
+        await writer.drain()
+        # 发够越界的字节，且始终不发换行，然后挂住
+        filler = b"x" * (MAX_RESPONSE_BYTES // 2)
+        try:
+            for _ in range(4):
+                writer.write(f"{len(filler):x}".encode() + b"\r\n" + filler + b"\r\n")
+                await writer.drain()
+            await asyncio.sleep(30)
+        except (ConnectionError, BrokenPipeError):
+            pass
+        finally:
+            writer.close()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    model = OpenAICompatibleModel(
+        base_url=f"http://127.0.0.1:{port}/v1",
+        api_key=API_KEY,
+        model="gpt-test",
+        # 空闲超时故意设得比 30 秒短：若实现退回 aiter_lines()，先触发的会是它
+        idle_timeout=5.0,
+        first_event_timeout=5.0,
+    )
+    try:
+        with pytest.raises(ProviderError) as exc:
+            await collect(model)
+        assert exc.value.code == "protocol", "必须是越界错误，不是超时"
+        assert "size limit" in str(exc.value)
+    finally:
+        server.close()
+        await server.wait_closed()

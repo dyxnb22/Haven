@@ -1,5 +1,7 @@
 """按模型定义默认值，以数据表达，而不是在核心层使用分支。"""
 
+import pytest
+
 from haven.application.profiles import (
     DEEPSEEK_V4_FLASH,
     DEFAULT_CONTEXT_CHARS,
@@ -105,3 +107,87 @@ class TestPrefixEndpointGuard:
             prefix_beta_base_url="https://api.deepseek.com/beta",
         )
         assert not p.prefix_continuation_enabled("https://api.deepseek.com/beta")
+
+
+class TestRoutedProfilesInheritEverything:
+    """双轨 profile 必须继承深度模型除显式覆盖外的全部字段。
+
+    此前这里手写一个 ModelProfile，于是此后新增的每个字段都会被静默丢成默认值——
+    已经漏了 reasoning_supported、output_limit_tokens、documentation_status 和
+    `use_max_completion_tokens` 四个。最后那个直接决定请求里用 max_tokens 还是
+    max_completion_tokens，丢了就是每轮一个 400。当前注册的 profile 恰好都没设它们，
+    所以这是潜伏缺陷；这里用临时注册的两个 profile 把它钉住。
+    """
+
+    @staticmethod
+    def _register(monkeypatch: pytest.MonkeyPatch) -> None:
+        import haven.application.profiles as profiles_module
+
+        monkeypatch.setitem(
+            profiles_module._PROFILES,
+            "fast-x",
+            profiles_module.ModelProfile(
+                name="fast-x",
+                max_context_chars=10_000,
+                stream_idle_timeout_s=30.0,
+                reasoning_supported=False,
+                output_limit_tokens=4_096,
+                documentation_status="fast doc",
+                use_max_completion_tokens=False,
+            ),
+        )
+        monkeypatch.setitem(
+            profiles_module._PROFILES,
+            "deep-x",
+            profiles_module.ModelProfile(
+                name="deep-x",
+                max_context_chars=90_000,
+                stream_idle_timeout_s=600.0,
+                reasoning_supported=True,
+                output_limit_tokens=128_000,
+                documentation_status="deep doc",
+                use_max_completion_tokens=True,
+                reasoning_effort="high",
+                requires_tool_call_reasoning=True,
+                supports_assistant_prefix=True,
+                prefix_beta_base_url="https://api.example.com/beta",
+            ),
+        )
+
+    def test_no_field_is_silently_dropped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._register(monkeypatch)
+        routed = profile_for("routed(fast-x+deep-x)")
+
+        # 深模型独有的能力字段必须继承过来，而不是回到 dataclass 默认值
+        assert routed.use_max_completion_tokens is True
+        assert routed.reasoning_supported is True
+        assert routed.output_limit_tokens == 128_000
+        assert routed.documentation_status == "deep doc"
+        assert routed.reasoning_effort == "high"
+        assert routed.requires_tool_call_reasoning is True
+        assert routed.supports_assistant_prefix is True
+        assert routed.prefix_beta_base_url == "https://api.example.com/beta"
+
+    def test_the_three_widest_limits_still_take_the_max(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._register(monkeypatch)
+        routed = profile_for("routed(fast-x+deep-x)")
+
+        # 双轨的字符预算必须装得下任一侧的请求
+        assert routed.max_context_chars == 90_000
+        assert routed.context_window_tokens == 0  # 两侧都是 0（未知）
+        assert routed.stream_idle_timeout_s == 600.0
+
+    def test_the_real_deepseek_pair_is_unchanged(self) -> None:
+        """修复不能改变现有行为：真实注册的那一对必须一个字段都不差。"""
+        routed = profile_for("routed(deepseek-chat+deepseek-v4-flash)")
+
+        assert routed.max_context_chars == DEEPSEEK_V4_FLASH.max_context_chars
+        assert routed.context_window_tokens == DEEPSEEK_V4_FLASH.context_window_tokens
+        assert routed.stream_idle_timeout_s == DEEPSEEK_V4_FLASH.stream_idle_timeout_s
+        assert routed.pricing == DEEPSEEK_V4_FLASH.pricing
+        assert routed.requires_tool_call_reasoning is True
+        assert routed.supports_assistant_prefix is True
+        assert routed.prefix_beta_base_url == DEEPSEEK_V4_FLASH.prefix_beta_base_url
+        assert routed.use_max_completion_tokens == DEEPSEEK_V4_FLASH.use_max_completion_tokens

@@ -19,6 +19,9 @@ MAX_DOCSTRING_CHARS = 120
 MAX_PREVIEW_CHARS = 160
 #: 符号搜索默认的最大返回结果条数。
 DEFAULT_MAX_SYMBOL_RESULTS = 50
+#: 符号搜索单个文件的大小上限。只按行查找，读整个大文件没有意义也没有上界；
+#: 与 `load_editable` 的 MAX_EDIT_FILE_BYTES 同量级。
+MAX_SCANNED_FILE_BYTES = 256 * 1024
 #: 扫描跳过的目录名称（控制面、虚拟环境、缓存与产物）。
 IGNORED_DIRS = frozenset(
     {
@@ -359,6 +362,7 @@ def find_symbol_occurrences(
 
     definitions: list[dict[str, Any]] = []
     references: list[dict[str, Any]] = []
+    skipped_files = 0
 
     search_root = workspace_root
     if target_path:
@@ -401,7 +405,14 @@ def find_symbol_occurrences(
             rel_path = file_path.relative_to(workspace_root).as_posix()
         except ValueError:
             continue
+        # 只按行查找，所以读整个文件没有意义，也没有上界：扫描路径上一个巨大的
+        # 数据文件会把进程撑爆（`load_editable` 早有 256 KiB 这道闸，这里漏了）。
+        # 超过上限的文件跳过，并计数——否则 `total_matches` 会悄悄少算，而调用方
+        # 无从知道还有文件没看。
         try:
+            if file_path.stat().st_size > MAX_SCANNED_FILE_BYTES:
+                skipped_files += 1
+                continue
             text = file_path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
@@ -440,4 +451,6 @@ def find_symbol_occurrences(
         "definitions": definitions[:max_results],
         "references": references[: max(0, max_results - len(definitions))],
         "truncated": truncated,
+        # 有文件因体积被跳过时必须说出来，否则"没找到"会被误读成"这里没有"
+        "files_skipped_too_large": skipped_files,
     }

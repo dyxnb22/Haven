@@ -241,3 +241,37 @@ def test_find_symbol_occurrences_multilanguage(tmp_path: Path) -> None:
     res_go = find_symbol_occurrences(tmp_path, "StartServer")
     assert res_go["total_definitions"] >= 1
     assert any(d["path"] == "src/server.go" for d in res_go["definitions"])
+
+
+def test_find_symbol_occurrences_skips_oversized_files_and_says_so(tmp_path: Path) -> None:
+    """超过大小上限的文件必须被跳过，而且要在结果里说出来。
+
+    只按行查找，读整个大文件既没有意义也没有上界：扫描路径上一个巨大的数据文件会把
+    进程撑爆（`load_editable` 早有 256 KiB 这道闸，这里漏了）。但跳过必须留下痕迹，
+    否则"没找到"会被误读成"这里没有"——`total_matches` 悄悄少算，调用方无从知道。
+    """
+    from haven.application.code_ast import MAX_SCANNED_FILE_BYTES
+
+    small = tmp_path / "small.py"
+    small.write_text("def compute_total(items):\n    return sum(items)\n", encoding="utf-8")
+    huge = tmp_path / "huge.py"
+    huge.write_text(
+        "# filler\n" * (MAX_SCANNED_FILE_BYTES // 9 + 10) + "def compute_total(x):\n    return x\n",
+        encoding="utf-8",
+    )
+    assert huge.stat().st_size > MAX_SCANNED_FILE_BYTES
+
+    result = find_symbol_occurrences(tmp_path, "compute_total")
+
+    # 跳过了，且如实报告
+    assert result["files_skipped_too_large"] == 1
+    # 小文件里的那个定义仍然找得到——上限不能把正常结果一起吃掉
+    assert result["total_definitions"] == 1
+    assert result["definitions"][0]["path"] == "small.py"
+
+
+def test_find_symbol_occurrences_reports_zero_skipped_when_all_fit(tmp_path: Path) -> None:
+    """没有文件被跳过时这个计数必须是 0，不能是缺键。"""
+    (tmp_path / "a.py").write_text("def helper():\n    pass\n", encoding="utf-8")
+    result = find_symbol_occurrences(tmp_path, "helper")
+    assert result["files_skipped_too_large"] == 0

@@ -1,5 +1,6 @@
 """文件系统工作区适配器的行为测试。"""
 
+import asyncio
 import io
 import threading
 import time
@@ -535,3 +536,66 @@ class TestSnapshotReusesProtectedDigests:
             if len(("x" + char + "y").splitlines()) > 1
         }
         assert actual == set(workspace_fs._LINE_BOUNDARY_CHARS)
+
+
+class TestMutationPathsDoNotBlockTheLoop:
+    """编辑路径的磁盘 I/O 必须经 `asyncio.to_thread`，而不是在事件循环里跑。
+
+    实测：240 KB 文件上一次 preview_edit 要 123 ms、apply_edit 要 210 ms，全在循环里。
+    同一进程里的 TUI 会为此卡住，stderr 排空与后台任务输出收集也一起停。
+    （纯 Python 的 AST 语法检查是另一回事——它受 GIL 限制，卸载到线程也解放不了
+    循环；这里钉住的是 I/O 那一类。）
+    """
+
+    @staticmethod
+    async def _recorded_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        import haven.adapters.workspace_editor as editor
+
+        real = asyncio.to_thread
+        seen: list[str] = []
+
+        async def spy(func: object, *args: object, **kwargs: object):
+            seen.append(getattr(func, "__name__", repr(func)))
+            return await real(func, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(editor.asyncio, "to_thread", spy)
+        return seen
+
+    async def test_preview_edit_offloads_its_io(
+        self, workspace: FsWorkspace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen = await self._recorded_calls(monkeypatch)
+        await workspace.preview_edit("src/calc.py", "return a - b", "return a + b", occurrence=1)
+
+        assert "load_editable" in seen, "读文件必须在线程里"
+        assert "validate_syntax" in seen, "语法预检也必须卸载"
+        assert "diff_preview" in seen, "差异计算同样"
+
+    async def test_apply_edit_offloads_its_write(
+        self, workspace: FsWorkspace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        preview = await workspace.preview_edit(
+            "src/calc.py", "return a - b", "return a + b", occurrence=1
+        )
+        seen = await self._recorded_calls(monkeypatch)
+
+        await workspace.apply_edit(
+            "src/calc.py",
+            "return a - b",
+            "return a + b",
+            preview.preimage_digest,
+            occurrence=1,
+        )
+
+        assert "atomic_write" in seen, "fsync + rename 必须在线程里"
+        assert "load_editable" in seen
+
+    async def test_apply_delete_offloads_its_unlink(
+        self, workspace: FsWorkspace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        preview = await workspace.preview_delete("src/calc.py")
+        seen = await self._recorded_calls(monkeypatch)
+
+        await workspace.apply_delete("src/calc.py", preview.preimage_digest)
+
+        assert "unlink" in seen, "删除也必须卸载"
