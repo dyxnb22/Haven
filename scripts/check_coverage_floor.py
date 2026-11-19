@@ -17,6 +17,7 @@ README.md 中的主要百分比是平均值，而平均值会掩盖最差成员�
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -82,22 +83,47 @@ def violations(coverage: Mapping[str, float]) -> list[tuple[str, float, int]]:
     return found
 
 
+def _coverage_data_file() -> Path:
+    """本次测量的覆盖率数据文件：默认 `.coverage`，或 `COVERAGE_FILE` 指定的路径。
+
+    `coverage run` 本身就用 `COVERAGE_FILE` 决定数据落点，而 `refresh_metrics.py`
+    的提示也正是这样建议的。若这里不读同一个变量，照提示把数据写到自定义路径后，
+    本门禁会报一句莫名其妙的 "no .coverage data"——提示变成无法执行的空话。
+    """
+    env_path = os.environ.get("COVERAGE_FILE")
+    return Path(env_path) if env_path else ROOT / ".coverage"
+
+
 def _measured() -> dict[str, float]:
-    """从现有 `.coverage` 数据文件读取逐文件行覆盖率。"""
-    if not (ROOT / ".coverage").is_file():
-        raise SystemExit("no .coverage data; run `uv run coverage run -m pytest` first")
+    """从覆盖率数据文件读取逐文件行覆盖率。"""
+    data = _coverage_data_file().resolve()
+    if not data.is_file():
+        raise SystemExit(
+            f"no coverage data at {data}; run `uv run coverage run -m pytest` first "
+            "(use COVERAGE_FILE for a custom data path)."
+        )
     with tempfile.TemporaryDirectory() as tmp:
         report = Path(tmp) / "coverage.json"
         subprocess.run(
-            [sys.executable, "-m", "coverage", "json", "-o", str(report), "--include=src/*"],
+            [
+                sys.executable,
+                "-m",
+                "coverage",
+                "json",
+                "--data-file",
+                str(data),
+                "-o",
+                str(report),
+                "--include=src/*",
+            ],
             cwd=ROOT,
             check=True,
             capture_output=True,
         )
-        data = json.loads(report.read_text(encoding="utf-8"))
+        payload = json.loads(report.read_text(encoding="utf-8"))
     return {
         path.replace("\\", "/"): float(entry["summary"]["percent_covered"])
-        for path, entry in data["files"].items()
+        for path, entry in payload["files"].items()
     }
 
 
