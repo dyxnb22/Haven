@@ -381,6 +381,9 @@ source. See `docs/adr/` for the decisions and trade-offs, and
 
 ## Known limitations
 
+Every limitation below is deliberate and pinned by a test; the full list, with the
+measurement and the pin for each, lives in [known gaps](docs/KNOWN_GAPS.md).
+
 - Model-proposed `repo.exec` requires Seatbelt (macOS) or Landlock (Linux), runs
   with the workspace read-only, cannot read `$HOME`, and cannot use the network
   (Landlock covers TCP; UDP/DNS remain a stated Linux gap). A registered
