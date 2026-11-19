@@ -244,8 +244,32 @@ def _verify_install(tmp: Path, old_python: Path, new_python: Path, cases: Path) 
     )
 
 
+def _require_baseline_tag() -> None:
+    """在动手之前确认基线标签可用，否则给一句能执行的话。
+
+    曾经这里直接 `git archive v0.1.0`，标签缺失时抛出一个 `CalledProcessError` 和
+    一整条 git 命令行——那正好是 CI 浅克隆会遇到的情况（`actions/checkout` 默认
+    `fetch-depth: 1`，不取标签），而报错完全没提"缺标签"这三个字。
+    """
+    probe = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{BASELINE}"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if probe.returncode != 0:
+        raise SystemExit(
+            f"the baseline tag {BASELINE!r} is not available in this checkout, so there is "
+            "no old wheel to migrate from. Fetch it first:\n"
+            f"  git fetch --tags origin {BASELINE}\n"
+            "(a shallow clone without tags cannot run this check; CI needs "
+            "`fetch-tags: true` or `fetch-depth: 0`.)"
+        )
+
+
 def _smoke(tmp: Path, python_version: str) -> None:
     baseline, candidate = tmp / "baseline", tmp / "candidate"
+    _require_baseline_tag()
     baseline.mkdir()
     archive = tmp / "baseline.tar"
     _run("git", "archive", "--format=tar", "-o", archive, BASELINE, *BUILD_FILES, "src", cwd=ROOT)
