@@ -75,10 +75,10 @@ class ApprovalCoordinator:
         # 同样的调用就不再命中同一个授权（ADR 0032）。
         grant_key = standing_grant_key(digest, ctx.granted_tools)
         # 两条互不相干的免审来源：技能请求的授权（选中即生效），以及 ADR 0025 的
-        # 既有机制（人类批准过的字节级相同调用）。命中技能的调用不会弹卡，但它
-        # 的摘要仍会写进 journal，因此说明要在渲染之后补上。
+        # 既有机制（人类批准过的字节级相同调用）。命中任一条就不弹卡，说明由下面
+        # 的 Notice 承担——那条路径上没有卡片可改，所以这里不再往 summary 上追加
+        # 任何东西（曾经追加过，而 summary 只在弹卡的那条路径上被消费，等于白算）。
         requester = ctx.granted_tools.get(call.tool_name) or ctx.standing_grants.get(grant_key)
-        summary = _with_grant_hint(summary, requester)
         if requester is not None:
             ctx.standing_grants[grant_key] = requester
             approval_id = new_approval_id()
@@ -210,29 +210,16 @@ CHECK_POLICY_GRANTOR = "the identical-check policy"
 def _arming_requester(ctx: RunContext, tool_name: str) -> str | None:
     """一次人类批准是否应成为常驻授权，以及是哪个技能请求的。
 
-    只在两个地方返回非 None：`repo.check`（ADR 0025 的既有行为，与技能无关），
-    以及被选中技能显式列出 `allowed-tools` 的工具（ADR 0032）。返回 None 表示
-    这次批准只覆盖它自己——这是"技能文本无法自行扩大权限"在代码里的落点。
+    只在 `repo.check` 上返回非 None（ADR 0025 的既有行为，与技能无关）。返回 None
+    表示这次批准只覆盖它自己——这是"技能文本无法自行扩大权限"在代码里的落点。
+
+    这里**没有**"被选中技能列出了该工具"的分支，因为那种调用根本到不了有人类批准
+    的路径：`ask()` 一开头就因为它命中授权而直接返回，不弹卡。留着那个分支会让
+    读者以为"人类批准一个技能授权的工具就会武装常驻授权"——永远不会发生。
     """
-    if tool_name in ctx.granted_tools:
-        return ctx.granted_tools[tool_name]
     if tool_name == "repo.check":
         return CHECK_POLICY_GRANTOR
     return None
-
-
-def _grant_hint(requester: str | None) -> str:
-    """审批卡上关于常驻授权的说明；没有技能请求该工具时为空。"""
-    if requester is None or requester == CHECK_POLICY_GRANTOR:
-        # ADR 0025 的 `repo.check` 卡片自己已经说明了这一点，不必重复。
-        return ""
-    return f"standing grant requested by skill {requester!r}"
-
-
-def _with_grant_hint(summary: str, requester: str | None) -> str:
-    """把授权说明追加到审批摘要上；没有摘要或没有技能请求时原样返回。"""
-    hint = _grant_hint(requester)
-    return f"{summary} ({hint})" if hint and summary else summary
 
 
 def _grant_detail(requester: str) -> str:

@@ -151,3 +151,44 @@ class TestFilesScannedHonesty:
         assert truncated.truncated
         assert truncated.files_scanned is not None
         assert truncated.files_scanned >= 1
+
+
+class TestBackendParityOnCoverage:
+    """`files_scanned` 与 `truncated` 也必须在两端之间保持一致——至少在不该分歧的地方。
+
+    这两个字段此前从未被比对过。`files_scanned` 一度恒等于"有匹配的文件数"（ripgrep
+    的 `--stats` 写在 stdout 而代码只读 stderr），修正后它在两种情形下分工不同：
+    搜索跑完时两端给出同一个数；搜索被提前掐断时 ripgrep 返回 None（它确实不知道），
+    纯 Python 回退仍然报出自己数到的真实值。这个分工必须被钉住，否则下一轮改动会
+    悄悄把其中一端改回谎报。
+    """
+
+    @requires_rg
+    async def test_a_complete_search_reports_the_same_coverage(self, repo: Path) -> None:
+        with_rg = await FsWorkspace(repo, use_ripgrep=True).search("BUG", ".", 50)
+        without_rg = await FsWorkspace(repo, use_ripgrep=False).search("BUG", ".", 50)
+        assert not with_rg.truncated and not without_rg.truncated
+        assert with_rg.files_scanned == without_rg.files_scanned
+        # 覆盖数必须大于"有匹配的文件数"：包含没有匹配的文件才是这个字段的含义。
+        assert with_rg.files_scanned > len({m.path for m in with_rg.matches})
+
+    @requires_rg
+    async def test_a_truncated_search_does_not_fabricate_a_coverage(self, repo: Path) -> None:
+        """ripgrep 被提前掐断时报 None；纯 Python 回退报出真实检视数。
+
+        两者不同是正当的：ripgrep 没机会打印 `--stats`，它确实不知道；回退实现自己
+        在数，所以知道。共同点是都不谎报。
+        """
+        with_rg = await FsWorkspace(repo, use_ripgrep=True).search("BUG", ".", 1)
+        without_rg = await FsWorkspace(repo, use_ripgrep=False).search("BUG", ".", 1)
+        assert with_rg.truncated and without_rg.truncated
+        assert len(with_rg.matches) == len(without_rg.matches) == 1
+        assert with_rg.files_scanned is None, "被掐断的 ripgrep 搜索必须承认不知道"
+        assert without_rg.files_scanned is not None
+        assert without_rg.files_scanned >= 1
+
+    @requires_rg
+    async def test_both_backends_flag_truncation_identically(self, repo: Path) -> None:
+        with_rg = await FsWorkspace(repo, use_ripgrep=True).search("BUG", ".", 1)
+        without_rg = await FsWorkspace(repo, use_ripgrep=False).search("BUG", ".", 1)
+        assert with_rg.truncated == without_rg.truncated

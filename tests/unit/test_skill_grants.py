@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from haven.application.skills import Skill, SkillCatalog, SkillError, parse_skill
-from haven.domain.enums import PermissionMode
+from haven.domain.enums import PermissionMode, RunStatus
 from haven.domain.policy import EFFECT_TOOLS, KNOWN_TOOLS, ToolFacts, evaluate_policy
 from tests.integration.harness import Harness, finish, make_repo, text, tool
 
@@ -216,3 +216,115 @@ class TestTheHostileSkillInARun:
         decided = harness.sink.events_of("approval.decided")
         assert decided
         assert all(event.decision == "approved" for event in decided)
+
+
+class TestAGrantedCallNeverReachesTheHumanApprovalPath:
+    """命中授权的调用在 `ask()` 开头就返回，因此有人类参与的那条路径看不到它。
+
+    这条不变量有两个后果，都值得钉住，否则下一轮"改进"会把死代码加回来：
+
+    1. 授权命中的调用不弹卡，所以往审批摘要上追加"本技能请求了常驻授权"没有任何
+       消费者——曾经有这么一段，摘要算了、改了、然后被丢掉；
+    2. 一次人类批准不可能为一个"被技能列出"的工具武装常驻授权，因为那种调用压根
+       不向人类提问。`repo.check` 是唯一的例外，而它来自 ADR 0025，与技能无关。
+    """
+
+    @staticmethod
+    def _granting(tool_name: str) -> SkillCatalog:
+        return SkillCatalog(
+            (
+                Skill(
+                    name="helper",
+                    description="d",
+                    scope="project",
+                    source=".haven/skills/helper/SKILL.md",
+                    digest="deadbeefcafe",
+                    body="b",
+                    granted_tools=(tool_name,),
+                ),
+            )
+        )
+
+    @pytest.mark.parametrize("tool_name", ["repo.edit", "repo.apply_patch", "repo.check"])
+    async def test_a_granted_tool_never_asks(self, tmp_path: Path, tool_name: str) -> None:
+        turns = [
+            [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
+            [
+                tool(
+                    "c2",
+                    tool_name,
+                    path="src/calc.py",
+                    old_string="return a - b  # BUG: should be +",
+                    new_string="return a + b",
+                ),
+                finish("tool_calls"),
+            ],
+            [text("done"), finish()],
+        ]
+        if tool_name == "repo.check":
+            turns[1] = [tool("c2", "repo.check", recipe_id="verify-calc"), finish("tool_calls")]
+            turns.append([tool("c3", "repo.diff"), finish("tool_calls")])
+        h = Harness(make_repo(tmp_path), turns, skills=self._granting(tool_name))
+        await h.service.run("goal", skill_names=["helper"])
+        assert h.sink.events_of("approval.requested") == [], f"{tool_name} 被技能授权，却仍然弹了卡"
+
+    async def test_a_human_approval_cannot_arm_a_grant_for_a_skill_named_tool(
+        self, tmp_path: Path
+    ) -> None:
+        """没有技能选中时，人类批准 `repo.edit` 只覆盖它自己。"""
+        h = Harness(
+            make_repo(tmp_path),
+            [
+                [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
+                [
+                    tool(
+                        "c2",
+                        "repo.edit",
+                        path="src/calc.py",
+                        old_string="return a - b  # BUG: should be +",
+                        new_string="return a + b",
+                    ),
+                    finish("tool_calls"),
+                ],
+                # 第二次同样的编辑：若上一次批准武装了常驻授权，这次就不会再弹卡。
+                [
+                    tool(
+                        "c3",
+                        "repo.edit",
+                        path="src/calc.py",
+                        old_string="return a + b",
+                        new_string="return a + b  # again",
+                    ),
+                    finish("tool_calls"),
+                ],
+                [text("done"), finish()],
+            ],
+        )
+        await h.service.run("goal")
+        assert len(h.sink.events_of("approval.requested")) == 2, (
+            "人类批准 repo.edit 不该武装常驻授权"
+        )
+
+    async def test_an_identical_check_does_not_ask_twice(self, tmp_path: Path) -> None:
+        """ADR 0025：人类批准过的字节级相同 `repo.check` 在本次运行内不再询问。
+
+        这条不变量此前没有任何测试覆盖——把 `_arming_requester` 的 `repo.check`
+        分支删掉，整套测试依然全绿，而行为已经变了。
+        """
+        h = Harness(
+            make_repo(tmp_path),
+            [
+                [tool("c1", "repo.read", path="src/calc.py"), finish("tool_calls")],
+                [tool("c2", "repo.check", recipe_id="verify-calc"), finish("tool_calls")],
+                [tool("c3", "repo.check", recipe_id="verify-calc"), finish("tool_calls")],
+                [tool("c4", "repo.diff"), finish("tool_calls")],
+                [text("done"), finish()],
+            ],
+        )
+        outcome = await h.service.run("goal")
+        assert outcome.status is RunStatus.SUCCEEDED
+        assert len(h.sink.events_of("approval.requested")) == 1, (
+            "第二次相同的 repo.check 不该再弹卡"
+        )
+        notices = [e.message for e in h.sink.events_of("notice")]
+        assert any("standing approval" in n and "repo.check" in n for n in notices), notices
