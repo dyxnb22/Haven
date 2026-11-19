@@ -468,3 +468,46 @@ async def test_a_recently_finished_task_is_still_queryable(tmp_path: Path) -> No
         assert manager.logs("task_1")["stdout"] == ["done"]
     finally:
         await manager.close_all()
+
+
+@pytest.mark.asyncio
+async def test_swapping_the_scratch_dir_does_not_orphan_a_live_task(tmp_path: Path) -> None:
+    """换 scratch 目录时必须先收掉旧的后台任务。
+
+    此前这里是 `self._task_manager = TaskManager()`，旧 manager 被直接丢掉：它手上
+    还在跑的进程从此查不到也杀不掉（`task.status` 返回 not_found，`close_tasks` 也不再
+    碰它），而旧 scratch 目录紧接着就被 rmtree——一个无人看管的孤儿进程，加一个正在
+    被删的临时目录。
+    """
+    scratch_one = tmp_path / "one"
+    scratch_one.mkdir()
+    executor = ProcessToolExecutor(
+        workspace=FsWorkspace(tmp_path),
+        executor=ProcessExecutor(),
+        store=MemorySessionStore(),
+        emitter=EventEmitter(MemorySessionStore(), ()),
+        recipes={},
+        launcher=RecordingLauncher(),
+        scratch_dir=scratch_one,
+    )
+    spec = SandboxSpec(workspace_root=tmp_path, scratch_dir=scratch_one, writable=False)
+    task = await executor._task_manager.start(
+        argv=(sys.executable, "-c", "import time; time.sleep(30)"),
+        cwd=tmp_path,
+        sandbox_spec=spec,
+        launcher=RecordingLauncher(),
+    )
+    assert task.is_running
+
+    await executor.replace_scratch_dir(tmp_path / "two")
+
+    # 旧任务必须真的被收掉，而不是被丢下
+    async with asyncio.timeout(5):
+        while task.is_running:
+            await asyncio.sleep(0.01)
+    assert not task.is_running
+    assert task.exit_code is not None
+    # 新 manager 是干净的，接着跑的任务从头编号
+    assert dict(executor._task_manager._tasks) == {}
+
+    await executor.close_tasks()

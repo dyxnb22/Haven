@@ -139,7 +139,12 @@ class RecoveryService:
 
         for path, digest in checkpoint.files_read.items():
             facts = self._workspace.path_facts(path)
-            if facts.digest != digest:
+            # `path_facts` 对超过 MAX_EDIT_FILE_BYTES 的文件不算摘要（返回 None），
+            # 而 `repo.read` 没有这个上限、记进 files_read 的 digest 是真的。无条件
+            # 比较时，大文件每次恢复都会误报一条"changed since the checkpoint"——
+            # 文件一个字节都没动，只是我们没法哈希它，而模型按提示重读也修不好。
+            # 与 `tool_facts` 里同一类比较的守卫同理由。
+            if facts.digest is not None and facts.digest != digest:
                 warnings.append(
                     f"{path} changed since the checkpoint; stale edits will fail closed"
                 )

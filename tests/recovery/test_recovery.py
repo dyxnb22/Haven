@@ -599,3 +599,93 @@ class TestRewindRefusesWhatItCannotProve:
         assert not report.rewound, "没有运行前内容，就不该动手"
         assert any("not captured" in b for b in report.blockers)
         assert blob.read_bytes() == b"\x00\x01\x02\x03\xff", "一个字节都没被改写"
+
+
+class TestLargeFileIsNotFalselyReportedAsChanged:
+    """超过 MAX_EDIT_FILE_BYTES 的文件不能被误报成"自检查点以来已变更"。
+
+    `path_facts` 对超过 256 KiB 的文件不算摘要（返回 None），而 `repo.read` 没有这个
+    上限、记进 `files_read` 的 digest 是真的。无条件比较时，大文件每次恢复都会冒出一条
+    "changed since the checkpoint"——文件一个字节都没动，只是我们没法哈希它。
+    `tool_facts` 早就为同一类比较加了守卫（见那里的注释），这里漏了。
+    """
+
+    @staticmethod
+    async def _setup(h: Harness, repo: Path) -> tuple[str, RecoveryService]:
+        from haven.adapters.workspace_patch import MAX_EDIT_FILE_BYTES
+
+        big = repo / "src" / "big.py"
+        big.write_text("x = 1\n" * 60000, encoding="utf-8")
+        assert big.stat().st_size > MAX_EDIT_FILE_BYTES
+
+        run_id = "run-bigfile"
+        workspace = h.workspace
+        facts = workspace.path_facts("src/big.py")
+        # 大文件：path_facts 不给摘要，但 repo.read 给的是真摘要
+        assert facts.digest is None
+        read = await workspace.read_file("src/big.py", 1, 5)
+        assert read.digest
+
+        await h.store.create_run(
+            run_id, str(repo), workspace.workspace_digest, "goal", "interactive"
+        )
+        await h.store.update_run_status(run_id, RunStatus.EXECUTING_TOOL, "")
+        await h.store.save_checkpoint(
+            CheckpointV1(
+                run_id=run_id,
+                workspace_digest=workspace.workspace_digest,
+                goal="goal",
+                mode="interactive",
+                status=RunStatus.EXECUTING_TOOL.value,
+                last_seq=2,
+                budget=BudgetSnapshot.from_domain(Budget()),
+                usage=UsageSnapshot.from_domain(BudgetUsage(steps=1, tool_calls=1)),
+                messages=(ModelMessage(role="assistant", content="working"),),
+                evidence=EvidenceSnapshot(),
+                files_read={"src/big.py": read.digest},
+            )
+        )
+        return run_id, RecoveryService(h.store, workspace)
+
+    async def test_an_untouched_large_file_produces_no_warning(self, tmp_path: Path) -> None:
+        repo = make_repo(tmp_path)
+        h = Harness(repo, [])
+        run_id, recovery = await self._setup(h, repo)
+
+        report = await recovery.inspect(run_id)
+
+        assert report.can_resume
+        assert report.warnings == (), "文件一个字节都没动，不该被报成已变更"
+
+    async def test_a_genuinely_changed_small_file_still_warns(self, tmp_path: Path) -> None:
+        """守卫不能把真正的变更通知也一起吞掉。"""
+        repo = make_repo(tmp_path)
+        h = Harness(repo, [])
+        (repo / "src" / "calc.py").write_text("def add(a, b):\n    return a - b + 7\n")
+        workspace = h.workspace
+        calc = workspace.path_facts("src/calc.py")
+        assert calc.digest is not None
+        run_id = "run-small-change"
+        await h.store.create_run(
+            run_id, str(repo), workspace.workspace_digest, "goal", "interactive"
+        )
+        await h.store.update_run_status(run_id, RunStatus.EXECUTING_TOOL, "")
+        await h.store.save_checkpoint(
+            CheckpointV1(
+                run_id=run_id,
+                workspace_digest=workspace.workspace_digest,
+                goal="goal",
+                mode="interactive",
+                status=RunStatus.EXECUTING_TOOL.value,
+                last_seq=2,
+                budget=BudgetSnapshot.from_domain(Budget()),
+                usage=UsageSnapshot.from_domain(BudgetUsage(steps=1, tool_calls=1)),
+                messages=(ModelMessage(role="assistant", content="working"),),
+                evidence=EvidenceSnapshot(),
+                files_read={"src/calc.py": "0" * 64},
+            )
+        )
+
+        report = await RecoveryService(h.store, workspace).inspect(run_id)
+
+        assert any("src/calc.py" in w for w in report.warnings)

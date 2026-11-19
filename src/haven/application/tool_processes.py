@@ -92,8 +92,15 @@ class ProcessToolExecutor:
         """终止所有正在运行的后台子进程。"""
         await self._task_manager.close_all()
 
-    def replace_scratch_dir(self, scratch_dir: Path) -> None:
-        """切换到新运行独占的临时目录；旧目录由 RunService 负责回收。"""
+    async def replace_scratch_dir(self, scratch_dir: Path) -> None:
+        """切换到新运行独占的临时目录；旧目录由 RunService 负责回收。
+
+        先把旧的后台任务全部收掉再换。此前这里是 `self._task_manager = TaskManager()`，
+        旧 manager 被直接丢掉：它手上还在跑的进程从此查不到也杀不掉（task.status 返回
+        not_found，close_tasks 也不再碰它），而旧 scratch 目录紧接着就被 rmtree——
+        一个无人看管的孤儿进程，加一个正在被删的临时目录。
+        """
+        await self._task_manager.close_all()
         self._scratch_dir = scratch_dir
         self._task_manager = TaskManager()
 

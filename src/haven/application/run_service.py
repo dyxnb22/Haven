@@ -937,7 +937,7 @@ class RunService:
         current_task = asyncio.current_task()
         if current_task is not None:
             self._tasks[ctx.run_id] = current_task
-        self._pipeline.replace_scratch_dir(self._scratch_dir)
+        await self._pipeline.replace_scratch_dir(self._scratch_dir)
         try:
             outcome = await actor.drive()
         finally:

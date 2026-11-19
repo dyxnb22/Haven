@@ -75,3 +75,42 @@ class TestWorktreeLifecycle:
             ).read_text() == "def add(a, b):\n    return a + b + 999\n"
         finally:
             await cleanup_ephemeral_worktree(wt)
+
+    async def test_a_failed_apply_is_reported_not_swallowed(
+        self, git_repo_clean: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """草稿搬不进工作树时必须报错，而不是悄悄返回一个没对齐的工作树。
+
+        整个这一段的目的就是"让推测环境与开发者的草稿对齐"；悄悄返回一个没对齐的
+        工作树，之后所有的编辑前像和证据都会建立在另一份文件状态上，而没有任何迹象
+        表明它不是你眼前那份。
+
+        正常流程里 `git apply` 几乎不会失败（工作树与 diff 同源），所以这里直接伪造
+        一个非零退出——要断言的是"失败了会说出来"这个映射，不是 git 的行为。
+        """
+        import asyncio as _asyncio
+
+        import haven.adapters.worktree as worktree_module
+
+        class _FailedApply:
+            returncode = 1
+
+            async def communicate(self, input: bytes = b"") -> tuple[bytes, bytes]:
+                return b"", b"error: patch does not apply"
+
+        real = _asyncio.create_subprocess_exec
+
+        async def fake_exec(program: str, *args: str, **kwargs: object):  # type: ignore[no-untyped-def]
+            if program == "git" and args and args[0] == "apply":
+                return _FailedApply()
+            return await real(program, *args, **kwargs)  # type: ignore[arg-type]
+
+        (git_repo_clean / "calc.py").write_text("def add(a, b):\n    return a + b + 999\n")
+        monkeypatch.setattr(worktree_module.asyncio, "create_subprocess_exec", fake_exec)
+
+        with pytest.raises(WorkspaceError) as exc:
+            await create_ephemeral_worktree(git_repo_clean, "run-apply-fails")
+        assert exc.value.code == "internal"
+        assert "uncommitted changes" in str(exc.value)
+        # 失败的工作树不能留在原地
+        assert not (git_repo_clean / ".haven" / "worktrees" / "run-apply-fails").exists()

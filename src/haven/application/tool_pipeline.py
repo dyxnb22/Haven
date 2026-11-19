@@ -178,10 +178,10 @@ class ToolPipeline:
         """动态更新当前的审批分级模式。"""
         self._approval_coordinator.set_approval_mode(mode)
 
-    def replace_scratch_dir(self, scratch_dir: Path) -> None:
+    async def replace_scratch_dir(self, scratch_dir: Path) -> None:
         """在连续运行之间替换进程工具使用的独占临时目录。"""
         self._scratch_dir = scratch_dir
-        self._tool_executor.replace_scratch_dir(scratch_dir)
+        await self._tool_executor.replace_scratch_dir(scratch_dir)
 
     async def close(self) -> None:
         """释放后台进程等资源。"""

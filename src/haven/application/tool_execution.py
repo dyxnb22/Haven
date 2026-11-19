@@ -78,9 +78,9 @@ class ToolExecutor:
             **self._processes.handlers,
         }
 
-    def replace_scratch_dir(self, scratch_dir: Path) -> None:
+    async def replace_scratch_dir(self, scratch_dir: Path) -> None:
         """把新运行的独占临时目录传递给进程工具。"""
-        self._processes.replace_scratch_dir(scratch_dir)
+        await self._processes.replace_scratch_dir(scratch_dir)
 
     async def close_tasks(self) -> None:
         """终止所有正在运行的后台子进程与 MCP Server。"""

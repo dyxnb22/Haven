@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -96,7 +97,11 @@ async def create_ephemeral_worktree(repo_root: Path, run_id: str) -> EphemeralWo
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    diff_out, _ = await diff_proc.communicate()
+    diff_out, diff_err = await diff_proc.communicate()
+    if diff_proc.returncode != 0:
+        err_msg = diff_err.decode("utf-8", errors="replace").strip()
+        await _discard(repo_root, target)
+        raise WorkspaceError("internal", f"failed to read the draft diff: {err_msg}")
     if diff_out.strip():
         apply_proc = await asyncio.create_subprocess_exec(
             "git",
@@ -107,9 +112,38 @@ async def create_ephemeral_worktree(repo_root: Path, run_id: str) -> EphemeralWo
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        await apply_proc.communicate(input=diff_out)
+        _, apply_err = await apply_proc.communicate(input=diff_out)
+        # 应用失败必须说出来。整个这一段的目的就是"让推测环境与开发者的草稿对齐"；
+        # 悄悄返回一个没对齐的工作树，之后所有的编辑前像和证据都会建立在另一份
+        # 文件状态上，而没有任何迹象表明它不是你眼前那份。
+        if apply_proc.returncode != 0:
+            err_msg = apply_err.decode("utf-8", errors="replace").strip()
+            # 失败的工作树不能留在原地：它仍注册在 git 里，会一直被 `worktree list`
+            # 看到，并挡住下一次用同一个 run_id 创建的尝试。
+            await _discard(repo_root, target)
+            raise WorkspaceError(
+                "internal",
+                f"failed to carry the uncommitted changes into the worktree: {err_msg}",
+            )
 
     return EphemeralWorktree(repo_root=repo_root, worktree_path=target, run_id=run_id)
+
+
+async def _discard(repo_root: Path, target: Path) -> None:
+    """注销并删掉一个半成品工作树；清理失败不影响原始错误的传播。"""
+    with contextlib.suppress(OSError):
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "worktree",
+            "remove",
+            "--force",
+            str(target),
+            cwd=repo_root,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.communicate()
+    shutil.rmtree(target, ignore_errors=True)
 
 
 async def reconcile_worktree_to_main(

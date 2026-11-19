@@ -36,13 +36,25 @@ _HELD_TOKENS: set[str] = set()
 class LeaseHeld(Exception):
     """另一个存活的 Haven 进程持有此工作区的写入租约。"""
 
-    def __init__(self, holder_pid: int, holder_host: str, since: str) -> None:
+    def __init__(
+        self,
+        holder_pid: int,
+        holder_host: str,
+        since: str,
+        lease_path: Path | None = None,
+    ) -> None:
+        detail = f"workspace is write-leased by pid {holder_pid} on {holder_host} (since {since})"
+        # 只说"去把那个进程停掉"是不够的，而且常常是错的：pid 会被复用，持有者也
+        # 可能是崩溃后没人回收的僵尸。把租约文件点出来，用户才能自己判断该不该动它。
+        if lease_path is not None:
+            detail += f"; lease file: {lease_path}"
         super().__init__(
-            f"workspace is write-leased by pid {holder_pid} on {holder_host} "
-            f"(since {since}); run read-only or stop that process"
+            f"{detail}; run read-only, stop that process, or remove the lease file "
+            f"if pid {holder_pid} is no longer a Haven process"
         )
         self.holder_pid = holder_pid
         self.holder_host = holder_host
+        self.lease_path = lease_path
 
 
 @dataclass
@@ -120,6 +132,7 @@ def acquire_workspace_lease(workspace_root: Path, leases_dir: Path) -> Workspace
                 _pid_of(existing),
                 str(existing.get("host", "?")),
                 str(existing.get("acquired_at", "?")),
+                path,
             )
         _write_atomic(path, payload)
         final = _read(path)
@@ -128,6 +141,7 @@ def acquire_workspace_lease(workspace_root: Path, leases_dir: Path) -> Workspace
                 _pid_of(final or {}),
                 str((final or {}).get("host", "?")),
                 str((final or {}).get("acquired_at", "?")),
+                path,
             )
     _HELD_TOKENS.add(token)
     return WorkspaceLease(path=path, workspace=workspace, pid=os.getpid(), token=token)
@@ -177,10 +191,28 @@ def _is_live(payload: dict[str, object]) -> bool:
     except PermissionError:
         # pid 存在但属于另一位用户；回退到心跳判断。
         return _heartbeat_age(payload) < STALE_AFTER_SECONDS
-    # 同一主机上的 pid 对探测有响应：持有者仍然存活，结论确定。
+    # 僵尸进程已经死了、只是还没被回收，而 `os.kill(pid, 0)` 对它照样成功。不识别
+    # 的话，一个崩溃后没人 wait 的 Haven 进程会永远占着租约，且没有任何自动解法。
+    # 同一主机上的 pid 对探测有响应，且不是僵尸：持有者仍然存活，结论确定。
     # 心跳绝不能覆盖存活探测——持有者不会按定时器刷新心跳，否则长时间
     # 交互会话会看起来“过期”，租约可能在运行中被夺走，而这正是租约要防止的事。
-    return True
+    return not _is_zombie(pid)
+
+
+def _is_zombie(pid: int) -> bool:
+    """pid 对应一个僵尸进程时返回 True。
+
+    只在有 `/proc` 的平台上可判断（Linux）；macOS 无从得知，此时返回 False，
+    行为与之前一致。宁可漏判，也不要把活着的持有者判成死的。
+    """
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    # comm 字段可能含空格和括号，所以从最后一个 ')' 之后取状态位。
+    _, _, rest = stat.rpartition(")")
+    fields = rest.split()
+    return bool(fields) and fields[0] == "Z"
 
 
 def _heartbeat_age(payload: dict[str, object]) -> float:
