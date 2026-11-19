@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 
@@ -81,9 +82,38 @@ def _redact(text: str) -> str:
     return text
 
 
+def _redact_structured(value: object) -> object:
+    """递归脱敏结构化载荷里的字符串。
+
+    必须在**序列化之前**做：`model_dump_json()` 会把引号、反斜杠和控制字符转义掉，之后
+    再做子串匹配就找不到含这些字符的秘密了。`render_markdown` 脱敏的是原文所以能成功，
+    于是"拿 Markdown 报告验证过脱敏"的用户会在 JSONL 里拿到明文凭据——两条导出路径
+    给出不同结果，这本身就是缺陷。
+    """
+    if isinstance(value, str):
+        return _redact(value)
+    if isinstance(value, dict):
+        return {key: _redact_structured(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_structured(item) for item in value]
+    return value
+
+
 def render_jsonl(envelopes: list[EventEnvelope]) -> str:
     """将事件逐行导出为稳定的 JSONL，便于脚本消费。"""
-    return "\n".join(_redact(env.model_dump_json()) for env in envelopes) + "\n"
+    # 紧凑分隔符 + ensure_ascii=False 与 `model_dump_json()` 逐字节一致，因此导出格式
+    # 没有变化——变了的只是秘密真的被脱敏掉了。
+    return (
+        "\n".join(
+            json.dumps(
+                _redact_structured(env.model_dump(mode="json")),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            for env in envelopes
+        )
+        + "\n"
+    )
 
 
 def _fenced_block(text: str, language: str) -> list[str]:

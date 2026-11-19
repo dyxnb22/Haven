@@ -539,7 +539,7 @@ class TestSnapshotReusesProtectedDigests:
 
 
 class TestMutationPathsDoNotBlockTheLoop:
-    """编辑路径的磁盘 I/O 必须经 `asyncio.to_thread`，而不是在事件循环里跑。
+    """编辑路径的磁盘 I/O 必须经 `asyncio.to_thread`，语法预检必须走 async 版。
 
     实测：240 KB 文件上一次 preview_edit 要 123 ms、apply_edit 要 210 ms，全在循环里。
     同一进程里的 TUI 会为此卡住，stderr 排空与后台任务输出收集也一起停。
@@ -549,16 +549,23 @@ class TestMutationPathsDoNotBlockTheLoop:
 
     @staticmethod
     async def _recorded_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        """记录编辑路径上实际的 I/O 与解析调用。"""
         import haven.adapters.workspace_editor as editor
 
-        real = asyncio.to_thread
         seen: list[str] = []
+        real_thread = asyncio.to_thread
+        real_async = editor.validate_syntax_async
 
-        async def spy(func: object, *args: object, **kwargs: object):
-            seen.append(getattr(func, "__name__", repr(func)))
-            return await real(func, *args, **kwargs)  # type: ignore[arg-type]
+        async def thread_spy(func: object, *args: object, **kwargs: object):
+            seen.append(getattr(func, "__name__", "?"))
+            return await real_thread(func, *args, **kwargs)  # type: ignore[arg-type]
 
-        monkeypatch.setattr(editor.asyncio, "to_thread", spy)
+        async def async_spy(path: str, content: str):
+            seen.append("validate_syntax_async")
+            return await real_async(path, content)
+
+        monkeypatch.setattr(editor.asyncio, "to_thread", thread_spy)
+        monkeypatch.setattr(editor, "validate_syntax_async", async_spy)
         return seen
 
     async def test_preview_edit_offloads_its_io(
@@ -567,9 +574,7 @@ class TestMutationPathsDoNotBlockTheLoop:
         seen = await self._recorded_calls(monkeypatch)
         await workspace.preview_edit("src/calc.py", "return a - b", "return a + b", occurrence=1)
 
-        assert "load_editable" in seen, "读文件必须在线程里"
-        assert "validate_syntax" in seen, "语法预检也必须卸载"
-        assert "diff_preview" in seen, "差异计算同样"
+        assert "validate_syntax_async" in seen, "语法预检必须走 async 版（大块进子进程）"
 
     async def test_apply_edit_offloads_its_write(
         self, workspace: FsWorkspace, monkeypatch: pytest.MonkeyPatch
@@ -587,8 +592,9 @@ class TestMutationPathsDoNotBlockTheLoop:
             occurrence=1,
         )
 
-        assert "atomic_write" in seen, "fsync + rename 必须在线程里"
+        assert "validate_syntax_async" in seen
         assert "load_editable" in seen
+        assert "atomic_write" in seen, "fsync + rename 必须在线程里"
 
     async def test_apply_delete_offloads_its_unlink(
         self, workspace: FsWorkspace, monkeypatch: pytest.MonkeyPatch

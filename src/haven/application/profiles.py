@@ -163,9 +163,20 @@ def profile_for(model_name: str) -> ModelProfile:
 
     对双轨混合路由器（`routed(fast+deep)`），自适应继承深度模型的上下文上限、
     定价策略、推理要求与前缀续写能力，避免双轨模式被退化为 96k 的保守默认值。
+
+    这里查的是 `_PROFILES`（DeepSeek 系）。OpenAI 系的 profile 由
+    `provider_profile_for` 按端点分派，两者曾是两张互不相通的表：于是
+    `routed(gpt-4o-mini+deepseek-v4-flash)` 里的 fast 一侧会静默退化成
+    DEFAULT_PROFILE——它的 1M 窗口、16384 的输出上限、`use_max_completion_tokens`
+    全部消失，而 `max()` 让字符预算看起来毫无异常。实测确认过。
     """
     if model_name in _PROFILES:
         return _PROFILES[model_name]
+
+    # 端点无关的那部分 OpenAI 能力（输出上限、参数名、推理支持）在任何端点上都成立，
+    # 所以双轨的任一侧是 OpenAI 模型时，按名字取它——只有费率需要按端点判定。
+    if model_name in _OPENAI_PROFILES:
+        return _OPENAI_PROFILES[model_name]
 
     if model_name.startswith("routed(") and model_name.endswith(")") and "+" in model_name:
         inner = model_name[7:-1]

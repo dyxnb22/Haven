@@ -7,6 +7,7 @@ from haven.application.profiles import (
     DEFAULT_CONTEXT_CHARS,
     DEFAULT_PROFILE,
     profile_for,
+    provider_profile_for,
 )
 
 
@@ -191,3 +192,36 @@ class TestRoutedProfilesInheritEverything:
         assert routed.supports_assistant_prefix is True
         assert routed.prefix_beta_base_url == DEEPSEEK_V4_FLASH.prefix_beta_base_url
         assert routed.use_max_completion_tokens == DEEPSEEK_V4_FLASH.use_max_completion_tokens
+
+
+class TestOpenAIProfilesResolveByName:
+    """`_PROFILES` 与 `_OPENAI_PROFILES` 曾是两张互不相通的表。
+
+    于是 `routed(gpt-6-luna+deepseek-v4-flash)` 的 fast 一侧静默退化成
+    DEFAULT_PROFILE——它的 1M 窗口按 0 参与 `max()`，安全上限被低估，而
+    `max_context_chars` 取的是另一侧所以看起来毫无异常。
+    """
+
+    def test_an_openai_model_resolves_to_its_real_profile(self) -> None:
+        p = profile_for("gpt-4o-mini")
+        assert p.name == "gpt-4o-mini"
+        assert p.context_window_tokens == 128_000
+        assert p.output_limit_tokens == 16_384
+
+    def test_a_routed_pair_sees_the_fast_models_real_window(self) -> None:
+        routed = profile_for("routed(gpt-6-luna+deepseek-v4-flash)")
+        # 105 万（luna）而不是 100 万（只算 deepseek 那一侧）
+        assert routed.context_window_tokens == 1_050_000
+        # 字符预算仍取更宽的一侧
+        assert routed.max_context_chars == 480_000
+
+    def test_the_endpoint_dispatch_still_governs_pricing(self) -> None:
+        """`profile_for` 现在认识 OpenAI 模型，但费率仍只由端点判定。"""
+        assert provider_profile_for("gpt-4o-mini", "https://api.openai.com/v1").pricing.is_known
+        assert not provider_profile_for(
+            "gpt-4o-mini", "https://proxy.example.com/v1"
+        ).pricing.is_known
+        assert not provider_profile_for("gpt-4o-mini", "https://api.deepseek.com").pricing.is_known
+
+    def test_an_unknown_model_still_falls_back_to_the_default(self) -> None:
+        assert profile_for("totally-unknown-model") is DEFAULT_PROFILE

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from haven.adapters.workspace_diff import WorkspaceRunDiff
 from haven.domain.digest import sha256_bytes, sha256_text
-from haven.domain.syntax_gate import format_syntax_error, validate_syntax
+from haven.domain.syntax_gate import format_syntax_error, validate_syntax_async
 from haven.ports.workspace import (
     EditOutcome,
     EditPreview,
@@ -430,7 +430,7 @@ class WorkspacePatchEngine:
         }
         if not skip_syntax_check:
             for path, text in final_contents.items():
-                syntax_diag = await asyncio.to_thread(validate_syntax, path, text)
+                syntax_diag = await validate_syntax_async(path, text)
                 if not syntax_diag.is_valid:
                     msg = format_syntax_error(syntax_diag)
                     raise WorkspaceError(
@@ -473,7 +473,7 @@ class WorkspacePatchEngine:
 
         if not skip_syntax_check:
             for path, text in plan.final_contents.items():
-                syntax_diag = await asyncio.to_thread(validate_syntax, path, text)
+                syntax_diag = await validate_syntax_async(path, text)
                 if not syntax_diag.is_valid:
                     msg = format_syntax_error(syntax_diag)
                     raise WorkspaceError(

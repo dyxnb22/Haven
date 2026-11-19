@@ -8,6 +8,7 @@ from haven.contracts.events import (
     DiffPreview,
     EventEnvelope,
     ModelCompleted,
+    Notice,
     RunFinished,
     ToolProposed,
 )
@@ -265,3 +266,39 @@ def test_jsonl_redacts_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     out = render_jsonl([env])
     assert "sk-leak-me-please" not in out
+
+
+def test_jsonl_redacts_a_secret_that_json_escaping_would_hide(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """含引号/反斜杠的秘密不能在 JSONL 里以明文出现。
+
+    `_redact` 原先作用在 `model_dump_json()` **之后**，而 JSON 会把 `"` 和 `\\` 转义掉，
+    子串匹配于是失效；`render_markdown` 脱敏的是原文、能成功。两条导出路径给出不同
+    结果——"拿 Markdown 报告验证过脱敏"的用户会在 JSONL 里拿到明文凭据。
+    """
+    secret = 'p@ss"word\\1234567890'
+    monkeypatch.setenv("HAVEN_TEST_PASSWORD", secret)
+    env = EventEnvelope(
+        seq=1,
+        at="2026-01-01T00:00:00+00:00",
+        event=Notice(run_id="run-1", level="warning", message=f"using {secret} now"),
+    )
+
+    jsonl = render_jsonl([env])
+    assert secret not in jsonl, "JSONL 里出现了明文凭据"
+    assert "[redacted]" in jsonl
+    # 每条仍必须是有效 JSON，且格式没有被改动
+    for line in jsonl.splitlines():
+        if line:
+            assert json.loads(line)["seq"] == 1
+
+
+def test_jsonl_output_is_byte_identical_to_before_for_clean_events() -> None:
+    """脱敏改的是"什么时候做"，不是导出格式。"""
+    env = EventEnvelope(
+        seq=7,
+        at="2026-01-01T00:00:00+00:00",
+        event=Notice(run_id="run-1", level="info", message='plain "text" with \\ and 中文'),
+    )
+    assert render_jsonl([env]) == env.model_dump_json() + "\n"

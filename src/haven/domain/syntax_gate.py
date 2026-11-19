@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import json
 import re
+import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import PurePath
@@ -54,6 +56,57 @@ class SyntaxDiagnostic:
 
 
 _TOML_LINE_COL = re.compile(r"\(at line (\d+), column (\d+)\)")
+
+
+#: 内容超过这个大小时，语法解析改到子进程里做。
+#:
+#: `ast.parse` 是纯 Python，整个解析期间占着 GIL：卸载到线程只能把 240 KB 文件一次编辑
+#: 预览的事件循环停顿从约 150 ms 降到约 85 ms（A/B 实测，差异在噪声量级），界面照样卡
+#: 一下。只有换进程才能真正让循环保持响应。小子块走进程反而更慢——解释器启动就要几十
+#: 毫秒，而解析本身几乎是瞬时的。
+SUBPROCESS_PARSE_THRESHOLD = 64 * 1024
+
+#: 子进程 worker：从 stdin 读 {"path", "content"}，把诊断字典写到 stdout。
+_PARSE_WORKER = (
+    "import json, sys;"
+    "from haven.domain.syntax_gate import validate_syntax;"
+    "p = json.loads(sys.stdin.buffer.read());"
+    "sys.stdout.write(json.dumps(validate_syntax(p['path'], p['content']).to_dict()))"
+)
+
+
+async def validate_syntax_async(path: str, content: str) -> SyntaxDiagnostic:
+    """校验语法；大块在子进程里解析，小块的直接在调用线程里做。
+
+    这是**预写门禁**：它决定一次编辑是否被允许落盘。所以子进程答不出来时必须退回到
+    进程内解析——那是对的，只是慢。正确性优先于界面响应。
+    """
+    if len(content) < SUBPROCESS_PARSE_THRESHOLD:
+        return validate_syntax(path, content)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            _PARSE_WORKER,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except OSError:
+        # 起不来（极少见：进程表满、可执行文件消失）。退回进程内，结果一样。
+        return validate_syntax(path, content)
+
+    try:
+        out, _ = await proc.communicate(json.dumps({"path": path, "content": content}).encode())
+    except (OSError, ValueError):
+        return validate_syntax(path, content)
+    if proc.returncode != 0 or not out:
+        return validate_syntax(path, content)
+    try:
+        return SyntaxDiagnostic(**json.loads(out.decode("utf-8")))
+    except (TypeError, ValueError):
+        # worker 答了个我们不认识形状的东西：宁可慢，也不能把门禁结果猜出来。
+        return validate_syntax(path, content)
 
 
 def validate_syntax(path: str, content: str) -> SyntaxDiagnostic:
