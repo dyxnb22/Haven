@@ -5,6 +5,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -12,6 +13,7 @@ import pytest
 
 from haven.adapters.workspace_lease import (
     LeaseHeld,
+    _hold_marker,
     acquire_workspace_lease,
 )
 
@@ -217,3 +219,74 @@ class TestAStaleLeaseIsBreakable:
         assert str(path) in message, "必须把租约文件路径说出来"
         assert "remove the lease file" in message
         assert exc.value.lease_path == path
+
+
+def test_a_reused_pid_does_not_keep_the_lease_locked() -> None:
+    """pid 被无关的长驻进程复用时，租约必须可被接管。
+
+    此前 `_is_live` 只看 `os.kill(pid, 0)`：一个崩溃进程留下的租约，其 pid 一旦被复用，
+    这个探测就永远回答"活着"，工作区被永久堵死，而错误消息还在建议"去把那个进程停掉"
+    （那个进程跟 Haven 毫无关系）。现在持有标记优先于 pid：复用了 pid 的进程不会继承
+    原持有者的 fd，锁已经放了。
+    """
+    import json
+    import socket
+    import subprocess
+
+    from haven.adapters.workspace_lease import _hold_marker, _now
+    from haven.domain.digest import sha256_text
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "ws"
+        root.mkdir()
+        leases = Path(tmp) / "leases"
+        leases.mkdir()
+        bystander = subprocess.Popen(["sleep", "60"])
+        try:
+            key = sha256_text(str(root.resolve()))[:24]
+            path = leases / f"{key}.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "workspace": str(root.resolve()),
+                        "pid": bystander.pid,
+                        "host": socket.gethostname(),
+                        "token": "left-behind-by-a-crash",
+                        "acquired_at": _now(),
+                        "heartbeat_at": _now(),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            # 没有持有标记：原持有者已经死了
+            assert not _hold_marker(path).exists()
+            lease = acquire_workspace_lease(root, leases)
+            try:
+                assert lease.pid == os.getpid()
+            finally:
+                lease.release()
+        finally:
+            bystander.kill()
+            bystander.wait()
+
+
+def test_a_live_holder_still_blocks_a_second_acquire(tmp_path: Path) -> None:
+    """反方向：真正活着的持有者必须仍然堵死——否则租约就失去意义了。"""
+    lease = acquire_workspace_lease(tmp_path / "ws", tmp_path / "leases")
+    try:
+        assert _hold_marker(lease.path).exists(), "持有者必须留下标记"
+        with pytest.raises(LeaseHeld):
+            acquire_workspace_lease(tmp_path / "ws", tmp_path / "leases")
+    finally:
+        lease.release()
+    # 释放之后标记必须消失，否则下一次 acquire 会被自己的残留堵死
+    assert not _hold_marker(lease.path).exists()
+
+
+def test_release_drops_the_marker_so_the_workspace_is_reacquirable(tmp_path: Path) -> None:
+    lease = acquire_workspace_lease(tmp_path / "ws", tmp_path / "leases")
+    lease.release()
+    # 幂等：再调一次不该炸
+    lease.release()
+    again = acquire_workspace_lease(tmp_path / "ws", tmp_path / "leases")
+    again.release()

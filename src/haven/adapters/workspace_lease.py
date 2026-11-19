@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import json
 import os
@@ -73,6 +74,10 @@ class WorkspaceLease:
     pid: int
     #: 区分同一 pid 中不同租约实例及 PID 复用的随机所有权令牌。
     token: str
+    #: 持有者生命周期内一直开着的标记文件描述符。它比 pid 更能说明"持有者还活着"：
+    #   pid 会被复用，而复用那个 pid 的无关进程并不会继承这个 fd——原进程一死
+    #   （包括被 kill -9，没人调用 release），内核就把锁放了。
+    _marker_fd: int | None = None
 
     def refresh(self) -> None:
         """刷新当前租约心跳；租约已被替换或删除时不再写回。"""
@@ -89,8 +94,21 @@ class WorkspaceLease:
             with _acquire_guard(self.path):
                 if self._is_mine():
                     self.path.unlink(missing_ok=True)
+                    _unlink_missing_ok(_hold_marker(self.path))
         finally:
+            self._drop_marker()
             _HELD_TOKENS.discard(self.token)
+
+    def _drop_marker(self) -> None:
+        """关掉持有标记；幂等。"""
+        if self._marker_fd is None:
+            return
+        fd, self._marker_fd = self._marker_fd, None
+        if _fcntl is not None:
+            with contextlib.suppress(OSError):
+                _fcntl.flock(fd, _fcntl.LOCK_UN)
+        with contextlib.suppress(OSError):
+            os.close(fd)
 
     def _is_mine(self, payload: dict[str, object] | None = None) -> bool:
         if payload is None:
@@ -127,7 +145,7 @@ def acquire_workspace_lease(workspace_root: Path, leases_dir: Path) -> Workspace
     }
     with _acquire_guard(path):
         existing = _read(path)
-        if existing is not None and _is_live(existing):
+        if existing is not None and _is_live(existing, path):
             raise LeaseHeld(
                 _pid_of(existing),
                 str(existing.get("host", "?")),
@@ -135,6 +153,7 @@ def acquire_workspace_lease(workspace_root: Path, leases_dir: Path) -> Workspace
                 path,
             )
         _write_atomic(path, payload)
+        marker_fd = _acquire_hold_marker(_hold_marker(path))
         final = _read(path)
         if final is None or final.get("token") != token:
             raise LeaseHeld(
@@ -144,7 +163,13 @@ def acquire_workspace_lease(workspace_root: Path, leases_dir: Path) -> Workspace
                 path,
             )
     _HELD_TOKENS.add(token)
-    return WorkspaceLease(path=path, workspace=workspace, pid=os.getpid(), token=token)
+    return WorkspaceLease(
+        path=path,
+        workspace=workspace,
+        pid=os.getpid(),
+        token=token,
+        _marker_fd=marker_fd,
+    )
 
 
 @contextmanager
@@ -174,7 +199,65 @@ def _pid_of(payload: dict[str, object]) -> int:
     return raw if isinstance(raw, int) and not isinstance(raw, bool) else -1
 
 
-def _is_live(payload: dict[str, object]) -> bool:
+def _hold_marker(path: Path) -> Path:
+    """持有者生命周期内一直开着的标记文件路径。"""
+    return path.with_suffix(".held")
+
+
+def _marker_still_held(path: Path) -> bool:
+    """标记文件的排他锁是否还被某个进程持有。
+
+    这比 pid 探活强，也正是它能补上 pid 复用这个洞的原因：pid 会被复用，而复用那个
+    pid 的无关进程并不会继承原持有者的文件描述符——原进程一死（含被 kill -9，没人调用
+    `release`），内核就把锁放了，于是这里立刻拿得到。
+    """
+    if _fcntl is None:
+        return False
+    try:
+        fd = os.open(path, os.O_RDWR)
+    except OSError:
+        # 没有标记文件：没有任何进程正在持有它。
+        return False
+    try:
+        try:
+            _fcntl.flock(fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        except OSError:
+            return True
+        with contextlib.suppress(OSError):
+            _fcntl.flock(fd, _fcntl.LOCK_UN)
+        return False
+    finally:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+
+
+def _unlink_missing_ok(path: Path) -> None:
+    with contextlib.suppress(OSError):
+        path.unlink(missing_ok=True)
+
+
+def _acquire_hold_marker(path: Path) -> int | None:
+    """拿下持有标记并返回其 fd；拿不到（平台不支持或已被占用）时返回 None。
+
+    必须在 payload 落盘**之后**调用：先拿锁再写文件的话，另一个进程可能看到
+    "锁被占但没有 payload"，从而判定持有者已死并接管。
+    """
+    if _fcntl is None:
+        return None
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError:
+        return None
+    try:
+        _fcntl.flock(fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        return None
+    return fd
+
+
+def _is_live(payload: dict[str, object], path: Path | None = None) -> bool:
     if str(payload.get("host", "")) != socket.gethostname():
         # 无法探测另一台机器上的持有者；信任心跳。
         return _heartbeat_age(payload) < STALE_AFTER_SECONDS
@@ -184,6 +267,18 @@ def _is_live(payload: dict[str, object]) -> bool:
     if pid == os.getpid():
         token = str(payload.get("token", ""))
         return token in _HELD_TOKENS or _heartbeat_age(payload) < STALE_AFTER_SECONDS
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # pid 存在但属于另一位用户；回退到心跳判断。
+        return _heartbeat_age(payload) < STALE_AFTER_SECONDS
+    # 持有标记优先于 pid 探活：它才是"那个进程还活着"的证据，而 pid 只是"有个进程
+    # 用着这个号"。标记不在手里（原持有者已死、pid 被复用、或从没写过标记）就不再
+    # 看 pid——否则一个复用了 pid 的无关进程会让租约永久堵死。
+    if path is not None and not _marker_still_held(_hold_marker(path)):
+        return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
