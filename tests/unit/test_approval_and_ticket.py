@@ -37,6 +37,8 @@ def test_digest_changes_when_any_fact_changes() -> None:
     assert make_digest(preimage_digest="pre2") != base
     assert make_digest(preview_digest="diff2") != base
     assert make_digest(workspace_digest="ws2") != base
+    # 工具实现升级后，旧审批不得沿用：版本进摘要就是为了让跨版本恢复重新询问。
+    assert make_digest(tool_version="2") != base
 
 
 def test_approval_record_validity() -> None:

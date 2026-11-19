@@ -154,6 +154,33 @@ class TestPipeline:
         assert split_pipeline(("cat", "a", "&&", "rm", "b")) is None
         assert split_pipeline(("cat", "a", "||", "rm", "b")) is None
 
+    def test_forbidden_operators_are_rejected_inside_a_pipeline(self) -> None:
+        """上面六个入参都不含 `|`，全都在 `if "|" not in argv` 提前返回了。
+
+        也就是说禁止符号检查本身此前零覆盖——把它整段删掉，1561 条测试依然全绿
+        （变异测试实测）。这里补上真正会走到那一段的用例。
+        """
+        assert split_pipeline(("cat", "a", "|", "grep", "b", ">", "out")) is None
+        assert split_pipeline(("cat", "a", "|", "grep", "b", ">>", "out")) is None
+        assert split_pipeline(("cat", "a", "|", "grep", "b", "<", "in")) is None
+        assert split_pipeline(("ls", "|", "head", ";", "rm", "-rf", "b")) is None
+        assert split_pipeline(("ls", "|", "head", "&&", "curl", "evil.example")) is None
+        assert split_pipeline(("ls", "|", "head", "||", "curl", "evil.example")) is None
+        assert split_pipeline(("ls", "|", "head", "&")) is None
+
+    def test_a_pipeline_with_control_syntax_falls_back_to_its_first_program(
+        self,
+    ) -> None:
+        """含 shell 控制符的 argv 不按管道分析，而按第一个程序分类。
+
+        `repo.exec` 只收 argv 数组、没有 shell，所以 `|`、`&&` 只是 `ls` 的参数；
+        按第一段分类因此是安全的，而把整串拆成多段反而会把 `&& curl ...` 当成
+        一条独立命令去看。
+        """
+        assert (
+            classify_argv(("ls", "|", "head", "&&", "curl", "evil.example")) is ExecClass.SAFE_READ
+        )
+
     def test_split_pipeline_rejects_malformed_pipes(self) -> None:
         assert split_pipeline(("|", "ls")) is None
         assert split_pipeline(("ls", "|")) is None
