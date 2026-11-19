@@ -191,6 +191,10 @@ class RunFinalizer:
                 duration_ms=int(ctx.usage.wall_time_seconds * 1000),
             ),
         )
+        # 终态已落盘、run.finished 已广播完（emit 会等自己的分发结束），这次运行不会
+        # 再有事件。释放 emitter 的每 run 状态，否则长期存活的界面进程会一次运行漏
+        # 一个 int 加一个 asyncio.Lock，直到退出。
+        self._emitter.release(ctx.run_id)
         return self._outcome(ctx, stop_reason, final_text, gate_reason)
 
     def _outcome(

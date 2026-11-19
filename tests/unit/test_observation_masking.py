@@ -65,6 +65,25 @@ class TestFoldText:
         assert "chars folded" in folded
         assert len(folded) < 300
 
+    def test_folding_never_makes_the_text_longer(self) -> None:
+        """折叠的契约是"变短"。
+
+        此前这里不检查：一段刚过阈值的密集文本（401 字符、只有一行）会被两个半截加
+        一句标记撑成 426 字符，比原文还长。两个调用方各自比较了 saved，所以线上看不
+        出问题——但这条界线该由 `fold_text` 自己把住。
+        """
+        for length in range(401, 900):
+            text = "x" * length
+            folded, did_fold = fold_text(text)
+            assert did_fold
+            assert len(folded) < length, f"{length} -> {len(folded)}"
+
+    def test_the_degenerate_case_still_folds_and_keeps_content(self) -> None:
+        folded, did_fold = fold_text("x" * 401)
+        assert did_fold
+        assert len(folded) < 401
+        assert folded  # 不能折成空
+
 
 class TestMaskBulkyObservations:
     def test_bulky_tool_observation_folded(self) -> None:

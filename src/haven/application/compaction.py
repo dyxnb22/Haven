@@ -27,25 +27,43 @@ _TOOL_ATTR = re.compile(r'<tool_output tool="([^"]+)">')
 _MAX_ITEMS_PER_LINE = 12
 _DIGEST_PREFIX_CHARS = 8
 
+#: 行边界字符。`str.splitlines()` 认定的远不止 `\n`：`\r`、`\v`、`\f`、`\x1c`-`\x1e`、
+#: `\x85`、U+2028、U+2029 都算。
+_LINE_BREAK_RE = re.compile("[\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029]")
+
+
+def _one_line(value: str) -> str:
+    """把行边界字符换成可见转义，使一段文本绝不可能占据两行。"""
+    return _LINE_BREAK_RE.sub("\\\\n", value)
+
 
 def fold_text(
     text: str, head_lines: int = 4, tail_lines: int = 4, threshold_chars: int = 400
 ) -> tuple[str, bool]:
-    """折叠过长文本，保留头部和尾部关键行（ADR 0036）。"""
+    """折叠过长文本，保留头部和尾部关键行（ADR 0036）。
+
+    返回值保证比原文短——折叠的契约就是"变短"。此前这里不检查：一段刚过阈值的密集
+    文本（例如 401 字符、只有一行）会被两个半截加一句标记撑成 426 字符，比原文还长。
+    现有两个调用方各自比较了 `saved`，所以线上看不出问题，但这条界线该由这里把住，
+    而不是让每个调用方各自记得。
+    """
     if len(text) <= threshold_chars:
         return text, False
     lines = text.splitlines(keepends=True)
     if len(lines) <= head_lines + tail_lines + 2:
         half = threshold_chars // 2
         omitted = len(text) - threshold_chars
-        return f"{text[:half]}\n[... {omitted} chars folded ...]\n{text[-half:]}", True
-    head = "".join(lines[:head_lines])
-    tail = "".join(lines[-tail_lines:])
-    skipped = len(lines) - head_lines - tail_lines
-    return (
-        f"{head}\n[... {skipped} lines folded ({len(text)} chars); re-read on demand ...]\n{tail}",
-        True,
-    )
+        folded = f"{text[:half]}\n[... {omitted} chars folded ...]\n{text[-half:]}"
+    else:
+        head = "".join(lines[:head_lines])
+        tail = "".join(lines[-tail_lines:])
+        skipped = len(lines) - head_lines - tail_lines
+        marker = f"\n[... {skipped} lines folded ({len(text)} chars); re-read on demand ...]\n"
+        folded = f"{head}{marker}{tail}"
+    if len(folded) >= len(text):
+        # 只可能是阈值本身小得不合理：这时保留头部的截断仍然比原文短，也仍然有信息。
+        return text[:threshold_chars], True
+    return folded, True
 
 
 def _fold_deep(value: object, threshold_chars: int) -> tuple[object, bool]:
@@ -192,8 +210,12 @@ def _payload(message: ModelMessage) -> dict[str, Any]:
 
 
 def _append_unique(items: list[str], value: str) -> None:
-    if value not in items:
-        items.append(value)
+    # 摘要被标记为 trusted（见 `TestTrustIsHonest`），因此它只能携带程序生成的事实。
+    # 而路径来自工具结果，文件名里是可以含换行的——直接拼进去，一段不可信的路径文本
+    # 就会在 trusted 段里伪装成一条独立的 `- edited: …` 事实行。
+    safe = _one_line(value)
+    if safe not in items:
+        items.append(safe)
 
 
 def _render_line(label: str, items: list[str]) -> str | None:

@@ -629,22 +629,44 @@ def _fit_history(history: list[_Selected], limit: int) -> list[_Selected]:
     fitted = enforce_hard_limit(original, limit)
     if fitted == original:
         return history
-    # 按对象身份将保留下来的消息映射回选择元数据；截断后的消息是新对象，
-    # 因此对它回退使用最后一项的元数据。
+    # 未变的消息按对象身份映射回元数据。
     by_id = {id(item.message): item for item in history}
+    # 被截断的消息是 `model_copy` 出来的新对象，身份对不上。`_fit_message` 只改
+    # content，role 与 tool_call_id 都留着，所以这两者构成精确键——被硬截断的恰恰
+    # 多是工具输出，也就是不可信的那一类。
+    by_call: dict[tuple[str, str | None], _Selected] = {
+        (item.message.role, item.message.tool_call_id): item
+        for item in history
+        if item.message.tool_call_id
+    }
     out: list[_Selected] = []
     for message in fitted:
-        source = by_id.get(id(message))
-        if source is not None:
-            out.append(source)
-        else:
-            template = history[-1]
+        item = by_id.get(id(message))
+        if item is not None:
+            # 没被截断：原样保留它自己的元数据与理由。
+            out.append(item)
+            continue
+        recovered = by_call.get((message.role, message.tool_call_id))
+        if recovered is not None:
             out.append(
                 _Selected(
                     message=message,
-                    source=template.source,
-                    trust=template.trust,
+                    source=recovered.source,
+                    trust=recovered.trust,
                     reason="truncated to fit the context budget",
                 )
             )
+            continue
+        # 找不回原文（`_omission_message` 的占位符，或压缩把几段揉成了一段）。
+        # 失败即关闭：标成 untrusted。此前这里回退去借 history[-1] 的标签，于是
+        # 一段不可信正文会因为恰好排在末尾而被记成"可信"——轨迹是证据层，
+        # 标错信任等级和标错内容一样是撒谎。
+        out.append(
+            _Selected(
+                message=message,
+                source="history",
+                trust="untrusted",
+                reason="truncated to fit the context budget; original source unknown",
+            )
+        )
     return out

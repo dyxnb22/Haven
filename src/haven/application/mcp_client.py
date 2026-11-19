@@ -335,10 +335,21 @@ class MCPClientManager:
         self._configs = configs
         self._clients: dict[str, MCPClient] = {}
         self._tools: dict[str, MCPToolSchema] = {}
+        self._failures: list[tuple[str, str]] = []
 
     @property
     def tools(self) -> tuple[MCPToolSchema, ...]:
         return tuple(self._tools.values())
+
+    @property
+    def failures(self) -> tuple[tuple[str, str], ...]:
+        """启动失败的 server 及其原因，按配置顺序。
+
+        一个配了却连不上的 MCP server 必须让人知道：用户是显式配它的，静默跳过会让
+        "我明明加了工具却不存在"变成无从下手的问题。原来的 `except Exception:
+        continue` 把连接拒绝、命令不存在、握手失败全都吞掉了。
+        """
+        return tuple(self._failures)
 
     def get_tool(self, namespaced_name: str) -> MCPToolSchema | None:
         return self._tools.get(namespaced_name)
@@ -364,8 +375,11 @@ class MCPClientManager:
                 for t in tools:
                     self._tools[t.namespaced_name] = t
                     discovered.append(t)
-            except Exception:
+            except Exception as exc:
+                # 不因为一个 server 失败就中止整次运行，但也不再静默：原因记在
+                # `failures` 里，由调用方发一条 Notice 让用户看见。
                 await client.close()
+                self._failures.append((cfg.name, f"{type(exc).__name__}: {exc}"))
                 continue
         return tuple(discovered)
 

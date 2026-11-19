@@ -375,11 +375,12 @@ class RunService:
         validate_verification(verification, self._recipes, self._mode, agent_mode)
         if not self._actors:
             self._workspace.restore_originals({})
-        await self._initialize_mcp()
+        run_id = new_run_id()
+        await self._initialize_mcp(run_id)
         snapshot = build_capability_snapshot(self._mcp_manager.tools if self._mcp_manager else ())
 
         ctx = RunContext(
-            run_id=new_run_id(),
+            run_id=run_id,
             goal=goal,
             mode=PermissionMode.READ_ONLY if agent_mode is AgentMode.PLAN else self._mode,
             budget=self._budget,
@@ -512,7 +513,8 @@ class RunService:
         )
         validate_verification(verification, self._recipes, self._mode, agent_mode)
 
-        await self._initialize_mcp()
+        run_id = new_run_id()
+        await self._initialize_mcp(run_id)
         current_snapshot = build_capability_snapshot(
             self._mcp_manager.tools if self._mcp_manager else ()
         )
@@ -535,7 +537,7 @@ class RunService:
         transcript = list(checkpoint.messages)
         transcript.append(ModelMessage(role="user", content=f"Follow-up request: {follow_up}"))
         ctx = RunContext(
-            run_id=new_run_id(),
+            run_id=run_id,
             goal=checkpoint.goal,
             mode=PermissionMode.READ_ONLY if agent_mode is AgentMode.PLAN else self._mode,
             budget=self._budget,
@@ -654,7 +656,7 @@ class RunService:
             )
             return outcome
         ctx.model_selection = self._restore_model(ctx.model_selection)
-        await self._initialize_mcp()
+        await self._initialize_mcp(ctx.run_id)
         current_snapshot = build_capability_snapshot(
             self._mcp_manager.tools if self._mcp_manager else ()
         )
@@ -716,7 +718,7 @@ class RunService:
             validate_verification(
                 checkpoint.verification, self._recipes, self._mode, checkpoint.agent_mode
             )
-            await self._initialize_mcp()
+            await self._initialize_mcp(run_id)
             current = build_capability_snapshot(self._mcp_manager.tools)
             if checkpoint.catalog_digest and checkpoint.catalog_digest != current.catalog_digest:
                 raise ValueError("capability catalog changed; cannot answer this saved run")
@@ -779,11 +781,23 @@ class RunService:
     def workspace_digest(self) -> str:
         return self._workspace.workspace_digest
 
-    async def _initialize_mcp(self) -> None:
+    async def _initialize_mcp(self, run_id: str) -> None:
         """暂停会关闭外部进程；再次执行前重新发现并验证冻结目录。"""
         if self._mcp_servers and not self._mcp_manager.tools:
             tools = await self._mcp_manager.initialize()
             self._registry.register_mcp_tools(tools)
+            for name, reason in self._mcp_manager.failures:
+                await self._emitter.emit(
+                    run_id,
+                    Notice(
+                        run_id=run_id,
+                        level="warning",
+                        message=(
+                            f"MCP server {name!r} could not be started "
+                            f"({reason}); its tools are unavailable this run"
+                        ),
+                    ),
+                )
 
     async def close(self) -> None:
         """释放后台进程与尚未被运行生命周期删除的临时目录；重复调用保持安全。"""

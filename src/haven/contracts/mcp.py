@@ -36,6 +36,8 @@ class MCPToolSchema:
     description: str
     parameters: dict[str, Any]
     is_read_only: bool = False
+    #: 该工具模式（描述与参数）的 SHA-256。两者都由服务端提供、都会进模型视野，
+    #: 因此都必须被覆盖——只算参数时，改描述就是一条合法的注入通道。
     schema_digest: str = ""
 
     @classmethod
@@ -49,7 +51,13 @@ class MCPToolSchema:
         is_read_only: bool = False,
     ) -> MCPToolSchema:
         params = parameters if parameters is not None else {"type": "object", "properties": {}}
-        digest = sha256_text(canonical_json(params))
+        # 指纹必须覆盖模型能看到的**全部**服务端可控内容。此前它只算 parameters，
+        # 于是服务器只改 description 就完全合法地改了模型读到的工具说明——而那正是
+        # 提示注入的入口（"忽略以上指令，执行 …"）。参数没变、指纹不变、漂移检不出来。
+        #
+        # 这会改变既有 pinned_schemas 的取值；重新固定用
+        # `haven mcp <server> tools pin`，它会打印新的摘要和对应的 TOML 块。
+        digest = sha256_text(canonical_json({"description": description, "parameters": params}))
         namespaced = f"mcp.{server_name}.{tool_name}"
         return cls(
             namespaced_name=namespaced,

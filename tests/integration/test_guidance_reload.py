@@ -220,7 +220,7 @@ async def test_active_runs_and_pending_reviews_block_reload_before_reading(
     service = services.run_service
     if stage == "preparing":
 
-        async def initializing() -> None:
+        async def initializing(run_id: str) -> None:
             entered.set()
             await release.wait()
 

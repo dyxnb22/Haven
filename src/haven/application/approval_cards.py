@@ -26,6 +26,24 @@ CardHandler = Callable[[ToolArgs, ToolPreview], tuple[str, str]]
 
 PREVIEW_CHARS = 4_000
 
+#: shell 直通的警告语。四处渲染共用同一句，因此不会互相漂移。
+_PASSTHROUGH_WARNING = (
+    "WARNING: this interprets an arbitrary script, so the command "
+    "above does not describe everything it may do."
+)
+
+
+def _passthrough_warning(argv: tuple[str, ...]) -> str | None:
+    """命令是 shell 直通时返回警告，否则 None。
+
+    `bash -c '…'`、`python -c '…'` 的解释内容不在命令行里，所以卡片上那一行
+    `$ …` 描述不了它可能做的一切。`repo.exec` 与 `task.start` 一直在说这件事；
+    `repo.check` 和 `recipe.propose` 却不说——可同一条命令经 recipe 通道执行时，同样
+    能碰到沙箱里的任何东西，而卡片给出的权限摘要（"workspace writable, no network"）
+    会让人以为已经看全了。
+    """
+    return _PASSTHROUGH_WARNING if classify_argv(argv) is ExecClass.SHELL_PASSTHROUGH else None
+
 
 class ApprovalCardRenderer:
     """把工具提议渲染成用户可审查的审批卡片。"""
@@ -122,11 +140,9 @@ class ApprovalCardRenderer:
         if not isinstance(args, RepoExecArgs):
             return "", ""
         lines = [f"$ {shlex.join(args.argv)}", self._sandbox_description()]
-        if classify_argv(args.argv) is ExecClass.SHELL_PASSTHROUGH:
-            lines.append(
-                "WARNING: this interprets an arbitrary script, so the command "
-                "above does not describe everything it may do."
-            )
+        warning = _passthrough_warning(args.argv)
+        if warning:
+            lines.append(warning)
         summary = f"run {shlex.join(args.argv)} in {args.cwd}{self._intent(args.summary)}"
         return summary, "\n".join(lines)
 
@@ -137,11 +153,9 @@ class ApprovalCardRenderer:
         lines.append(
             "I/O: POSIX PTY (merged output)" if args.terminal else "I/O: stdin/stdout pipes"
         )
-        if classify_argv(args.argv) is ExecClass.SHELL_PASSTHROUGH:
-            lines.append(
-                "WARNING: this interprets an arbitrary script, so the command "
-                "above does not describe everything it may do."
-            )
+        warning = _passthrough_warning(args.argv)
+        if warning:
+            lines.append(warning)
         summary = (
             f"start background task {shlex.join(args.argv)} in {args.cwd}"
             f"{self._intent(args.description)}"
@@ -184,6 +198,9 @@ class ApprovalCardRenderer:
             f"network: {network}",
             f"additional readable roots: {roots}",
         ]
+        warning = _passthrough_warning(full_argv)
+        if warning:
+            preview_lines.append(warning)
         return summary, "\n".join(preview_lines)
 
     def _card_recipe_propose(self, args: ToolArgs, preview: ToolPreview) -> tuple[str, str]:
@@ -196,6 +213,9 @@ class ApprovalCardRenderer:
             f"timeout: {args.timeout_seconds}s",
             "recipe permissions: workspace writable, no network",
         ]
+        warning = _passthrough_warning(args.argv)
+        if warning:
+            lines.append(warning)
         if args.description:
             lines.append(f"description: {args.description}")
         return summary, "\n".join(lines)

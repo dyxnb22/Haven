@@ -41,6 +41,22 @@ class EventEmitter:
         """返回本进程最近为运行持久化的事件序号，尚无事件时为 0。"""
         return self._last_seq.get(run_id, 0)
 
+    def release(self, run_id: str) -> None:
+        """释放某个运行的每 run 状态。
+
+        长期存活的界面进程（TUI）会在一个会话里跑很多次运行，而 `_last_seq` 与
+        `_locks` 此前从不删除：一次运行留下一个 int 和一个 `asyncio.Lock`，直到进程
+        退出。调用方必须保证这次运行已经终了、不会再为它发事件——那个保证由
+        `RunFinalizer.finish`（唯一的终态出口）把守。
+
+        仍在广播时不做任何事：那时收权会让两个 task 拿到不同的锁对象，序号分配与
+        入队就不再互斥了。
+        """
+        if run_id in self._dispatching:
+            return
+        self._last_seq.pop(run_id, None)
+        self._locks.pop(run_id, None)
+
     async def emit(self, run_id: str, event: ApplicationEvent) -> EventEnvelope:
         """持久化并按序广播事件，允许 sink 在回调中安全地产生新事件。
 

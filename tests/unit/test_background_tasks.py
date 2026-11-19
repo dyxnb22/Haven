@@ -9,7 +9,11 @@ import pytest
 from haven.adapters.memory_session import MemorySessionStore
 from haven.adapters.process_executor import ProcessExecutor
 from haven.adapters.workspace_fs import FsWorkspace
-from haven.application.background_tasks import TaskManager
+from haven.application.background_tasks import (
+    MAX_RETAINED_FINISHED_TASKS,
+    BackgroundTask,
+    TaskManager,
+)
 from haven.application.emitter import EventEmitter
 from haven.application.state import RunContext
 from haven.application.tool_processes import ProcessToolExecutor
@@ -354,3 +358,113 @@ class TestProtectedBaselineIsPerRun:
         executor._remember_protected_baseline(ctx, first)
         second = await executor._snapshot_before_process(ctx)
         assert second.protected_digests == first.protected_digests
+
+
+class _FakeProcess:
+    """一个还没退出的子进程桩。"""
+
+    returncode: int | None = None
+
+    async def wait(self) -> int:
+        return 0
+
+
+def _finished_task(task_id: str, ended_at: float) -> BackgroundTask:
+    """一个已结束、reader 也已结束的合成任务。"""
+    return BackgroundTask(
+        task_id=task_id,
+        argv=(sys.executable, "-c", "pass"),
+        cwd=Path("."),
+        description="",
+        started_at=ended_at - 1.0,
+        ended_at=ended_at,
+        exit_code=0,
+    )
+
+
+def _retained_ids(manager: TaskManager) -> list[int]:
+    """按 task_id 里的序号排序——字符串排序会把 task_10 排到 task_6 前面。"""
+    return sorted(int(task_id.rsplit("_", 1)[1]) for task_id in manager._tasks)
+
+
+def test_finished_tasks_are_evicted_down_to_the_cap() -> None:
+    """已结束的任务必须被回收，保有量压在上限之内。
+
+    此前的 `_tasks` 只进不出：一个长期会话里每次 `task.start` 都会漏下一份进程对象、
+    argv 和 reader task 引用，直到进程退出。
+    """
+    manager = TaskManager()
+    total = MAX_RETAINED_FINISHED_TASKS + 6
+    for index in range(total):
+        manager._tasks[f"task_{index}"] = _finished_task(f"task_{index}", float(index))
+
+    manager._prune_finished()
+
+    retained = _retained_ids(manager)
+    assert len(retained) == MAX_RETAINED_FINISHED_TASKS
+    # 淘汰从最旧的开始：最新的几个必须留下，否则 task.logs 会莫名其妙查不到
+    assert retained == list(range(total - MAX_RETAINED_FINISHED_TASKS, total))
+
+
+def test_a_running_task_is_never_evicted() -> None:
+    """正在跑的任务绝不能被淘汰——那会让它失去最后一个强引用。"""
+    manager = TaskManager()
+    for index in range(MAX_RETAINED_FINISHED_TASKS + 3):
+        manager._tasks[f"old-{index}"] = _finished_task(f"old-{index}", float(index))
+    live = BackgroundTask(
+        task_id="live",
+        argv=(sys.executable, "-c", "import time; time.sleep(30)"),
+        cwd=Path("."),
+        description="",
+        started_at=0.0,
+        process=_FakeProcess(),  # type: ignore[arg-type]
+    )
+    manager._tasks["live"] = live
+
+    manager._prune_finished()
+
+    assert "live" in manager._tasks
+    assert len(manager._tasks) == MAX_RETAINED_FINISHED_TASKS + 1
+
+
+def test_a_task_whose_readers_are_still_draining_is_not_evicted() -> None:
+    """reader 还没结束的任务先留着：丢掉对仍在运行的 asyncio.Task 的最后一个强引用，
+    它可能被事件循环回收——那是 asyncio 的经典陷阱。"""
+    manager = TaskManager()
+    for index in range(MAX_RETAINED_FINISHED_TASKS + 2):
+        manager._tasks[f"task_{index}"] = _finished_task(f"task_{index}", float(index))
+    draining = _finished_task("draining", 999.0)
+    draining.reader_tasks.append(_NeverDone())
+    manager._tasks["draining"] = draining
+
+    manager._prune_finished()
+
+    assert "draining" in manager._tasks
+
+
+class _NeverDone:
+    """一个永远不结束的 task 桩。"""
+
+    def done(self) -> bool:
+        return False
+
+
+@pytest.mark.asyncio
+async def test_a_recently_finished_task_is_still_queryable(tmp_path: Path) -> None:
+    """任务退出后 `task.status` / `task.logs` 仍要能查到——所以不能一结束就删。"""
+    manager = TaskManager()
+    try:
+        await manager.start(
+            argv=(sys.executable, "-c", "print('done')"),
+            cwd=tmp_path,
+            sandbox_spec=_sandbox(tmp_path),
+            launcher=RecordingLauncher(),
+        )
+        async with asyncio.timeout(5):
+            while manager.get("task_1").is_running:
+                await asyncio.sleep(0.01)
+        assert manager.status("task_1")["status"] == "exited"
+        assert manager.logs("task_1")["status"] == "exited"
+        assert manager.logs("task_1")["stdout"] == ["done"]
+    finally:
+        await manager.close_all()

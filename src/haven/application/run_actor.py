@@ -585,6 +585,19 @@ class RunActor:
         if self._mcp_servers and self._mcp_manager is not None and not self._mcp_manager.tools:
             mcp_tools = await self._mcp_manager.initialize()
             self._registry.register_mcp_tools(mcp_tools)
+            # 连不上的 server 要说出来，而不是静默跳过：用户是显式配置它们的。
+            for name, reason in self._mcp_manager.failures:
+                await self._emitter.emit(
+                    ctx.run_id,
+                    Notice(
+                        run_id=ctx.run_id,
+                        level="warning",
+                        message=(
+                            f"MCP server {name!r} could not be started "
+                            f"({reason}); its tools are unavailable this run"
+                        ),
+                    ),
+                )
 
         envelope_digest = ""
         ctx.start_timing(time.monotonic())

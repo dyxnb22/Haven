@@ -21,6 +21,11 @@ from typing import Any
 
 from haven.ports.sandbox import SandboxLauncher, SandboxSpec
 
+#: 保留的已结束任务数上限。`task.status` 与 `task.logs` 必须能在任务退出后仍然查到，
+#: 所以不能一结束就删；但没有上限的话，一个长期会话里每次 `task.start` 都会漏下一份
+#: 进程对象、argv 和 reader task 引用，直到进程退出。
+MAX_RETAINED_FINISHED_TASKS = 32
+
 
 @dataclass
 class BackgroundTask:
@@ -165,6 +170,8 @@ class TaskManager:
         task.reader_tasks.append(asyncio.create_task(self._watch_process(task)))
 
         self._tasks[task_id] = task
+        # 启动时也收一遍：万一某个任务的 _watch_process 从未跑起来，上限仍然成立。
+        self._prune_finished()
         return task
 
     async def _consume_stream(self, reader: asyncio.StreamReader, buffer: deque[str]) -> None:
@@ -284,8 +291,31 @@ class TaskManager:
             await task.process.wait()
         except OSError:
             return
+        finally:
+            self._prune_finished()
+
+    def _prune_finished(self) -> None:
+        """把已结束任务的保有量压回上限之内，从最旧开始淘汰。
+
+        只淘汰 reader task 也都已结束的那些：丢掉最后一个对仍在运行的 task 的强引用，
+        它可能被事件循环回收——那是 asyncio 的经典陷阱。
+        """
+        finished = [
+            task
+            for task in self._tasks.values()
+            if not task.is_running and all(reader.done() for reader in task.reader_tasks)
+        ]
+        excess = len(finished) - MAX_RETAINED_FINISHED_TASKS
+        if excess <= 0:
+            return
+        finished.sort(key=lambda task: task.ended_at or 0.0)
+        for task in finished[:excess]:
+            self._tasks.pop(task.task_id, None)
 
     def get(self, task_id: str) -> BackgroundTask | None:
+        # 查询入口也收一遍：`_watch_process` 结束的那一刻，该任务自己的 reader 未必
+        # 都已结束，于是会被跳过；没有这一遍，上限就会稳定地高出几个。
+        self._prune_finished()
         return self._tasks.get(task_id)
 
     def status(self, task_id: str) -> dict[str, Any]:

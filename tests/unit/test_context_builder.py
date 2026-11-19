@@ -315,6 +315,79 @@ class TestDeterministicCompaction:
         assert "You are Haven" in request.messages[0].content
         assert "Task: fix the bug" in request.messages[1].content
 
+    def test_a_truncated_message_does_not_inherit_the_last_messages_label(self) -> None:
+        """被截断的消息必须保留它自己的信任等级与来源。
+
+        `enforce_hard_limit` 截断时用 `model_copy` 造出新对象，身份对不上。此前
+        `_fit_history` 回退去借 `history[-1]` 的元数据——于是一条不可信正文会因为
+        恰好排在末尾而被记成"可信"。轨迹是证据层，标错信任等级和标错内容一样是撒谎。
+        """
+        from haven.application.context_builder import _fit_history, _Selected
+        from haven.contracts.model import ToolCallProposal
+
+        # 工具输出所在的单元受保护（它是最后一段），所以它不会被整体丢弃，只会被截断。
+        user = _Selected(
+            message=ModelMessage(role="user", content="go"),
+            source="user_goal",
+            trust="untrusted",
+            reason="user text",
+        )
+        call = _Selected(
+            message=ModelMessage(
+                role="assistant",
+                content="",
+                tool_calls=(
+                    ToolCallProposal(call_id="c0", tool_name="repo.read", arguments_json="{}"),
+                ),
+            ),
+            source="assistant",
+            trust="untrusted",
+            reason="assistant turn",
+        )
+        tool = _Selected(
+            message=ModelMessage(role="tool", content="z" * 5000, tool_call_id="c0"),
+            source="tool_output",
+            trust="untrusted",
+            reason="tool result",
+        )
+        fitted = _fit_history([user, call, tool], 200)
+        truncated = [item for item in fitted if item.reason.startswith("truncated")]
+        assert truncated, "这个用例必须真的触发截断"
+        # 不可信正文绝不能因为 history[-1] 是 trusted 而被记成可信
+        assert all(item.trust == "untrusted" for item in truncated)
+        # 来源也要是它自己的，而不是末尾那条的
+        assert all(item.source == "tool_output" for item in truncated)
+        # 没被截断的消息则原样保留自己的理由，不被改写
+        assert any(item.reason == "user text" for item in fitted)
+
+    def test_an_unidentifiable_truncated_message_fails_closed_to_untrusted(self) -> None:
+        """认不出原文时不借别人的标签，直接失败即关闭。
+
+        这正是危险的那个方向：被截断的是一条不可信正文，而 `history[-1]` 恰好是程序
+        生成的 trusted 内容。旧代码借末段的标签，于是这段正文被记成"可信"。
+        user 消息没有 `tool_call_id`（只有 tool 消息有），所以认不回原文。
+        """
+        from haven.application.context_builder import _fit_history, _Selected
+
+        big_user = _Selected(
+            message=ModelMessage(role="user", content="u" * 5000),
+            source="user_goal",
+            trust="untrusted",
+            reason="user text",
+        )
+        trusted_tail = _Selected(
+            message=ModelMessage(role="assistant", content="ok"),
+            source="run_status",
+            trust="trusted",
+            reason="program text",
+        )
+        fitted = _fit_history([big_user, trusted_tail], 200)
+        truncated = [item for item in fitted if item.reason.startswith("truncated")]
+        assert truncated, "这个用例必须真的触发截断"
+        # 绝不能因为 history[-1] 是 trusted 就把这段不可信正文记成可信
+        assert all(item.trust == "untrusted" for item in truncated)
+        assert any("original source unknown" in item.reason for item in truncated)
+
     def test_compaction_is_stable_across_calls(self) -> None:
         transcript = [bulky_tool_message(f"f{i}.py", f"c{i}") for i in range(4)]
         first, _ = builder().build(transcript, BudgetUsage())
